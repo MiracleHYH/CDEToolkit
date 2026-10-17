@@ -1,6 +1,6 @@
 # Proxy 组件实现说明
 
-Proxy 是 Nido 内置的本地显式代理组件。实现位于 `internal/components/proxy`：Nido 管理 Mihomo 程序、原生配置、精确进程和本地端点；Mihomo 管理节点协议、规则、provider、连接与缓存。本说明对应当前源码，基线问题及修复记录见[审查记录](proxy-audit.md)。真实核心验证仅在临时 HOME 和回环夹具中执行；未发布或切换实际入口。
+Proxy 是 Nido 内置的本地显式代理组件。实现位于 `internal/components/proxy`：Nido 管理 Mihomo 程序、原生配置、精确进程和本地端点；Mihomo 管理节点协议、规则、provider、连接与缓存。本说明对应 v0.4.0 起的独立组件，基线问题及修复记录见[审查记录](proxy-audit.md)。真实核心验证仅在临时 HOME 和回环夹具中执行，发行及安装不自动切换实际组件入口。
 
 ## 职责与目录
 

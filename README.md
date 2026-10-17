@@ -59,7 +59,7 @@ nido codex update
 
 ## 使用内置 Proxy
 
-以下 Proxy 行为对应当前源码；本轮尚未发布，已安装发行版以其 `--help` 为准。
+以下独立 Proxy 组件及命令自 v0.4.0 提供；早期发行版以其 `--help` 为准。Nido 安装包只包含 CLI，Mihomo 仍需显式安装。
 
 Proxy 的服务器验证目标为 Linux amd64，已完成原生 race 和指定版本对的真实停机更新；各平台的历史证据与验证边界见 [Proxy 发布前审计](docs/proxy-audit.md#跨版本验证后的最终发布审计2026-10-18)。其他平台的验证缺口不作为该部署目标的发布阻塞项。
 
