@@ -10,7 +10,7 @@ RELEASE_PLATFORMS = linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
 .PHONY: build test fmt-check check dist smoke release verify-release release-check check-gds
 build:
-	CGO_ENABLED=0 GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) "$(GO)" build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w -X=github.com/MiracleHYH/CDEToolkit/internal/stk.Version=$(VERSION)' -o "$(BINARY)" ./cmd/cdet
+	CGO_ENABLED=0 GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) "$(GO)" build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w -X=github.com/MiracleHYH/CDEToolkit/internal/cdet.Version=$(VERSION)' -o "$(BINARY)" ./cmd/cdet
 
 # Each Go package contains exactly cdet, with no legacy installer or user data.
 dist: build

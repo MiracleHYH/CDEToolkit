@@ -46,7 +46,10 @@ id_ed25519
 id_ed25519.*
 
 # Go management state, generated launchers, service files and rollback data
+/.cdet/
+/.cdet-store/
 /state.json
+/.instance
 /pending.json
 /last-update.json
 /lock

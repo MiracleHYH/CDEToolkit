@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Smoke runs only the verified native package, with isolated HOME and CDET_HOME.
+// Smoke runs only the verified native package, with two isolated roots.
 // The two read-only commands never install components or start services.
 func Smoke(binary []byte, version, platform string) error {
 	if platform != runtime.GOOS+"/"+runtime.GOARCH {
@@ -36,7 +36,8 @@ func Smoke(binary []byte, version, platform string) error {
 	}
 	home := filepath.Join(dir, "home")
 	managed := filepath.Join(dir, "managed")
-	env := []string{"HOME=" + home, "PATH=/usr/bin:/bin", "CDET_HOME=" + managed,
+	store := filepath.Join(dir, "components")
+	env := []string{"HOME=" + home, "PATH=/usr/bin:/bin", "CDET_PREFIX=" + managed, "CDET_STORE=" + store,
 		"TMPDIR=" + dir, "XDG_CONFIG_HOME=" + filepath.Join(dir, "config"),
 		"XDG_CACHE_HOME=" + filepath.Join(dir, "cache"), "XDG_DATA_HOME=" + filepath.Join(dir, "data")}
 	run := func(args ...string) ([]byte, error) {
@@ -74,8 +75,10 @@ func Smoke(binary []byte, version, platform string) error {
 			return fmt.Errorf("空环境意外登记了组件")
 		}
 	}
-	if _, err = os.Lstat(managed); !os.IsNotExist(err) {
-		return fmt.Errorf("只读冒烟创建了管理目录")
+	for _, root := range []string{managed, store} {
+		if _, err = os.Lstat(root); !os.IsNotExist(err) {
+			return fmt.Errorf("只读冒烟创建了安装或组件存储目录")
+		}
 	}
 	return nil
 }

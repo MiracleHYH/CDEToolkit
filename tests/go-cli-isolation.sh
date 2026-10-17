@@ -1,134 +1,171 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-STK_TEST_BINARY="${1:?provide the built cdet binary}"
-[[ "$STK_TEST_BINARY" = /* && -x "$STK_TEST_BINARY" ]]
-STK_TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/stk-cli-test.XXXXXX")"
-STK_TEST_ROOT="$(cd "$STK_TEST_ROOT" && pwd -P)"
-trap 'rm -rf -- "$STK_TEST_ROOT"' EXIT
-export HOME="$STK_TEST_ROOT/user" PATH=/usr/bin:/bin
-unset CDET_HOME STK_HOME CODEX_HOME HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
-local_root="$STK_TEST_ROOT/fast/.local"
-codex_home="$local_root/.codex"
-stk_home="$local_root/stk"
-mkdir -p "$codex_home/packages/standalone/v1/bin" "$codex_home/bin" "$codex_home/sessions" "$local_root/external" "$HOME" "$STK_TEST_ROOT/fast/proj"
-cat > "$codex_home/packages/standalone/v1/bin/codex" <<'FIXTURE'
-#!/bin/sh
-printf 'CODEX_HOME=%s\nHTTP_PROXY=%s\nARGS=%s\n' "$CODEX_HOME" "${HTTP_PROXY:-}" "$*"
+CDET_TEST_BINARY="${1:?provide the built cdet binary}"
+[[ "$CDET_TEST_BINARY" = /* && -x "$CDET_TEST_BINARY" ]]
+CDET_TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/cdet-cli-test.XXXXXX")"
+CDET_TEST_ROOT="$(cd "$CDET_TEST_ROOT" && pwd -P)"
+trap 'rm -rf -- "$CDET_TEST_ROOT"' EXIT
+export HOME="$CDET_TEST_ROOT/user" PATH="$CDET_TEST_ROOT/forbidden:/usr/bin:/bin" TMPDIR="$CDET_TEST_ROOT/tmp"
+unset CDET_PREFIX CDET_STORE CDET_HOME STK_HOME CODEX_HOME CODEX_SQLITE_HOME XDG_CONFIG_HOME
+unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+# Go metadata requests cannot leave the isolated test. A failed version
+# lookup is displayed; program installation uses the fake curl below.
+export HTTPS_PROXY=http://127.0.0.1:1 HTTP_PROXY=http://127.0.0.1:1 ALL_PROXY=http://127.0.0.1:1
+export CDET_FIXTURE_CURL_LOG="$CDET_TEST_ROOT/curl-calls"
+export CDET_FIXTURE_FORBIDDEN_LOG="$CDET_TEST_ROOT/forbidden-calls"
+prefix="$CDET_TEST_ROOT/mount/cli"
+store="$CDET_TEST_ROOT/mount/components"
+codex_source="$HOME/.codex"
+proxy_source="$HOME/.config/mihomo"
+mkdir -p "$codex_source/packages/standalone/v1/bin" "$codex_source/bin" "$codex_source/sessions" "$proxy_source" "$CDET_TEST_ROOT/forbidden" "$TMPDIR"
+# Only these tiny, locally compiled programs are installed and executed.
+cat > "$CDET_TEST_ROOT/component.c" <<'FIXTURE'
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+int main(int argc, char **argv) {
+  if (argc > 1 && !strcmp(argv[1], "--version")) {
+    printf("codex-cli %d.0.0\n", CDET_FIXTURE_VERSION);
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "-v")) {
+    puts("Mihomo Meta v1.0.0 fixture");
+    return 0;
+  }
+#if CDET_FIXTURE_VERSION == 2
+  puts("fixture version two");
+#elif CDET_FIXTURE_VERSION == 99
+  fputs("forbidden component execution\n", stderr);
+  return 99;
+#else
+  const char *home = getenv("CODEX_HOME");
+  printf("CODEX_HOME=%s\nARG=%s\n", home ? home : "", argc > 1 ? argv[1] : "");
+#endif
+  return 0;
+}
 FIXTURE
-cat > "$local_root/external/mihomo" <<'FIXTURE'
+cc -DCDET_FIXTURE_VERSION=1 "$CDET_TEST_ROOT/component.c" -o "$codex_source/packages/standalone/v1/bin/codex"
+ln -s "$codex_source/packages/standalone/v1/bin/codex" "$codex_source/bin/codex"
+cc -DCDET_FIXTURE_VERSION=99 "$CDET_TEST_ROOT/component.c" -o "$proxy_source/mihomo"
+export CDET_FIXTURE_CODEX="$CDET_TEST_ROOT/official-fixture-codex"
+cp "$codex_source/packages/standalone/v1/bin/codex" "$CDET_FIXTURE_CODEX"
+# Never fetch or execute the real upstream installer. This curl only returns
+# a local script that copies the fixture to the explicit managed target.
+cat > "$CDET_TEST_ROOT/forbidden/curl" <<'FIXTURE'
 #!/bin/sh
-printf 'fixture mihomo\n'
+set -eu
+last=
+for arg do last=$arg; done
+[ "$last" = https://chatgpt.com/codex/install.sh ] || exit 97
+printf 'fixture curl\n' >> "$CDET_FIXTURE_CURL_LOG"
+/bin/cat <<'INSTALLER'
+set -eu
+[ "$CODEX_NON_INTERACTIVE" = 1 ]
+[ "$HOME" != "$CODEX_HOME" ]
+/bin/mkdir -p "$CODEX_INSTALL_DIR"
+/bin/cp "$CDET_FIXTURE_CODEX" "$CODEX_INSTALL_DIR/codex"
+/bin/chmod 0755 "$CODEX_INSTALL_DIR/codex"
+# Deliberately emulate upstream Shell edits to prove HOME is isolated.
+printf '# fake installer profile\n' >> "$HOME/.bashrc"
+INSTALLER
 FIXTURE
-chmod 0755 "$codex_home/packages/standalone/v1/bin/codex" "$local_root/external/mihomo"
-ln -s /retired/.local/.codex/packages/standalone/v1 "$codex_home/packages/standalone/current"
-ln -s /retired/.local/.codex/packages/standalone/current/bin/codex "$codex_home/bin/codex"
-printf 'AUTH-SENTINEL\n' > "$codex_home/auth.json"
-printf 'SESSION-SENTINEL\n' > "$codex_home/sessions/one.jsonl"
-printf 'SQLITE-SENTINEL\n' > "$codex_home/state.sqlite"
-printf 'model = "preserved"\n' > "$codex_home/config.toml"
-printf 'mixed-port: 7890\npassword: SECRET-SENTINEL\n' > "$local_root/proxy.yaml"
-printf '[ -z "$PS1" ] && return\n# user shell configuration\n' > "$HOME/.bashrc"
-cp "$codex_home/auth.json" "$STK_TEST_ROOT/auth.before"
-cp "$codex_home/sessions/one.jsonl" "$STK_TEST_ROOT/session.before"
-cp "$codex_home/state.sqlite" "$STK_TEST_ROOT/db.before"
-cp "$local_root/proxy.yaml" "$STK_TEST_ROOT/proxy.before"
-
-args=(--home "$stk_home" setup proxy codex --root "local=$local_root" --root "projects=$STK_TEST_ROOT/fast/proj" --binary "proxy=$local_root/external/mihomo" --binary "codex=$codex_home/packages/standalone/v1/bin/codex" --codex-home "$codex_home" --proxy-config "$local_root/proxy.yaml" --shell-file "$HOME/.bashrc")
-"$STK_TEST_BINARY" "${args[@]}" --dry-run --json > "$STK_TEST_ROOT/plan.json"
-[[ ! -e "$stk_home" ]]
-! /usr/bin/grep -q SECRET-SENTINEL "$STK_TEST_ROOT/plan.json"
-"$STK_TEST_BINARY" "${args[@]}" > "$STK_TEST_ROOT/setup.log"
-"$STK_TEST_BINARY" "${args[@]}" > "$STK_TEST_ROOT/repeat.log"
-/usr/bin/grep -q '完成 0 项' "$STK_TEST_ROOT/repeat.log"
-"$stk_home/bin/codex" 'one argument' > "$STK_TEST_ROOT/exec.log"
-/usr/bin/grep -Fq "CODEX_HOME=$codex_home" "$STK_TEST_ROOT/exec.log"
-/usr/bin/grep -Fq 'HTTP_PROXY=http://127.0.0.1:7890' "$STK_TEST_ROOT/exec.log"
-/bin/bash --noprofile --norc -c '. "$1"; command -v codex' _ "$HOME/.bashrc" > "$STK_TEST_ROOT/path.log"
-/usr/bin/grep -Fxq "$stk_home/bin/codex" "$STK_TEST_ROOT/path.log"
-mv "$STK_TEST_ROOT/fast" "$STK_TEST_ROOT/fast-new"
-new_home="$STK_TEST_ROOT/fast-new/.local/stk"
-new_codex="$STK_TEST_ROOT/fast-new/.local/.codex"
-if "$new_home/bin/codex" --version > "$STK_TEST_ROOT/before-repair-exec.log" 2>&1; then
-  printf 'component executed before rebuilding relocated paths\n' >&2
+chmod 0755 "$CDET_TEST_ROOT/forbidden/curl"
+for tool in systemctl supervisorctl sudo gds; do
+  cat > "$CDET_TEST_ROOT/forbidden/$tool" <<'FIXTURE'
+#!/bin/sh
+printf 'forbidden\n' >> "$CDET_FIXTURE_FORBIDDEN_LOG"
+exit 98
+FIXTURE
+  chmod 0755 "$CDET_TEST_ROOT/forbidden/$tool"
+done
+printf 'AUTH-SENTINEL\n' > "$codex_source/auth.json"
+printf 'SESSION-SENTINEL\n' > "$codex_source/sessions/one.jsonl"
+printf 'DATABASE-SENTINEL\n' > "$codex_source/state.sqlite"
+printf 'WAL-SENTINEL\n' > "$codex_source/state.sqlite-wal"
+printf 'model = "preserved"\n' > "$codex_source/config.toml"
+printf 'mixed-port: 7890\nsecret: PROXY-SECRET-SENTINEL\n' > "$proxy_source/config.yaml"
+printf '# USER-SHELL-SENTINEL\n' > "$HOME/.bashrc"
+cp "$codex_source/auth.json" "$CDET_TEST_ROOT/auth.before"
+cp "$codex_source/state.sqlite" "$CDET_TEST_ROOT/db.before"
+cp "$codex_source/config.toml" "$CDET_TEST_ROOT/config.before"
+cp "$proxy_source/config.yaml" "$CDET_TEST_ROOT/proxy.before"
+cp "$HOME/.bashrc" "$CDET_TEST_ROOT/shell.before"
+base=(--prefix "$prefix" --store "$store")
+"$CDET_TEST_BINARY" "${base[@]}" init --dry-run --json > "$CDET_TEST_ROOT/init-plan.json"
+[[ ! -e "$prefix" && ! -e "$store" ]]
+"$CDET_TEST_BINARY" "${base[@]}" init > "$CDET_TEST_ROOT/init.log"
+[[ ! -e "$prefix/bin/codex" && ! -e "$store/codex" && ! -e "$store/gds" ]]
+"$CDET_TEST_BINARY" "${base[@]}" install codex proxy --from "codex=$codex_source" --from "proxy=$proxy_source" --dry-run --json > "$CDET_TEST_ROOT/import-plan.json"
+! /usr/bin/grep -Eq 'AUTH-SENTINEL|PROXY-SECRET-SENTINEL|SESSION-SENTINEL' "$CDET_TEST_ROOT/import-plan.json"
+[[ ! -e "$store/codex" ]]
+[[ ! -e "$CDET_FIXTURE_CURL_LOG" ]]
+"$CDET_TEST_BINARY" "${base[@]}" install codex proxy --from "codex=$codex_source" --from "proxy=$proxy_source" > "$CDET_TEST_ROOT/import.log"
+"$CDET_TEST_BINARY" "${base[@]}" install codex proxy > "$CDET_TEST_ROOT/repeat.log"
+/usr/bin/grep -q '完成 0 项' "$CDET_TEST_ROOT/repeat.log"
+"$prefix/bin/codex" 'one argument' > "$CDET_TEST_ROOT/codex.log"
+/usr/bin/grep -Fxq "CODEX_HOME=$store/codex" "$CDET_TEST_ROOT/codex.log"
+/usr/bin/grep -Fxq 'ARG=one argument' "$CDET_TEST_ROOT/codex.log"
+cmp "$CDET_TEST_ROOT/auth.before" "$store/codex/auth.json"
+cmp "$CDET_TEST_ROOT/db.before" "$store/codex/state.sqlite"
+cmp "$CDET_TEST_ROOT/config.before" "$store/codex/config.toml"
+cmp "$CDET_TEST_ROOT/proxy.before" "$store/proxy/config.yaml"
+[[ "$(readlink "$store/codex/bin/codex")" = ../packages/standalone/v1/bin/codex ]]
+[[ ! -e "$store/codex/versions" && ! -e "$store/codex/current" && ! -e "$store/codex/data" ]]
+[[ -f "$store/.cdet/bin/codex" && ! -e "$store/.cdet/programs" ]]
+cmp "$CDET_FIXTURE_CODEX" "$store/.cdet/bin/codex"
+mv "$codex_source" "$codex_source.retained"
+"$prefix/bin/codex" 'source no longer present' > "$CDET_TEST_ROOT/source-independent.log"
+mv "$CDET_TEST_ROOT/mount" "$CDET_TEST_ROOT/mount-new"
+export CDET_PREFIX="$prefix" CDET_STORE="$store"
+prefix="$CDET_TEST_ROOT/mount-new/cli"
+store="$CDET_TEST_ROOT/mount-new/components"
+if "$prefix/bin/codex" test > "$CDET_TEST_ROOT/before-repair.log" 2>&1; then
+  printf 'component ran before repair\n' >&2
   exit 1
 fi
-if "$new_home/cdet" --home "$new_home" env bash > "$STK_TEST_ROOT/before-repair-env.log" 2>&1; then
-  printf 'stale environment emitted before repair\n' >&2
+"$prefix/bin/cdet" repair --dry-run > "$CDET_TEST_ROOT/repair-preview.log"
+[[ ! -e "$CDET_TEST_ROOT/mount" ]]
+"$prefix/bin/cdet" repair > "$CDET_TEST_ROOT/repair.log"
+"$prefix/bin/cdet" repair > "$CDET_TEST_ROOT/repair-repeat.log"
+"$prefix/bin/codex" 'after mount move' > "$CDET_TEST_ROOT/relocated.log"
+/usr/bin/grep -Fxq "CODEX_HOME=$store/codex" "$CDET_TEST_ROOT/relocated.log"
+new_store="$CDET_TEST_ROOT/store-moved-alone"
+mv "$store" "$new_store"
+if "$prefix/bin/cdet" status > "$CDET_TEST_ROOT/missing-store.log" 2>&1; then
+  printf 'missing store silently replaced\n' >&2
   exit 1
 fi
-if "$new_home/cdet" --home "$new_home" doctor --json > "$STK_TEST_ROOT/before-repair-doctor.json"; then
-  printf 'doctor accepted unrepaired relocated paths\n' >&2
-  exit 1
-fi
-/usr/bin/grep -q '路径待重建' "$STK_TEST_ROOT/before-repair-doctor.json"
-"$new_home/cdet" --home "$new_home" repair --dry-run > "$STK_TEST_ROOT/repair-preview.log"
-[[ ! -e "$STK_TEST_ROOT/fast" ]]
-"$new_home/cdet" --home "$new_home" repair > "$STK_TEST_ROOT/repair.log"
-"$new_home/cdet" --home "$new_home" repair > "$STK_TEST_ROOT/repair-repeat.log"
-/usr/bin/grep -q '完成 0 项' "$STK_TEST_ROOT/repair-repeat.log"
-"$new_home/bin/codex" --version > "$STK_TEST_ROOT/new-exec.log"
-/usr/bin/grep -Fq "CODEX_HOME=$new_codex" "$STK_TEST_ROOT/new-exec.log"
-"$new_home/cdet" --home "$new_home" doctor --exec-check > "$STK_TEST_ROOT/doctor.log"
-cmp "$STK_TEST_ROOT/auth.before" "$new_codex/auth.json"
-cmp "$STK_TEST_ROOT/session.before" "$new_codex/sessions/one.jsonl"
-cmp "$STK_TEST_ROOT/db.before" "$new_codex/state.sqlite"
-cmp "$STK_TEST_ROOT/proxy.before" "$STK_TEST_ROOT/fast-new/.local/proxy.yaml"
-[[ ! -e "$STK_TEST_ROOT/fast" ]]
-printf 'Go CLI isolated adoption, PATH, relocation, idempotency and data preservation: PASS\n'
-
-# Lifecycle operations also use fixtures only. The adopted binary is retained
-# when a user explicitly switches to a toolkit-owned copy.
-original_codex="$new_codex/packages/standalone/v1/bin/codex"
-cp "$original_codex" "$STK_TEST_ROOT/codex-before"
-if "$STK_TEST_BINARY" --home "$new_home" update codex > "$STK_TEST_ROOT/external-update.log" 2>&1; then
-  printf 'external update unexpectedly accepted\n' >&2
-  exit 1
-fi
-"$STK_TEST_BINARY" --home "$new_home" update codex --takeover --install "codex=$original_codex" --dry-run > "$STK_TEST_ROOT/update-preview.log"
-[[ ! -e "$new_home/tools/codex/codex" ]]
-"$STK_TEST_BINARY" --home "$new_home" update codex --takeover --install "codex=$original_codex" > "$STK_TEST_ROOT/update.log"
-"$new_home/bin/codex" --version > "$STK_TEST_ROOT/owned-exec.log"
-/usr/bin/grep -Fq "CODEX_HOME=$new_codex" "$STK_TEST_ROOT/owned-exec.log"
-cmp "$STK_TEST_ROOT/codex-before" "$original_codex"
-"$STK_TEST_BINARY" --home "$new_home" update cdet --install "cdet=$STK_TEST_BINARY" > "$STK_TEST_ROOT/self-update.log"
-printf 'USER-CACHE\n' > "$new_home/run/proxy/keep.db"
-"$STK_TEST_BINARY" --home "$new_home" uninstall codex --dry-run > "$STK_TEST_ROOT/uninstall-preview.log"
-[[ -x "$new_home/tools/codex/codex" ]]
-"$STK_TEST_BINARY" --home "$new_home" uninstall codex > "$STK_TEST_ROOT/uninstall-codex.log"
-[[ ! -e "$new_home/tools/codex/codex" && ! -e "$new_home/bin/codex" && -x "$new_home/bin/mihomo" ]]
-"$STK_TEST_BINARY" --home "$new_home" uninstall cdet > "$STK_TEST_ROOT/uninstall-stk.log"
-[[ ! -e "$new_home/cdet" && ! -e "$new_home/env.sh" && ! -e "$new_home/bin/mihomo" ]]
-! /usr/bin/grep -q 'server-toolkit-go environment' "$HOME/.bashrc"
-/usr/bin/grep -q '# user shell configuration' "$HOME/.bashrc"
-[[ -f "$new_home/run/proxy/keep.db" ]]
-cmp "$STK_TEST_ROOT/auth.before" "$new_codex/auth.json"
-cmp "$STK_TEST_ROOT/session.before" "$new_codex/sessions/one.jsonl"
-cmp "$STK_TEST_ROOT/db.before" "$new_codex/state.sqlite"
-cmp "$STK_TEST_ROOT/proxy.before" "$STK_TEST_ROOT/fast-new/.local/proxy.yaml"
-cmp "$STK_TEST_ROOT/codex-before" "$original_codex"
-"$STK_TEST_BINARY" --home "$new_home" uninstall cdet > "$STK_TEST_ROOT/uninstall-repeat.log"
-/usr/bin/grep -q '完成 0 项' "$STK_TEST_ROOT/uninstall-repeat.log"
-printf 'Go CLI isolated update, takeover, self-update and data-preserving uninstall: PASS\n'
-
-# A separate fixture exercises a complete update batch and its explicit
-# rollback, including self update, without executing either candidate program.
-rollback_home="$STK_TEST_ROOT/rollback-manager"
-rollback_codex="$STK_TEST_ROOT/rollback-data"
-mkdir -p "$rollback_codex"
-printf 'ROLLBACK-AUTH\n' > "$rollback_codex/auth.json"
-printf '#!/bin/sh\nprintf first\\n\n' > "$STK_TEST_ROOT/codex-first"
-printf '#!/bin/sh\nprintf second\\n\n' > "$STK_TEST_ROOT/codex-second"
-chmod 0755 "$STK_TEST_ROOT/codex-first" "$STK_TEST_ROOT/codex-second"
-"$STK_TEST_BINARY" --home "$rollback_home" install codex --install "codex=$STK_TEST_ROOT/codex-first" --codex-home "$rollback_codex" > "$STK_TEST_ROOT/rollback-setup.log"
-"$STK_TEST_BINARY" --home "$rollback_home" update codex --install "codex=$STK_TEST_ROOT/codex-second" > "$STK_TEST_ROOT/rollback-update.log"
-"$STK_TEST_BINARY" --home "$rollback_home" rollback --dry-run --json > "$STK_TEST_ROOT/rollback-preview.json"
-cmp "$STK_TEST_ROOT/codex-second" "$rollback_home/tools/codex/codex"
-"$STK_TEST_BINARY" --home "$rollback_home" rollback > "$STK_TEST_ROOT/rollback.log"
-cmp "$STK_TEST_ROOT/codex-first" "$rollback_home/tools/codex/codex"
-printf '#!/bin/sh\nprintf fixture-manager\\n\n' > "$STK_TEST_ROOT/next-manager"
-"$STK_TEST_BINARY" --home "$rollback_home" update cdet --install "cdet=$STK_TEST_ROOT/next-manager" > "$STK_TEST_ROOT/self-update-fixture.log"
-"$STK_TEST_BINARY" --home "$rollback_home" rollback > "$STK_TEST_ROOT/self-rollback.log"
-cmp "$STK_TEST_BINARY" "$rollback_home/cdet"
-/usr/bin/grep -Fxq 'ROLLBACK-AUTH' "$rollback_codex/auth.json"
-printf 'Go CLI isolated component rollback, self rollback and authentication preservation: PASS\n'
+[[ ! -e "$store" ]]
+"$prefix/bin/cdet" repair --store "$new_store" > "$CDET_TEST_ROOT/rebind.log"
+store="$new_store"
+"$prefix/bin/codex" 'after store move' > "$CDET_TEST_ROOT/rebound.log"
+/usr/bin/grep -Fxq "CODEX_HOME=$store/codex" "$CDET_TEST_ROOT/rebound.log"
+cc -DCDET_FIXTURE_VERSION=2 "$CDET_TEST_ROOT/component.c" -o "$CDET_FIXTURE_CODEX"
+cp "$CDET_FIXTURE_CURL_LOG" "$CDET_TEST_ROOT/curl.before-preview"
+"$prefix/bin/cdet" update codex --dry-run --json > "$CDET_TEST_ROOT/update-preview.json"
+cmp "$CDET_FIXTURE_CURL_LOG" "$CDET_TEST_ROOT/curl.before-preview"
+"$prefix/bin/cdet" update codex --yes > "$CDET_TEST_ROOT/update.log"
+"$prefix/bin/codex" > "$CDET_TEST_ROOT/v2.log"
+/usr/bin/grep -Fxq 'fixture version two' "$CDET_TEST_ROOT/v2.log"
+# An upstream-owned program may replace itself without invalidating toolkit
+# entry ownership. No historical checksum lock or rollback warehouse exists.
+cp "$codex_source.retained/packages/standalone/v1/bin/codex" "$store/.cdet/bin/codex"
+"$prefix/bin/codex" 'upstream replacement' > "$CDET_TEST_ROOT/self-updated.log"
+/usr/bin/grep -Fxq 'ARG=upstream replacement' "$CDET_TEST_ROOT/self-updated.log"
+printf 'unknown data\n' > "$store/codex/unknown"
+printf 'unknown program-directory file\n' > "$store/.cdet/bin/keep-user"
+"$prefix/bin/cdet" remove codex > "$CDET_TEST_ROOT/remove.log"
+[[ ! -e "$prefix/bin/codex" && ! -e "$store/.cdet/bin/codex" && -f "$store/codex/unknown" ]]
+[[ -f "$store/.cdet/bin/keep-user" ]]
+"$prefix/bin/cdet" remove self > "$CDET_TEST_ROOT/remove-self.log"
+[[ ! -e "$prefix/bin/cdet" && -f "$store/proxy/config.yaml" && ! -e "$store/gds" ]]
+cmp "$CDET_TEST_ROOT/auth.before" "$codex_source.retained/auth.json"
+cmp "$CDET_TEST_ROOT/auth.before" "$store/codex/auth.json"
+cmp "$CDET_TEST_ROOT/db.before" "$store/codex/state.sqlite"
+cmp "$CDET_TEST_ROOT/config.before" "$store/codex/config.toml"
+cmp "$CDET_TEST_ROOT/proxy.before" "$proxy_source/config.yaml"
+cmp "$CDET_TEST_ROOT/proxy.before" "$store/proxy/config.yaml"
+cmp "$CDET_TEST_ROOT/shell.before" "$HOME/.bashrc"
+[[ ! -e "$CDET_FIXTURE_FORBIDDEN_LOG" && ! -e "$CDET_TEST_ROOT/mount" ]]
+printf 'CDEToolkit 双目录 CLI 隔离验证通过\n'

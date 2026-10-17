@@ -12,6 +12,50 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+func TestCheckWorkflowCoversDeclaredMinimumAndPinnedGo(t *testing.T) {
+	module, err := os.ReadFile("../../go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var minimum string
+	for _, line := range strings.Split(string(module), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == "go" {
+			parts := strings.Split(fields[1], ".")
+			if len(parts) >= 2 {
+				minimum = strings.Join(parts[:2], ".") + ".x"
+			}
+		}
+	}
+	pinned, err := os.ReadFile("../../.go-version")
+	if err != nil || minimum == "" {
+		t.Fatal("missing declared Go versions", err)
+	}
+	data, err := os.ReadFile("../../.github/workflows/check.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			Strategy struct {
+				Matrix struct {
+					Include []struct{ Go string }
+				}
+			}
+		}
+	}
+	if err = yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	versions := map[string]bool{}
+	for _, item := range workflow.Jobs["go"].Strategy.Matrix.Include {
+		versions[item.Go] = true
+	}
+	if !versions[minimum] || !versions[strings.TrimSpace(string(pinned))] {
+		t.Fatal("check workflow does not cover both the declared minimum and release Go toolchain")
+	}
+}
+
 func TestReleaseWorkflowOnlyPublishesVerifiedAllowlist(t *testing.T) {
 	data, err := os.ReadFile("../../.github/workflows/release.yml")
 	if err != nil {

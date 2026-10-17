@@ -1,27 +1,26 @@
 #!/bin/sh
-# Install only the CDEToolkit CLI. No component, service or shell-profile setup.
+# Download only the CLI. Directory selection and all managed writes live in Go.
 set -eu
 
 fail() { printf 'cdet: %s\n' "$*" >&2; exit 1; }
 usage() {
-    printf '%s\n' 'Usage: sh install.sh [--version X.Y.Z] [--home DIR] [--bin-dir DIR] [--dry-run]' \
-        'Defaults: CDET_VERSION=latest, CDET_HOME=$HOME/.local/cdetoolkit, CDET_BIN_DIR=$HOME/.local/bin'
+    printf '%s\n' 'Usage: sh install.sh [--version X.Y.Z] [--prefix DIR] [--store DIR] [--yes] [--dry-run]' \
+        'Two destinations: CDET_PREFIX (default ~/.cdet), CDET_STORE (default ~/.cdet-store).'
 }
 
 version=${CDET_VERSION:-latest}
-home=${CDET_HOME:-${STK_HOME:-${HOME:?HOME is required}/.local/cdetoolkit}}
-if [ -z "${CDET_HOME:-}" ] && [ -z "${STK_HOME:-}" ] && [ ! -e "$home/state.json" ] && [ ! -L "$home/state.json" ] && [ ! -e "$home/config.toml" ] && [ ! -L "$home/config.toml" ]; then
-    if [ -e "$HOME/.local/stk/state.json" ] || [ -L "$HOME/.local/stk/state.json" ]; then home=$HOME/.local/stk; fi
-fi
-bin_dir=${CDET_BIN_DIR:-$HOME/.local/bin}
+prefix=${CDET_PREFIX:-}
+store=${CDET_STORE:-}
+accept_defaults=0
 dry_run=0
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --version|--home|--bin-dir)
+        --version|--prefix|--store)
             [ "$#" -ge 2 ] || fail "$1 needs a value"
-            case "$1" in --version) version=$2 ;; --home) home=$2 ;; --bin-dir) bin_dir=$2 ;; esac
+            case "$1" in --version) version=$2 ;; --prefix) prefix=$2 ;; --store) store=$2 ;; esac
             shift 2 ;;
         --dry-run) dry_run=1; shift ;;
+        --yes) accept_defaults=1; shift ;;
         --help|-h) usage; exit 0 ;;
         *) fail "unknown argument: $1" ;;
     esac
@@ -33,36 +32,11 @@ fi
 case "$(uname -s)" in Linux) os=linux ;; Darwin) os=darwin ;; *) fail 'supported systems: Linux and macOS' ;; esac
 case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) fail 'supported architectures: amd64 and arm64' ;; esac
 
-# Refuse links/non-directories in destination parents and noncanonical paths.
-check_dir() {
-    cr=$(printf '\r')
-    case "$1" in /*) ;; *) fail 'installation paths must be absolute' ;; esac
-    case "$1" in /|*/|*//*|*/./*|*/../*|*/.|*/..|*'
-'*|*"$cr"*) fail 'installation paths must be canonical, non-root paths' ;; esac
-    parent=$1
-    while [ "$parent" != / ]; do
-        [ ! -L "$parent" ] || fail "destination passes through a symlink: $parent"
-        if [ -e "$parent" ] && [ ! -d "$parent" ]; then fail "not a directory: $parent"; fi
-        parent=$(dirname "$parent")
-    done
-}
-check_dir "$home"
-check_dir "$bin_dir"
-entry=$bin_dir/cdet
-check_entry() {
-    if [ -L "$entry" ]; then
-        : # The Go core validates link ownership before applying any changes.
-    elif [ -e "$entry" ]; then
-        fail "refusing to replace an existing file or directory: $entry"
-    fi
-}
-check_entry
-
 asset=cdet-$os-$arch.tar.gz
 base=https://github.com/MiracleHYH/CDEToolkit/releases
 if [ "$version" = latest ]; then base=$base/latest/download; else base=$base/download/v$version; fi
 if [ "$dry_run" = 1 ]; then
-    printf 'Package: %s/%s\nHome: %s\nCommand: %s\n' "$base" "$asset" "$home" "$entry"
+    printf 'Package: %s/%s\nInstall: %s\nComponents: %s\n' "$base" "$asset" "${prefix:-$HOME/.cdet}" "${store:-$HOME/.cdet-store}"
     exit 0
 fi
 command -v curl >/dev/null 2>&1 || fail 'curl is required'
@@ -98,14 +72,11 @@ case "$reported" in 'cdet '*) installed_version=${reported#cdet } ;; *) fail 'no
 printf '%s\n' "$installed_version" | LC_ALL=C grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || fail 'not a stable release executable'
 if [ "$version" != latest ] && [ "$installed_version" != "$version" ]; then fail 'release version mismatch'; fi
 
-# Both paths use the CLI's ownership checks and transactional file operations.
-if [ -e "$home/state.json" ] || [ -L "$home/state.json" ]; then
-    "$temporary/cdet" --home "$home" update cdet --install "cdet=$temporary/cdet" --entry "$entry"
-else
-    mkdir -p -- "$(dirname "$home")"
-    "$temporary/cdet" --home "$home" init --entry "$entry"
-fi
-target=$("$temporary/cdet" --home "$home" path)
-case "$target" in "$home/cdet"|"$home/stk") ;; *) fail 'unexpected managed executable path' ;; esac
-printf 'Installed cdet %s at %s\n' "$installed_version" "$entry"
-case ":${PATH:-}:" in *":$bin_dir:"*) ;; *) printf 'Add to PATH for this shell:\n  export PATH="%s:$PATH"\n' "$bin_dir" ;; esac
+# Go asks only for missing destinations using /dev/tty (also works with curl|sh).
+# Noninteractive callers supply both roots or explicitly accept defaults.
+set -- init
+[ -z "$prefix" ] || set -- "$@" --prefix "$prefix"
+[ -z "$store" ] || set -- "$@" --store "$store"
+[ "$accept_defaults" = 0 ] || set -- "$@" --yes
+"$temporary/cdet" "$@"
+printf 'Installed cdet %s; no components or services were started.\n' "$installed_version"

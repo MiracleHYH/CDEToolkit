@@ -1,29 +1,13 @@
-# Bash 过渡边界
+# 旧 Bash 边界
 
-本轮约束是不切换实际入口，所以当前仍可能被实际入口引用的 Bash 文件继续原位保留。
-它们是冻结的旧实现，不是 Go 的安装器、下载 helper、配置后端或服务后端。
-不得为补齐 Go 的功能再改一遍 Bash，也不得让 Go 通过 subprocess 调用 toolkit.sh、pm.sh、
-lib/codex.sh、lib/lifecycle.sh 或 Python 解包/发布选择脚本。
+当前 Go 实现位于 `internal/cdet`，只管理安装根和组件存储根。旧 Bash 入口及仍被引用的库冻结保留，不参与 Go 安装、下载、解包、组件迁入或发行。
 
-新发布路径为 `make dist` → 仅包含 `cdet` 的发行包。构建、测试和发行不携带旧库、菜单、
-任务查询、火山模块、Skill、GDS CUDA 编译器或任何真实配置、认证与数据。
+- `toolkit.sh`、根 `install.sh`、`codex-launcher.sh`、Proxy/GDS 脚本与旧库可能仍被已有部署引用，不在本次源代码收敛中切换或安装。
+- `scripts/install.sh` 是 Go CLI 的 POSIX 下载器，与根目录旧安装器不同；它将目录选择和持久写入交给 Go。
+- `scripts/check.sh` 转交 Make/Go；`scripts/public-audit.sh` 用于源码和历史审查。
+- GDS 仅显式选择；旧 CUDA 模块不进入默认 Go 安装、测试或发行包。
+- 旧原地接管、多根映射、服务定义改写和分散路径参数不再作为 Go 协议提供；旧开发状态不原位兼容。
 
-Go 内部只保留一套生命周期：
+保留源文件不表示 Go 会调用它们，也不表示允许修改真实服务。旧入口未来退役时应依据当时的引用和部署情况独立处理。
 
-- `Install` 与 `Setup` 共用发现、接管和登记；只有缺失或明确选择安装源时才进入 artifact 流程。
-- 组件更新与 CDEToolkit 自更新共用发布选择、下载、摘要校验、解包、归属校验和原子文件事务。
-- 卸载使用同一文件事务的 remove 操作，不复制旧 Bash 的服务控制、递归 purge 或安装快照引擎。
-- 模块生成、环境渲染、目录推导和元数据提交共用函数，服务控制继续作为显式操作。
-
-实际入口未来经独立授权切换并验证后，才有条件删除旧入口及其依赖库。
-旧版使用文档保存在 `legacy-shell.md`，不会进入新的单文件发布包。
-
-CI/发布迁移已完成：check.yml 使用 Make/Go 检查，release.yml 发布四平台 Go 程序包、
-SHA-256 和 Sigstore bundle。旧 Bash 的发布器、PTY/平台/真实服务测试及专属夹具已清理。
-GDS 的模拟 worker 检查拆为显式选择的 tests/gds-isolation.sh，不进入默认 CI。
-scripts/check.sh 只转交 make check；保留该路径是因为旧自更新预检仍要求它存在。
-scripts/public-audit.sh 继续承担源码/历史泄漏检查，不承担安装、解包或服务管理。
-旧入口和 GDS 运行所需的库保持原样，不能因 CI 已切换就删除。
-本次删除清单与后续条件见 [go-ci-release.md](go-ci-release.md)；迁移前审计记录见 [go-safety-audit.md](go-safety-audit.md)。
-
-`cdet` 的 POSIX 安装器位于 `scripts/install.sh`，只负责 HTTPS 下载、SHA-256 校验和调用已校验的 Go CLI。命令链接、首次初始化与自身更新仍由 Go 的同一文件事务实现；不调用任何旧 Bash 模块。旧入口未切换。
+现行协议见 [设计](go-design.md)、[安全边界](go-safety-audit.md) 和 [CI 与发行](go-ci-release.md)。

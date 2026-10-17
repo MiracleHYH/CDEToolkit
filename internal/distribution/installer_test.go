@@ -3,13 +3,15 @@ package distribution
 import (
 	"archive/tar"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
+
+	"github.com/MiracleHYH/CDEToolkit/internal/cdet"
 )
 
 func TestInstallerPublishesOnlyReviewedPOSIXSource(t *testing.T) {
@@ -44,7 +46,7 @@ func TestPOSIXInstallerWithIsolatedReleaseAndHomes(t *testing.T) {
 	build := t.TempDir()
 	binary := filepath.Join(build, "cdet")
 	goTool := filepath.Join(runtime.GOROOT(), "bin", "go")
-	cmd := exec.Command(goTool, "build", "-trimpath", "-buildvcs=false", "-ldflags=-X=github.com/MiracleHYH/CDEToolkit/internal/stk.Version=1.2.3", "-o", binary, "./cmd/cdet")
+	cmd := exec.Command(goTool, "build", "-trimpath", "-buildvcs=false", "-ldflags=-X=github.com/MiracleHYH/CDEToolkit/internal/cdet.Version=1.2.3", "-o", binary, "./cmd/cdet")
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS="+runtime.GOOS, "GOARCH="+runtime.GOARCH)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -52,7 +54,7 @@ func TestPOSIXInstallerWithIsolatedReleaseAndHomes(t *testing.T) {
 	}
 	platform := runtime.GOOS + "/" + runtime.GOARCH
 	asset, _ := assetName(platform)
-	scenarios := []string{"fresh", "repeat", "pinned", "legacy-environment", "dry-run", "checksum", "missing-release", "extra-member", "foreign-entry", "foreign-home", "foreign-link", "linked-bin", "version-mismatch", "unsupported-arch"}
+	scenarios := []string{"fresh", "repeat", "pinned", "custom-roots", "dry-run", "checksum", "missing-release", "extra-member", "foreign-entry", "foreign-home", "foreign-link", "linked-bin", "version-mismatch", "unsupported-arch"}
 	for _, scenario := range scenarios {
 		t.Run(scenario, func(t *testing.T) {
 			dir, err := filepath.EvalSymlinks(t.TempDir())
@@ -70,11 +72,13 @@ func TestPOSIXInstallerWithIsolatedReleaseAndHomes(t *testing.T) {
 				}
 			}
 			home := filepath.Join(dir, "user")
-			managed := filepath.Join(home, ".local", "cdetoolkit")
-			if scenario == "legacy-environment" {
+			managed := filepath.Join(home, ".cdet")
+			store := filepath.Join(home, ".cdet-store")
+			if scenario == "custom-roots" {
 				managed = filepath.Join(home, "custom", "manager")
+				store = filepath.Join(home, "custom", "components")
 			}
-			entry := filepath.Join(home, ".local", "bin", "cdet")
+			entry := filepath.Join(managed, "bin", "cdet")
 			assets := filepath.Join(dir, "assets")
 			if _, err := Pack(binary, assets, "1.2.3", platform); err != nil {
 				t.Fatal(err)
@@ -121,9 +125,9 @@ case "$CDET_SCENARIO:$url" in checksum:*.tar.gz) printf corrupted >> "$output" ;
 			case "version-mismatch":
 				args = []string{"--version", "1.2.4"}
 			case "foreign-entry":
-				write("user/.local/bin/cdet", "FOREIGN-ENTRY", 0755)
+				write("user/.cdet/bin/cdet", "FOREIGN-ENTRY", 0755)
 			case "foreign-home":
-				write("user/.local/cdetoolkit/cdet", "FOREIGN-HOME", 0755)
+				write("user/.cdet/keep", "FOREIGN-HOME", 0755)
 			case "foreign-link", "linked-bin":
 				write("foreign/keep", "FOREIGN-LINK-TARGET", 0600)
 				if err := os.MkdirAll(filepath.Dir(entry), 0700); err != nil {
@@ -148,17 +152,16 @@ case "$CDET_SCENARIO:$url" in checksum:*.tar.gz) printf corrupted >> "$output" ;
 					t.Fatal(err)
 				}
 			}
-			env := []string{"HOME=" + home, "PATH=" + filepath.Join(dir, "bin") + ":/usr/bin:/bin", "TMPDIR=" + filepath.Join(dir, "tmp"), "CODEX_HOME=" + filepath.Join(home, ".codex"), "CDET_SCENARIO=" + scenario, "CDET_ASSETS=" + assets, "CDET_CURL_CALLS=" + filepath.Join(dir, "curl-calls"), "CDET_FORBIDDEN=" + filepath.Join(dir, "forbidden")}
-			if scenario == "legacy-environment" {
+			env := []string{"HOME=" + home, "CDET_PREFIX=" + managed, "CDET_STORE=" + store, "PATH=" + filepath.Join(dir, "bin") + ":/usr/bin:/bin", "TMPDIR=" + filepath.Join(dir, "tmp"), "CODEX_HOME=" + filepath.Join(home, ".codex"), "CDET_SCENARIO=" + scenario, "CDET_ASSETS=" + assets, "CDET_CURL_CALLS=" + filepath.Join(dir, "curl-calls"), "CDET_FORBIDDEN=" + filepath.Join(dir, "forbidden")}
+			if scenario == "custom-roots" {
 				if err := os.MkdirAll(filepath.Dir(managed), 0700); err != nil {
 					t.Fatal(err)
 				}
-				prepare := exec.Command(binary, "--home", managed, "init")
+				prepare := exec.Command(binary, "--prefix", managed, "--store", store, "init")
 				prepare.Env, prepare.Dir = env, dir
 				if out, err := prepare.CombinedOutput(); err != nil {
 					t.Fatalf("prepare existing custom home: %v: %s", err, out)
 				}
-				env = append(env, "STK_HOME="+managed)
 			}
 			run := func() ([]byte, error) {
 				cmd := exec.Command("/bin/sh", append([]string{filepath.Join(root, "scripts", "install.sh")}, args...)...)
@@ -166,7 +169,7 @@ case "$CDET_SCENARIO:$url" in checksum:*.tar.gz) printf corrupted >> "$output" ;
 				return cmd.CombinedOutput()
 			}
 			out, err := run()
-			success := scenario == "fresh" || scenario == "repeat" || scenario == "pinned" || scenario == "legacy-environment" || scenario == "dry-run"
+			success := scenario == "fresh" || scenario == "repeat" || scenario == "pinned" || scenario == "custom-roots" || scenario == "dry-run"
 			if (err == nil) != success {
 				t.Fatalf("unexpected installer outcome: %v: %s", err, out)
 			}
@@ -176,21 +179,23 @@ case "$CDET_SCENARIO:$url" in checksum:*.tar.gz) printf corrupted >> "$output" ;
 				}
 			}
 			if success && scenario != "dry-run" {
-				target, err := os.Readlink(entry)
-				if err != nil || filepath.Clean(filepath.Join(filepath.Dir(entry), target)) != filepath.Join(managed, "cdet") {
-					t.Fatal("incorrect installed entry", target, err)
+				installed, err := os.ReadFile(entry)
+				original, oe := os.ReadFile(binary)
+				if err != nil || oe != nil || sha256.Sum256(installed) != sha256.Sum256(original) {
+					t.Fatal("incorrect installed CLI", err)
 				}
-				state, err := os.ReadFile(filepath.Join(managed, "state.json"))
-				if err != nil || !strings.Contains(string(state), `"modules": {}`) {
+				state, err := os.ReadFile(filepath.Join(store, ".cdet", "state.json"))
+				var manifest cdet.State
+				if err != nil || json.Unmarshal(state, &manifest) != nil || manifest.Schema != cdet.Schema || manifest.Components == nil || len(manifest.Components) != 0 {
 					t.Fatal("installer adopted or downloaded a component", string(state), err)
 				}
-			} else if _, err := os.Lstat(filepath.Join(managed, "state.json")); !os.IsNotExist(err) {
+			} else if _, err := os.Lstat(filepath.Join(store, ".cdet", "state.json")); !os.IsNotExist(err) {
 				t.Fatal("failed or dry-run install wrote managed metadata")
 			}
 			if scenario == "foreign-entry" || scenario == "foreign-home" {
 				name, want := entry, "FOREIGN-ENTRY"
 				if scenario == "foreign-home" {
-					name, want = filepath.Join(managed, "cdet"), "FOREIGN-HOME"
+					name, want = filepath.Join(managed, "keep"), "FOREIGN-HOME"
 				}
 				data, err := os.ReadFile(name)
 				if err != nil || string(data) != want {

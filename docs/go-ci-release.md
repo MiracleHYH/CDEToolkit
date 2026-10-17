@@ -1,35 +1,52 @@
-# Go CI、发布与旧源码清理
+# Go 检查与发行
 
-本文记录 CI 初次迁移阶段的清理与验证。当前命令已更名为 `cdet`；最新安装与发行流程见 README，历史记录中的 `stk` 和旧资产清单不作为当前使用说明。
+当前文档描述未发布的双目录源码。命令为 `cdet`，主程序位于 `cmd/cdet`，发行辅助工具位于 `cmd/cdet-dist`。Go 生命周期不调用旧 Bash 或 Python 安装后端。
 
-日期：2026-10-17。仅修改源码、构建和隔离测试；不推送代码、创建标签或发布 Release，不切换实际入口，不注册/启动真实服务，不修改用户配置、认证、会话和数据。
+## 本地入口
 
-## 构建与检查
+| 命令 | 范围 |
+|---|---|
+| `make check` | 格式、Shell 语法、vet、race、隔离安装器和 CLI 测试 |
+| `make smoke` | 构建本机包、校验包与摘要，只读运行版本和空环境状态 |
+| `make dist TARGET_OS=linux TARGET_ARCH=amd64` | 构建并校验一个平台包 |
+| `make release` | 本地构建四平台包、摘要和 POSIX 下载器 |
+| `make verify-release` | 本地复核四包及下载器源码一致性 |
+| `make check-gds` | 显式选择 Linux 的模拟 GPU/CUDA 隔离测试 |
 
-- `make check`：gofmt、vet、race 和已有三组 CLI 隔离测试。
-- `make smoke`：构建当前平台包、验摘要/内容/Go 主程序身份/架构，并在临时 HOME 运行包中程序的 `version` 与 `status --json`；不会执行 install/setup。
-- `make dist TARGET_OS=linux TARGET_ARCH=amd64`：生成指定平台 tar.gz 和 `.sha256`。
-- `make release` / `make verify-release`：构建/校验 Linux/macOS × amd64/arm64 四个平台。各平台使用独立 build 子目录，避免相互覆盖。
-- `STK_RELEASE_TAG=vX.Y.Z make release-check`：先要求标签与 VERSION 完全一致、工作树干净且标签指向当前 HEAD，再依次完整检查、构建四包、验包和本机只读冒烟。这里只生成文件，不发布。标签经环境传入，不插入 shell 源码；不会替调用者提交、打标签或拉取代码。
-- `make check-gds`：Linux 可选检查，只复制 GDS/common/CUDA 源码到临时目录，使用假 nvcc、假 nvidia-smi 和 CPU fixture worker。默认 CI、Go 安装与 Go 发行包均不包含此步骤。
+这些构建目标不上传产物、不安装真实组件，也不启动服务。`make check` 会在临时目录部署测试 CLI，并运行合成组件；不会使用真实 HOME、认证、会话或配置。
 
-`VERSION` 是发行版本来源；本次保留已有版本文件不变。Make 通过 Go 链接参数注入版本，直接 go build 显示 dev。
-发布工具链固定于 `.go-version`；CI 另检查 go.mod 承诺的最低 Go 1.23。Go 依赖未增加。
+`VERSION` 是版本来源。正式发布检查使用 `STK_RELEASE_TAG=vX.Y.Z make release-check`，要求标签存在、等于 VERSION、指向当前 HEAD 且工作树干净。此目标仍只检查和构建，不替用户提交、创建标签或推送。
 
-## 工作流
+源码最低 Go 1.23；固定发行工具链为 `.go-version` 中的 Go 1.27.2。运行时是单个 CGO=0 程序，无 SQLite 驱动、Python、Node 或宿主 sqlite3 依赖。配置解析只使用 TOML/YAML 基础依赖。
 
-check.yml 在 Linux（最低/当前 Go）及 macOS 执行 Go 检查和本机包冒烟，另保留完整历史的 gitleaks 审查。GDS job 仅在手动触发并勾选 gds 时运行，不需要 CUDA、GPU 或 Supervisor。
+## GitHub Actions
 
-release.yml 仅响应 v* 标签。它读取 VERSION、检查标签、运行完整 Go 验证、构建四个平台、校验摘要/包结构、执行本机只读冒烟，再逐个签名、自验证并发布固定清单中的 Go 包和摘要。每份 tar.gz 严格只含 `stk`，不再生成 `install.sh` 或整个源码安装包。
+`check.yml` 在 Linux 最低 Go、Linux 固定发行 Go 和 macOS 固定发行 Go 上执行检查与只读冒烟。源码与历史另做 gitleaks 审查。GDS job 仅在手动触发并选择时运行。
 
-Go 标准库负责 tar/gzip/摘要，包内时间、UID/GID、权限和文件名固定，不依赖 GNU/BSD tar 选项。校验拒绝额外安装器、链接、PAX 元数据、错误架构、非 STK 程序、摘要错误、损坏压缩流或非零尾随内容。交叉产物静态校验，本机产物执行版本检查；不会尝试执行其他架构程序。Go 在 trimpath 构建信息中不保留链接参数，运行版本由只读冒烟确认。
+`release.yml` 只响应 `v*` 标签。它复核标签、源码、测试、包与本机冒烟，再逐项签名、自验证并发布白名单资产。普通检查只有 `contents: read`；发布 job 才具有上传和 OIDC 权限。Action 固定完整提交 SHA，checkout 不保留凭据。
 
-Actions 均固定为核对过的完整提交 SHA；checkout 不保留凭据。PR/普通检查仅有 contents:read，发布 job 才有 contents:write 与 id-token:write。Sigstore 按仓库、release.yml 和标签身份自验证，签名或验证失败不会调用 gh release create。
+发布白名单为：
 
-源码和历史审查继续使用现有 public-audit，不删除已有泄漏检查。gitleaks v8.30.0 的 go.mod 仍声明旧模块路径，安装命令改为 github.com/zricethezav/gitleaks/v8，避免沿用旧 CI 中不匹配的路径。工具仅用于 CI/隔离验证，不进入 STK 运行时。
+- Linux/macOS × amd64/arm64 的四份 `cdet-GOOS-GOARCH.tar.gz`。
+- 四份对应 `.sha256`。
+- 来自 `scripts/install.sh` 的单份 POSIX 下载器。
+- 每项资产对应的 `.sigstore.json`。
 
-参考配置已核对 [setup-go 官方说明](https://github.com/actions/setup-go/blob/main/docs/advanced-usage.md) 与各 Action 的官方 tag/提交；新工作流在本轮只进行静态校验和本地等价检查，未实际触发 GitHub 发布。
-发布脚本还用假 cosign/gh 检查固定资产清单、证书身份参数以及签名/验证失败时阻断发布；没有调用真实 OIDC 签名或上传服务。真实 GitHub runner 的身份令牌与签名链需首次正式发布时验证。
+每个压缩包只含一个 `cdet` 程序，不含组件、配置、认证、会话、缓存、旧 Bash 或整份源码。签名或验证失败时阻止发布；额外 `dist/` 文件不会被通配上传。
+
+包校验使用 Go 标准库，检查摘要、归档结构、固定权限、程序身份和目标平台；拒绝越界、链接、额外成员、损坏压缩流和异常尾随数据。跨平台产物只做静态校验，本机产物才执行只读冒烟。
+
+## 安装器与隔离验证
+
+POSIX 下载器依赖系统 curl、tar 和 SHA-256 工具，获取并校验 CLI 后交给 Go `init`。它只接受两个目标根；已有安装由 Go 的归属和身份规则处理，不代替组件安装。
+
+隔离测试使用临时 HOME、下载夹具、合成原生组件和禁止服务调用的哨兵。Codex 安装更新只执行假 curl 返回的本地模拟脚本；Mihomo 控制 API 使用本地 HTTP 夹具，不运行真实官方安装器或真实服务。发布脚本测试使用假 cosign/gh，不进行真实签名或上传。服务器验证只在独立临时目录运行并清理，不操作既有安装。
+
+Go 最低版本、完整测试、四平台构建和 Linux 临时环境的结果应以本轮实际输出记录到 [验证范围](two-root-audit.md)，不能沿用已删除数据库实现的历史结果。
+
+## 历史清理记录（原文保留）
+
+以下为 CI 初次迁移时的清理和验证记录，不作为当前布局或测试通过的声明。
 
 ## 已删除的源码
 
@@ -82,7 +99,9 @@ Actions 均固定为核对过的完整提交 SHA；checkout 不保留凭据。PR
 本轮还验证 Go 最低版本与固定工具链、四个平台的包、macOS/Linux 原生只读冒烟、Go CLI 数据哨兵、可选 GDS 的假 worker 清理、actionlint，以及隔离 Git 仓库中的源码/历史审查。
 真实组件保护基线和源码清单在同步前后独立核对；部署只允许明确修改/删除的源码路径，摘要冲突立即停止。测试二进制、工具链与产物只放在工作区或远端临时目录。
 
-## CDEToolkit 命名与一行安装
+## 历史：CDEToolkit 命名与首次一行安装
+
+本节对应 schema-1 的首次发布，保留当时验证记录；文件事务、自更新回滚及旧入口兼容均不是当前 schema-4 功能。
 
 首次提交 5ecfb46 的 GitHub Actions 全部通过（Linux Go 1.23/1.27.2、macOS、public-audit）；GDS 按可选策略跳过，没有失败项。
 
