@@ -2,7 +2,29 @@
 
 Cloud Development Environment Toolkit，命令名 **`cdet`**。轻量管理开发机上的 Codex、Proxy 和可选 GDS：统一目录、完整迁入、重建入口，并调用软件自身的安装与更新能力。
 
-当前源码采用未发布的 schema-4 协议；已发布的 v0.1.0 使用旧布局。以下新命令与目录规则不适用于旧版，当前开发不发布或切换真实入口。
+自 v0.2.0 起采用 schema-4 双目录协议。v0.1.0 使用旧布局，其管理状态不支持原位升级；请为新版选择独立的安装目录和组件存储目录，已有组件需通过新版的完整迁入流程另行处理。
+
+## 一行安装
+
+```sh
+curl -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh
+```
+
+安装器会询问两个目标目录，只下载并初始化最新正式版 Go CLI，不安装、迁入或启动组件，也不改写 Shell 配置。无交互安装可指定两个目录：
+
+```sh
+curl -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh \
+  | sh -s -- --prefix /persistent/cdet-cli --store /persistent/components
+```
+
+使用默认安装目录时，可在当前 Shell 加载 PATH：
+
+```sh
+eval "$("$HOME/.cdet/bin/cdet" env bash)"
+cdet version
+```
+
+自定义目录时，将上述 CLI 路径替换为 `<安装目录>/bin/cdet`。也可通过安装器的 `--version 0.2.0` 固定版本。
 
 ## 两个目录
 
@@ -44,7 +66,7 @@ cdet install codex --from codex=/existing/.codex
 cdet install proxy --from proxy=/existing/mihomo
 ```
 
-`init` 只部署 CLI 和空清单，不安装组件或修改 Shell。`cdet env bash` 输出需要加入当前 Shell 的 PATH。项目的 `scripts/install.sh` 负责下载、校验 CLI 并转交 Go `init`，支持一行安装；新协议发布前应使用本地构建验证。
+`init` 只部署 CLI 和空清单，不安装组件或修改 Shell。`cdet env bash` 输出需要加入当前 Shell 的 PATH。发布的 `install.sh` 来自项目的 `scripts/install.sh`，下载并核对 CLI 包的 SHA-256 后转交 Go `init`。
 
 `install` 在没有组件时新装；发现已有组件时，将完整数据目录复制到存储根，校验后生成入口。`--from NAME=DIR` 指定确切的数据根，不自动下钻其 `data/` 子目录；`--fresh` 明确跳过外部安装。默认发现使用标准 HOME/XDG 目录及 PATH，不搜索整盘。自动发现的迁入需要确认或 `--yes`，显式 `--from` 表示选择该来源。
 

@@ -1,6 +1,6 @@
 # Go 检查与发行
 
-当前文档描述未发布的双目录源码。命令为 `cdet`，主程序位于 `cmd/cdet`，发行辅助工具位于 `cmd/cdet-dist`。Go 生命周期不调用旧 Bash 或 Python 安装后端。
+当前文档描述 v0.2.0 起的双目录版本。命令为 `cdet`，主程序位于 `cmd/cdet`，发行辅助工具位于 `cmd/cdet-dist`。Go 生命周期不调用旧 Bash 或 Python 安装后端。
 
 ## 本地入口
 
@@ -41,6 +41,8 @@ Linux 检查在独立 PID 和挂载命名空间中运行，并将 `/proc` 重新
 ## 安装器与隔离验证
 
 POSIX 下载器依赖系统 curl、tar 和 SHA-256 工具，获取并校验 CLI 后交给 Go `init`。它只接受两个目标根；已有安装由 Go 的归属和身份规则处理，不代替组件安装。
+
+公开入口为 `https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh`，从最新正式 Release 获取当前平台 CLI。指定 `--version X.Y.Z` 则使用对应标签的包。v0.1.0 的旧管理状态不能原位升级至 v0.2.0；新版需要独立双目录，组件迁入另行确认和执行。
 
 隔离测试使用临时 HOME、下载夹具、合成原生组件和禁止服务调用的哨兵。Codex 安装更新只执行假 curl 返回的本地模拟脚本；Mihomo 控制 API 使用本地 HTTP 夹具，不运行真实官方安装器或真实服务。发布脚本测试使用假 cosign/gh，不进行真实签名或上传。服务器验证只在独立临时目录运行并清理，不操作既有安装。
 
