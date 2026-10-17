@@ -25,7 +25,7 @@ Go 检查直接使用 runner 普通权限。Codex 外部辅助集成不扫描全
 
 `scripts/install.sh` 是 POSIX 下载器，只依赖 curl、tar 和 SHA-256 工具。它接受 `--version`、`--root`、`--yes` 与 `--dry-run`，软件目录默认为 `~/.nido`，可通过 `NIDO_HOME` 指定。旧的 `--prefix`、`--store` 和迁移参数不再支持。
 
-下载器只获取当前平台 Nido 包与摘要，核对摘要、单成员归档和程序报告的版本，再由临时 Nido 执行：
+下载器通过 HTTPS 上的 HTTP/1.1 获取当前平台 Nido 包与摘要，核对摘要、单成员归档和程序报告的版本，再由临时 Nido 执行：
 
 ```sh
 nido --root /absolute/software/path init --yes

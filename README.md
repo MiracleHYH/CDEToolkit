@@ -15,7 +15,7 @@ Nido 为 Codex 提供目录关联、环境与代理配置，以及官方安装�
 需要 curl、tar 和 SHA-256 工具（Linux 通常自带 `sha256sum`，macOS 自带 `shasum`），无需 Go。下面一行安装最新 Go 版到 `~/.nido`，并在当前终端加载 `nido` 命令：
 
 ```sh
-curl -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
+curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
 nido version
 nido status
 ```

@@ -9,11 +9,11 @@ GDS 保持可选。当前 Go 版保留显式程序安装、更新和删除，调
 选择一个独立软件目录，默认 `~/.nido`。安装最新发行版并在当前终端启用命令：
 
 ```sh
-curl -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
+curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
 nido version
 ```
 
-需要固定版本或自定义目录时，可使用 `curl -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --version 0.3.0 --root /absolute/path/to/nido`，再加载该目录下的 `env.sh`。源码构建方式见 [README](../README.md#开发)。
+需要固定版本或自定义目录时，可使用 `curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --version 0.3.1 --root /absolute/path/to/nido`，再加载该目录下的 `env.sh`。源码构建方式见 [README](../README.md#开发)。
 
 也可以通过 `NIDO_HOME` 指定目录；显式 `--root` 优先。首次初始化只接受不存在或空目录，不把普通数据目录或旧 toolkit 目录变成 Nido。重复初始化保留配置，并刷新自己的程序和环境文件；用户修改过的 `env.sh` 不被静默覆盖。
 

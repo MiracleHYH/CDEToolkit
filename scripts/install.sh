@@ -53,7 +53,7 @@ cleanup() { rm -rf -- "$temporary"; }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 download() {
-    curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+    curl -q --http1.1 --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
         --tlsv1.2 --retry 2 --connect-timeout 15 --max-time 300 --max-filesize 268435456 \
         --output "$2" "$1" || fail 'download failed; check network access and whether a Nido Release exists'
 }
