@@ -9,19 +9,37 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
+	"time"
 )
 
-func procDisappeared(base string, e error) bool {
-	if !errors.Is(e, os.ErrNotExist) && !errors.Is(e, syscall.ESRCH) {
-		return false
+func procDisappeared(base string, _ error) bool {
+	// Exiting processes can also return EACCES while /proc destroys their
+	// memory or file table. Confirm disappearance or a terminal state rather
+	// than inferring safety from the original error. A live or unknown process
+	// still fails closed after this bounded check of the error path only.
+	for attempt := 0; attempt < 3; attempt++ {
+		if _, err := os.Stat(base); errors.Is(err, os.ErrNotExist) {
+			return true
+		}
+		status, err := os.ReadFile(filepath.Join(base, "status"))
+		if err == nil && processExited(string(status)) {
+			return true
+		}
+		if attempt < 2 {
+			time.Sleep(time.Millisecond)
+		}
 	}
-	_, statErr := os.Stat(base)
-	if errors.Is(statErr, os.ErrNotExist) {
-		return true
+	return false
+}
+
+func processExited(status string) bool {
+	for _, line := range strings.Split(status, "\n") {
+		if strings.HasPrefix(line, "State:") {
+			fields := strings.Fields(strings.TrimPrefix(line, "State:"))
+			return len(fields) > 0 && (fields[0] == "Z" || fields[0] == "X")
+		}
 	}
-	status, readErr := os.ReadFile(filepath.Join(base, "status"))
-	return readErr == nil && (strings.Contains(string(status), "State:\tZ") || strings.Contains(string(status), "State:\tX"))
+	return false
 }
 
 func processUID(status string) (int, bool) {
@@ -69,7 +87,7 @@ func checkInactive(paths []string) error {
 		if os.Geteuid() != 0 && uid != os.Geteuid() {
 			continue
 		}
-		if strings.Contains(string(status), "State:\tZ") || strings.Contains(string(status), "State:\tX") {
+		if processExited(string(status)) {
 			continue
 		}
 		var cwd string
@@ -131,6 +149,9 @@ func checkInactive(paths []string) error {
 				continue
 			}
 			if pe != nil {
+				if procDisappeared(base, pe) {
+					break
+				}
 				return fmt.Errorf("无法确认组件打开文件（PID %d），未执行组件变更", pid)
 			}
 			if m.matches(path) {
