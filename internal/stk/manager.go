@@ -65,6 +65,9 @@ func (m *Manager) buildPlan(names []string, repair bool) (*Plan, error) {
 		sort.Strings(names)
 	}
 	if len(names) == 0 {
+		if repair {
+			return m.complete(plan, n, true)
+		}
 		return nil, fmt.Errorf("请指定 proxy、codex 或可选 gds")
 	}
 	for _, name := range names {
@@ -423,18 +426,22 @@ func (m *Manager) render(plan *Plan, n *Manager) (*Plan, error) {
 			return nil, err
 		}
 	}
-	if _, ok := n.State.Generated["stk"]; !ok || !regular(filepath.Join(m.Home, "stk")) {
+	self := n.selfPath()
+	if _, ok := n.State.Generated[self]; !ok || !regular(filepath.Join(m.Home, self)) {
 		exe, e := readRegularLarge(m.Executable)
 		if e != nil {
 			return nil, e
 		}
-		if !m.Initialized && m.Executable == filepath.Join(m.Home, "stk") {
-			n.State.Generated["stk"] = digest(exe)
+		if !m.Initialized && m.Executable == filepath.Join(m.Home, self) {
+			n.State.Generated[self] = digest(exe)
 		}
-		if e = n.generated(plan, "stk", exe, 0755); e != nil {
+		if e = n.generated(plan, self, exe, 0755); e != nil {
 			return nil, e
 		}
-	} else if e := n.checkGenerated("stk"); e != nil {
+	} else if e := n.checkGenerated(self); e != nil {
+		return nil, e
+	}
+	if e := n.manageEntry(plan, n.Options.Entry); e != nil {
 		return nil, e
 	}
 	if e := n.environment(plan); e != nil {
@@ -479,7 +486,7 @@ func (m *Manager) generateModule(plan *Plan, name string) error {
 	if err != nil {
 		return err
 	}
-	wrapper := "#!/bin/sh\n# server-toolkit-go managed launcher\nSTK_HOME=$(CDPATH= cd -- \"$(dirname -- \"$0\")/..\" && pwd -P) || exit\nexec \"$STK_HOME/stk\" --home \"$STK_HOME\" exec " + name + " -- \"$@\"\n"
+	wrapper := "#!/bin/sh\n# server-toolkit-go managed launcher\nSTK_HOME=$(CDPATH= cd -- \"$(dirname -- \"$0\")/..\" && pwd -P) || exit\nexec \"$STK_HOME/" + m.selfPath() + "\" --home \"$STK_HOME\" exec " + name + " -- \"$@\"\n"
 	command := moduleCommand(name)
 	if err := m.generated(plan, filepath.Join("bin", command), []byte(wrapper), 0755); err != nil {
 		return err

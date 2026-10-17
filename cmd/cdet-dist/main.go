@@ -1,4 +1,4 @@
-// stk-dist is a source-only release helper, never part of the stk package.
+// cdet-dist is a source-only release helper, never part of the cdet package.
 package main
 
 import (
@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"server-toolkit/internal/distribution"
+	"github.com/MiracleHYH/CDEToolkit/internal/distribution"
 )
 
 func main() {
@@ -18,10 +18,12 @@ func main() {
 
 func run(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("用法: stk-dist pack|verify|check-tag [选项]")
+		return fmt.Errorf("用法: cdet-dist pack|verify|check-tag [选项]")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
-	binary := flags.String("binary", "", "built stk executable")
+	installerSource := flags.String("source", "scripts/install.sh", "POSIX CLI installer source")
+	verifyInstaller := flags.Bool("verify", false, "verify installer matches source")
+	binary := flags.String("binary", "", "built cdet executable")
 	output := flags.String("out", "dist", "output directory")
 	archive := flags.String("archive", "", "release tar.gz")
 	platform := flags.String("platform", "", "GOOS/GOARCH")
@@ -40,6 +42,8 @@ func run(args []string) error {
 		return err
 	}
 	switch args[0] {
+	case "installer":
+		return distribution.Installer(*installerSource, *output, *verifyInstaller)
 	case "check-tag":
 		if err := distribution.CheckTag(version, *tag); err != nil {
 			return err

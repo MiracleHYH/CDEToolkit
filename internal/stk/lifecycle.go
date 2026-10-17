@@ -34,9 +34,30 @@ func (m *Manager) ownedFingerprint(relative string) (Fingerprint, error) {
 
 func (m *Manager) toolPath(name string) string {
 	if name == "stk" {
-		return "stk"
+		return m.selfPath()
 	}
 	return filepath.Join("tools", name, moduleCommand(name))
+}
+
+// Keep the old on-disk name only for an already-owned legacy installation.
+// State roots and ownership markers retain their schema-1 identities.
+func (m *Manager) selfPath() string {
+	if _, legacy := m.State.Generated["stk"]; legacy {
+		return "stk"
+	}
+	return "cdet"
+}
+
+// Init installs only the management executable and its empty state. It never
+// discovers, downloads, adopts or starts an application component.
+func (m *Manager) Init() (*Plan, error) {
+	if m.Initialized {
+		return nil, fmt.Errorf("已初始化；更新管理程序请使用 update cdet")
+	}
+	if err := m.validateRoots(); err != nil {
+		return nil, err
+	}
+	return m.render(&Plan{Home: m.Home}, m.clone())
 }
 
 func (m *Manager) stageArtifact(plan *Plan, name, source string) (string, *Release, error) {
@@ -189,14 +210,17 @@ func (m *Manager) Update(names []string) (*Plan, error) {
 	if len(names) == 1 && names[0] == "stk" {
 		source := m.Options.Artifacts["stk"]
 		if source == "" {
-			return nil, fmt.Errorf("STK 尚无配置的发布仓库；请用 --install stk=FILE/HTTPS --sha256 stk=HASH 更新单文件，禁止通过 git pull 更新运行环境")
+			return nil, fmt.Errorf("自更新需明确来源；请用 --install cdet=FILE/HTTPS --sha256 cdet=HASH，或重新运行官方一行安装命令")
 		}
-		if _, err := os.Lstat(filepath.Join(m.Home, "stk")); err == nil {
-			if _, owned := m.State.Generated["stk"]; !owned {
+		if _, err := os.Lstat(filepath.Join(m.Home, m.selfPath())); err == nil {
+			if _, owned := m.State.Generated[m.selfPath()]; !owned {
 				return nil, fmt.Errorf("当前管理程序不是 STK 所有")
 			}
 		}
 		if _, _, err := n.stageArtifact(plan, "stk", source); err != nil {
+			return nil, err
+		}
+		if err := n.manageEntry(plan, m.Options.Entry); err != nil {
 			return nil, err
 		}
 		return n.finish(plan)
@@ -274,7 +298,7 @@ func (m *Manager) removeGenerated(plan *Plan, relative string) error {
 // credentials, sessions, caches and external service definitions survive.
 func (m *Manager) Uninstall(names []string) (*Plan, error) {
 	if len(names) == 0 {
-		return nil, fmt.Errorf("需要模块名；uninstall stk 移除整个 Go 管理入口并保留数据")
+		return nil, fmt.Errorf("需要模块名；uninstall cdet 移除整个 Go 管理入口并保留数据")
 	}
 	core := len(names) == 1 && names[0] == "stk"
 	for _, name := range names {
@@ -309,8 +333,11 @@ func (m *Manager) Uninstall(names []string) (*Plan, error) {
 		delete(n.Config.Modules, name)
 	}
 	if core {
+		if err := n.removeEntry(plan); err != nil {
+			return nil, err
+		}
 		// Only the fixed generated-file allowlist is eligible for removal.
-		for _, rel := range []string{"env.sh", "stk"} {
+		for _, rel := range []string{"env.sh", "stk", "cdet"} {
 			if err := n.removeGenerated(plan, rel); err != nil {
 				return nil, err
 			}

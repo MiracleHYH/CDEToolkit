@@ -5,13 +5,13 @@
 不得为补齐 Go 的功能再改一遍 Bash，也不得让 Go 通过 subprocess 调用 toolkit.sh、pm.sh、
 lib/codex.sh、lib/lifecycle.sh 或 Python 解包/发布选择脚本。
 
-新发布路径为 `make dist` → 仅包含 `stk` 的发行包。构建、测试和发行不携带旧库、菜单、
+新发布路径为 `make dist` → 仅包含 `cdet` 的发行包。构建、测试和发行不携带旧库、菜单、
 任务查询、火山模块、Skill、GDS CUDA 编译器或任何真实配置、认证与数据。
 
 Go 内部只保留一套生命周期：
 
 - `Install` 与 `Setup` 共用发现、接管和登记；只有缺失或明确选择安装源时才进入 artifact 流程。
-- 组件更新与 STK 自更新共用发布选择、下载、摘要校验、解包、归属校验和原子文件事务。
+- 组件更新与 CDEToolkit 自更新共用发布选择、下载、摘要校验、解包、归属校验和原子文件事务。
 - 卸载使用同一文件事务的 remove 操作，不复制旧 Bash 的服务控制、递归 purge 或安装快照引擎。
 - 模块生成、环境渲染、目录推导和元数据提交共用函数，服务控制继续作为显式操作。
 
@@ -25,3 +25,5 @@ scripts/check.sh 只转交 make check；保留该路径是因为旧自更新预�
 scripts/public-audit.sh 继续承担源码/历史泄漏检查，不承担安装、解包或服务管理。
 旧入口和 GDS 运行所需的库保持原样，不能因 CI 已切换就删除。
 本次删除清单与后续条件见 [go-ci-release.md](go-ci-release.md)；迁移前审计记录见 [go-safety-audit.md](go-safety-audit.md)。
+
+`cdet` 的 POSIX 安装器位于 `scripts/install.sh`，只负责 HTTPS 下载、SHA-256 校验和调用已校验的 Go CLI。命令链接、首次初始化与自身更新仍由 Go 的同一文件事务实现；不调用任何旧 Bash 模块。旧入口未切换。

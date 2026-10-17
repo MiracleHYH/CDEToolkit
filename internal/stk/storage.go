@@ -57,6 +57,9 @@ func New(opts Options) (*Manager, error) {
 	}
 	u, _ := os.UserHomeDir()
 	exe, _ := os.Executable()
+	if physical, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = physical
+	}
 	m := &Manager{Home: home, UserHome: u, Executable: exe, Path: os.Getenv("PATH"), Options: opts,
 		Config: Config{Schema: Schema, Roots: map[string]string{}, Modules: map[string]ModuleConfig{}},
 		State:  State{Schema: Schema, Roots: map[string]Root{}, Modules: map[string]Module{}, Generated: map[string]string{}}, Roots: map[string]string{}}
@@ -154,7 +157,18 @@ func New(opts Options) (*Manager, error) {
 			return nil, err
 		}
 	}
-	allowed := map[string]bool{"stk": true, "env.sh": true}
+	if _, old := m.State.Generated["stk"]; old {
+		if _, current := m.State.Generated["cdet"]; current {
+			return nil, fmt.Errorf("管理程序存在两个归属记录，拒绝猜测入口")
+		}
+	}
+	allowed := map[string]bool{"stk": true, "cdet": true, "env.sh": true}
+	if m.State.Entry != nil {
+		path, err := m.resolve(m.State.Entry.Path)
+		if err != nil || filepath.Base(path) != "cdet" || within(m.Home, path) || !validDigest(m.State.Generated[m.selfPath()]) || m.State.Entry.Target != (Ref{Root: "stk", Path: m.selfPath()}) {
+			return nil, fmt.Errorf("管理命令入口记录无效")
+		}
+	}
 	for _, name := range []string{"proxy", "codex", "gds"} {
 		for _, path := range moduleFiles(name) {
 			allowed[path] = true

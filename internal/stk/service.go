@@ -150,7 +150,7 @@ func (m *Manager) ServiceAction(name, action string) ([]byte, error) {
 	}
 	s := mod.Service
 	if e := validateService(s); e != nil {
-		return nil, fmt.Errorf("尚未接管有效服务；模板位于 STK_HOME/services，需另行注册")
+		return nil, fmt.Errorf("尚未接管有效服务；模板位于 CDET_HOME/services，需另行注册")
 	}
 	controller, e := m.resolve(s.Controller)
 	if e != nil {

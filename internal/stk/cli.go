@@ -11,15 +11,17 @@ import (
 	"strings"
 )
 
-const help = `STK Go — 开发机组件与路径管理
+const help = `CDEToolkit — Cloud Development Environment Toolkit
 
-stk [--home DIR] COMMAND [选项]
+cdet [--home DIR] COMMAND [选项]
+  init                   只初始化管理工具，不接管或安装组件
+  path                   输出管理程序路径
   status / scan          只读状态 / 候选发现
   setup proxy codex      接管已有组件；gds 必须明确选择
   install proxy codex    优先接管；缺失时从官方稳定版安装
-  update [NAME...]       更新 STK 所有的程序（默认 proxy/codex）
+  update [NAME...]       更新工具所有的程序（默认 proxy/codex）
   uninstall NAME...      删除受管文件；保留外部程序及所有用户数据
-  uninstall stk          移除 Go 管理入口、Shell 块和受管程序
+  uninstall cdet         移除 Go 管理入口、Shell 块和受管程序
   repair                 重建受管入口、环境、链接与服务模板
   repair --recover       恢复中断的文件操作
   rollback               回滚最近一次更新；文件或位置漂移时停止
@@ -30,7 +32,8 @@ stk [--home DIR] COMMAND [选项]
   doctor                 本地路径诊断（不联网、不自动修复）
 
 选项（可放在模块名后）：
-  --home DIR             STK 管理目录，或使用 STK_HOME
+  --home DIR             管理目录，或使用 CDET_HOME（兼容 STK_HOME）
+  --entry FILE           init 或管理程序更新时登记 cdet 命令链接
   --root NAME=DIR        local/projects/data 根目录映射
   --search DIR           有限候选搜索；不会递归扫描数据目录
   --binary NAME=FILE     明确选择真实组件（不重复安装）
@@ -53,7 +56,7 @@ stk [--home DIR] COMMAND [选项]
 
 文件操作均不注册、停止、加载或启动服务，不改认证、会话或数据库。
 在线 --dry-run 只读取发布元数据，不下载程序或写文件。
-update stk 需明确 --install stk=FILE/HTTPS（HTTPS 还需摘要）。
+update cdet 需明确 --install cdet=FILE/HTTPS（HTTPS 还需摘要）。
 `
 
 type CLI struct{ Out, Err io.Writer }
@@ -116,6 +119,8 @@ func parse(args []string) (Options, []string, bool, bool, error) {
 		switch a {
 		case "--home":
 			opts.Home = value
+		case "--entry":
+			opts.Entry = value
 		case "--codex-home":
 			opts.CodexHome = value
 		case "--proxy-config":
@@ -136,6 +141,9 @@ func parse(args []string) (Options, []string, bool, bool, error) {
 			name, v, e := assignment(value)
 			if e != nil {
 				return opts, nil, false, false, e
+			}
+			if (a == "--install" || a == "--sha256") && name == "cdet" {
+				name = "stk"
 			}
 			if a != "--root" && !knownModule(name) && !((a == "--install" || a == "--sha256") && name == "stk") {
 				return opts, nil, false, false, fmt.Errorf("未知模块: %s", name)
@@ -172,7 +180,7 @@ func parse(args []string) (Options, []string, bool, bool, error) {
 		s.System = system
 		opts.Services[name] = s
 	}
-	for _, path := range []string{opts.CodexHome, opts.ProxyConfig, opts.ProxyData, controller, serviceConfig, serviceFile} {
+	for _, path := range []string{opts.Entry, opts.CodexHome, opts.ProxyConfig, opts.ProxyData, controller, serviceConfig, serviceFile} {
 		if path != "" {
 			if e := absolute(path); e != nil {
 				return opts, nil, false, false, e
@@ -180,19 +188,32 @@ func parse(args []string) (Options, []string, bool, bool, error) {
 		}
 	}
 	if opts.Home == "" {
+		opts.Home = os.Getenv("CDET_HOME")
+	}
+	if opts.Home == "" {
 		opts.Home = os.Getenv("STK_HOME")
 	}
 	if opts.Home == "" {
 		if root := opts.Roots["local"]; root != "" {
-			opts.Home = filepath.Join(root, "stk")
+			opts.Home = filepath.Join(root, "cdetoolkit")
 		} else {
 			exe, _ := os.Executable()
+			if physical, err := filepath.EvalSymlinks(exe); err == nil {
+				exe = physical
+			}
 			dir := filepath.Dir(exe)
 			if regular(filepath.Join(dir, "state.json")) {
 				opts.Home = dir
 			} else {
 				h, _ := os.UserHomeDir()
-				opts.Home = filepath.Join(h, ".local", "stk")
+				opts.Home = filepath.Join(h, ".local", "cdetoolkit")
+				legacy := filepath.Join(h, ".local", "stk")
+				_, stateErr := os.Lstat(filepath.Join(opts.Home, "state.json"))
+				_, configErr := os.Lstat(filepath.Join(opts.Home, "config.toml"))
+				_, legacyErr := os.Lstat(filepath.Join(legacy, "state.json"))
+				if os.IsNotExist(stateErr) && os.IsNotExist(configErr) && !os.IsNotExist(legacyErr) {
+					opts.Home = legacy
+				}
 			}
 		}
 	}
@@ -214,7 +235,7 @@ func (c CLI) Run(args []string) int {
 		return 0
 	}
 	if len(args) > 0 && args[0] == "version" {
-		fmt.Fprintln(c.Out, "stk-go "+Version)
+		fmt.Fprintln(c.Out, "cdet "+Version)
 		return 0
 	}
 	opts, words, jsonMode, recoverMode, err := parse(args)
@@ -226,8 +247,15 @@ func (c CLI) Run(args []string) int {
 		action = words[0]
 		words = words[1:]
 	}
+	if action == "update" || action == "uninstall" {
+		for i, word := range words {
+			if word == "cdet" {
+				words[i] = "stk"
+			}
+		}
+	}
 	if action == "version" {
-		fmt.Fprintln(c.Out, "stk-go "+Version)
+		fmt.Fprintln(c.Out, "cdet "+Version)
 		return 0
 	}
 	if recoverMode {
@@ -268,6 +296,12 @@ func (c CLI) Run(args []string) int {
 		return c.fail(fmt.Errorf("该操作不支持 --dry-run，未执行"))
 	}
 	switch action {
+	case "path":
+		if len(words) != 0 {
+			return c.fail(fmt.Errorf("path 不接受参数"))
+		}
+		fmt.Fprintln(c.Out, filepath.Join(m.Home, m.selfPath()))
+		return 0
 	case "status", "doctor":
 		if len(words) > 0 {
 			return c.fail(fmt.Errorf("多余参数"))
@@ -292,7 +326,7 @@ func (c CLI) Run(args []string) int {
 			}
 			return code
 		}
-		fmt.Fprintf(c.Out, "STK_HOME %s\n", m.Home)
+		fmt.Fprintf(c.Out, "CDET_HOME %s\n", m.Home)
 		if !m.Initialized {
 			fmt.Fprintln(c.Out, "尚未初始化；只读检查未创建文件")
 		}
@@ -322,9 +356,14 @@ func (c CLI) Run(args []string) int {
 			fmt.Fprintf(c.Out, "%s: %v\n", name, candidatePaths(found[name]))
 		}
 		return 0
-	case "setup", "repair", "install", "update", "uninstall", "rollback":
+	case "init", "setup", "repair", "install", "update", "uninstall", "rollback":
 		var plan *Plan
 		switch action {
+		case "init":
+			if len(words) != 0 {
+				return c.fail(fmt.Errorf("init 不接受组件参数"))
+			}
+			plan, err = m.Init()
 		case "setup":
 			plan, err = m.Setup(words)
 		case "install":
@@ -421,6 +460,9 @@ func (c CLI) Run(args []string) int {
 }
 
 func lifecycleOptions(action string, names []string, o Options) error {
+	if o.Entry != "" && action != "init" && !(action == "update" && len(names) == 1 && names[0] == "stk") {
+		return fmt.Errorf("--entry 仅用于 init 或 update cdet")
+	}
 	if o.Takeover && action != "update" {
 		return fmt.Errorf("--takeover 仅用于 update")
 	}

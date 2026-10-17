@@ -58,7 +58,9 @@ func TestReleaseWorkflowOnlyPublishesVerifiedAllowlist(t *testing.T) {
 					expected[path], expected[path+".sigstore.json"] = true, true
 				}
 			}
-			for _, name := range []string{"dist/install.sh", "dist/server-toolkit.tar.gz", "dist/private.cfg", "dist/stk-linux-armv7.tar.gz"} {
+			write("dist/install.sh", "fixture reviewed installer", 0600)
+			expected["dist/install.sh"], expected["dist/install.sh.sigstore.json"] = true, true
+			for _, name := range []string{"dist/legacy-install.sh", "dist/server-toolkit.tar.gz", "dist/private.cfg", "dist/cdet-linux-armv7.tar.gz"} {
 				write(name, "must not publish", 0600)
 			}
 			write("bin/cosign", `#!/bin/sh

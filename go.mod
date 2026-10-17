@@ -1,4 +1,4 @@
-module server-toolkit
+module github.com/MiracleHYH/CDEToolkit
 
 go 1.23.0
 

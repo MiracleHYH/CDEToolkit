@@ -41,12 +41,20 @@ func (m *Manager) rememberUpdate(p *Plan) error {
 		previousHome := old.Home
 		for i, b := range old.Entries {
 			if !within(previousHome, b.Change.Path) {
-				return fmt.Errorf("更新记录包含管理目录外目标，拒绝迁移")
+				if m.State.Entry == nil {
+					return fmt.Errorf("更新记录包含管理目录外目标，拒绝迁移")
+				}
+				entry, e := m.resolve(m.State.Entry.Path)
+				if e != nil || m.rebase(b.Change.Path) != entry || b.Change.Kind != "link" {
+					return fmt.Errorf("更新记录包含非受管命令入口的外部目标")
+				}
+				old.Entries[i].Change.Path = entry
+			} else {
+				rel, _ := filepath.Rel(previousHome, b.Change.Path)
+				old.Entries[i].Change.Path = filepath.Join(p.Home, rel)
 			}
-			rel, _ := filepath.Rel(previousHome, b.Change.Path)
-			old.Entries[i].Change.Path = filepath.Join(p.Home, rel)
 			if b.File != "" {
-				rel, _ = filepath.Rel(previousHome, b.File)
+				rel, _ := filepath.Rel(previousHome, b.File)
 				old.Entries[i].File = filepath.Join(p.Home, rel)
 			}
 		}

@@ -111,7 +111,7 @@ func TestAuditMissingProxyDataIsNotRecreated(t *testing.T) {
 func TestAuditIdenticalPreexistingOutputDoesNotGrantOwnership(t *testing.T) {
 	f := newFixture(t)
 	m := f.managerFor(t, Options{})
-	body := "#!/bin/sh\n# server-toolkit-go managed launcher\nSTK_HOME=$(CDPATH= cd -- \"$(dirname -- \"$0\")/..\" && pwd -P) || exit\nexec \"$STK_HOME/stk\" --home \"$STK_HOME\" exec codex -- \"$@\"\n"
+	body := "#!/bin/sh\n# server-toolkit-go managed launcher\nSTK_HOME=$(CDPATH= cd -- \"$(dirname -- \"$0\")/..\" && pwd -P) || exit\nexec \"$STK_HOME/cdet\" --home \"$STK_HOME\" exec codex -- \"$@\"\n"
 	path := filepath.Join(f.home, "bin", "codex")
 	write(t, path, body, 0755)
 	if _, err := m.Setup([]string{"codex"}); err == nil {
@@ -551,7 +551,7 @@ func TestAuditLifecycleSearchDoesNotRetargetAnExplicitHome(t *testing.T) {
 	before := read(t, filepath.Join(f.home, "state.json"))
 	var out, errs strings.Builder
 	code := (CLI{Out: &out, Err: &errs}).Run([]string{"--home", filepath.Join(f.base, "wrong-home"), "uninstall", "stk", "--search", f.local})
-	if code != 0 || !executable(filepath.Join(f.home, "stk")) || read(t, filepath.Join(f.home, "state.json")) != before {
+	if code != 0 || !executable(filepath.Join(f.home, "cdet")) || read(t, filepath.Join(f.home, "state.json")) != before {
 		t.Fatal("search redirected an uninstall to another home", errs.String())
 	}
 }

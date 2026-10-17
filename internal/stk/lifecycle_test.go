@@ -344,7 +344,7 @@ func TestExternalUpdateTakeoverAndSafeUninstall(t *testing.T) {
 	if read(t, filepath.Join(f.home, "run", "proxy", "cache.db")) != "CACHE-SENTINEL" || read(t, filepath.Join(f.home, "tools", "codex", "user-note")) != "KEEP-NOTE" {
 		t.Fatal("user files removed")
 	}
-	for _, rel := range []string{"stk", "env.sh", "bin/mihomo", "services/proxy.service"} {
+	for _, rel := range []string{"cdet", "env.sh", "bin/mihomo", "services/proxy.service"} {
 		if regular(filepath.Join(f.home, rel)) {
 			t.Fatal("generated file remained", rel)
 		}
@@ -440,7 +440,7 @@ func TestSelfUpdateUsesSamePipelineAndRepairDoesNotDowngrade(t *testing.T) {
 	m = f.managerFor(t, Options{})
 	p, err = m.Repair()
 	apply(t, p, err)
-	if read(t, filepath.Join(f.home, "stk")) != read(t, newManager) {
+	if read(t, filepath.Join(f.home, "cdet")) != read(t, newManager) {
 		t.Fatal("repair downgraded manager")
 	}
 	if _, err = m.Update([]string{"stk"}); err == nil {

@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Smoke runs only the verified native package, with isolated HOME and STK_HOME.
+// Smoke runs only the verified native package, with isolated HOME and CDET_HOME.
 // The two read-only commands never install components or start services.
 func Smoke(binary []byte, version, platform string) error {
 	if platform != runtime.GOOS+"/"+runtime.GOARCH {
@@ -21,7 +21,7 @@ func Smoke(binary []byte, version, platform string) error {
 	if err := checkBinary(binary, version, platform); err != nil {
 		return err
 	}
-	dir, err := os.MkdirTemp("", "stk-dist-smoke-*")
+	dir, err := os.MkdirTemp("", "cdet-dist-smoke-*")
 	if err != nil {
 		return err
 	}
@@ -30,13 +30,13 @@ func Smoke(binary []byte, version, platform string) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(dir, "stk")
+	path := filepath.Join(dir, "cdet")
 	if err = os.WriteFile(path, binary, 0755); err != nil {
 		return err
 	}
 	home := filepath.Join(dir, "home")
 	managed := filepath.Join(dir, "managed")
-	env := []string{"HOME=" + home, "PATH=/usr/bin:/bin", "STK_HOME=" + managed,
+	env := []string{"HOME=" + home, "PATH=/usr/bin:/bin", "CDET_HOME=" + managed,
 		"TMPDIR=" + dir, "XDG_CONFIG_HOME=" + filepath.Join(dir, "config"),
 		"XDG_CACHE_HOME=" + filepath.Join(dir, "cache"), "XDG_DATA_HOME=" + filepath.Join(dir, "data")}
 	run := func(args ...string) ([]byte, error) {
@@ -55,7 +55,7 @@ func Smoke(binary []byte, version, platform string) error {
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(string(out)) != "stk-go "+version {
+	if strings.TrimSpace(string(out)) != "cdet "+version {
 		return fmt.Errorf("程序报告版本与 VERSION 不符")
 	}
 	out, err = run("status", "--json")

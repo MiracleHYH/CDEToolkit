@@ -93,7 +93,7 @@ func (c *ReleaseClient) artifactBytes(a Artifact, name string) ([]byte, error) {
 					codexMember = strings.TrimSuffix(names[0], ".tar.gz")
 				}
 			}
-			if base != wanted && !(name == "gds" && base == "scheduler") && !(name == "codex" && base == codexMember) {
+			if base != wanted && !(name == "stk" && base == "cdet") && !(name == "gds" && base == "scheduler") && !(name == "codex" && base == codexMember) {
 				continue
 			}
 			if binary != nil {

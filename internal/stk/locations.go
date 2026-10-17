@@ -110,7 +110,9 @@ func (m *Manager) linkTargetMatches(path, actual string, ref Ref) bool {
 	for _, mapping := range m.pathMappings() {
 		if within(mapping.current, target) {
 			rel, _ := filepath.Rel(mapping.current, target)
-			if actual == filepath.Join(mapping.old, rel) {
+			oldTarget := filepath.Join(mapping.old, rel)
+			oldRelative, err := filepath.Rel(filepath.Dir(path), oldTarget)
+			if actual == oldTarget || err == nil && actual == oldRelative {
 				return true
 			}
 		}

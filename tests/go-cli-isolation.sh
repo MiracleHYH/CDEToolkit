@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-STK_TEST_BINARY="${1:?provide the built stk binary}"
+STK_TEST_BINARY="${1:?provide the built cdet binary}"
 [[ "$STK_TEST_BINARY" = /* && -x "$STK_TEST_BINARY" ]]
 STK_TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/stk-cli-test.XXXXXX")"
 STK_TEST_ROOT="$(cd "$STK_TEST_ROOT" && pwd -P)"
 trap 'rm -rf -- "$STK_TEST_ROOT"' EXIT
 export HOME="$STK_TEST_ROOT/user" PATH=/usr/bin:/bin
-unset STK_HOME CODEX_HOME HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+unset CDET_HOME STK_HOME CODEX_HOME HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
 local_root="$STK_TEST_ROOT/fast/.local"
 codex_home="$local_root/.codex"
 stk_home="$local_root/stk"
@@ -53,23 +53,23 @@ if "$new_home/bin/codex" --version > "$STK_TEST_ROOT/before-repair-exec.log" 2>&
   printf 'component executed before rebuilding relocated paths\n' >&2
   exit 1
 fi
-if "$new_home/stk" --home "$new_home" env bash > "$STK_TEST_ROOT/before-repair-env.log" 2>&1; then
+if "$new_home/cdet" --home "$new_home" env bash > "$STK_TEST_ROOT/before-repair-env.log" 2>&1; then
   printf 'stale environment emitted before repair\n' >&2
   exit 1
 fi
-if "$new_home/stk" --home "$new_home" doctor --json > "$STK_TEST_ROOT/before-repair-doctor.json"; then
+if "$new_home/cdet" --home "$new_home" doctor --json > "$STK_TEST_ROOT/before-repair-doctor.json"; then
   printf 'doctor accepted unrepaired relocated paths\n' >&2
   exit 1
 fi
 /usr/bin/grep -q '路径待重建' "$STK_TEST_ROOT/before-repair-doctor.json"
-"$new_home/stk" --home "$new_home" repair --dry-run > "$STK_TEST_ROOT/repair-preview.log"
+"$new_home/cdet" --home "$new_home" repair --dry-run > "$STK_TEST_ROOT/repair-preview.log"
 [[ ! -e "$STK_TEST_ROOT/fast" ]]
-"$new_home/stk" --home "$new_home" repair > "$STK_TEST_ROOT/repair.log"
-"$new_home/stk" --home "$new_home" repair > "$STK_TEST_ROOT/repair-repeat.log"
+"$new_home/cdet" --home "$new_home" repair > "$STK_TEST_ROOT/repair.log"
+"$new_home/cdet" --home "$new_home" repair > "$STK_TEST_ROOT/repair-repeat.log"
 /usr/bin/grep -q '完成 0 项' "$STK_TEST_ROOT/repair-repeat.log"
 "$new_home/bin/codex" --version > "$STK_TEST_ROOT/new-exec.log"
 /usr/bin/grep -Fq "CODEX_HOME=$new_codex" "$STK_TEST_ROOT/new-exec.log"
-"$new_home/stk" --home "$new_home" doctor --exec-check > "$STK_TEST_ROOT/doctor.log"
+"$new_home/cdet" --home "$new_home" doctor --exec-check > "$STK_TEST_ROOT/doctor.log"
 cmp "$STK_TEST_ROOT/auth.before" "$new_codex/auth.json"
 cmp "$STK_TEST_ROOT/session.before" "$new_codex/sessions/one.jsonl"
 cmp "$STK_TEST_ROOT/db.before" "$new_codex/state.sqlite"
@@ -91,14 +91,14 @@ fi
 "$new_home/bin/codex" --version > "$STK_TEST_ROOT/owned-exec.log"
 /usr/bin/grep -Fq "CODEX_HOME=$new_codex" "$STK_TEST_ROOT/owned-exec.log"
 cmp "$STK_TEST_ROOT/codex-before" "$original_codex"
-"$STK_TEST_BINARY" --home "$new_home" update stk --install "stk=$STK_TEST_BINARY" > "$STK_TEST_ROOT/self-update.log"
+"$STK_TEST_BINARY" --home "$new_home" update cdet --install "cdet=$STK_TEST_BINARY" > "$STK_TEST_ROOT/self-update.log"
 printf 'USER-CACHE\n' > "$new_home/run/proxy/keep.db"
 "$STK_TEST_BINARY" --home "$new_home" uninstall codex --dry-run > "$STK_TEST_ROOT/uninstall-preview.log"
 [[ -x "$new_home/tools/codex/codex" ]]
 "$STK_TEST_BINARY" --home "$new_home" uninstall codex > "$STK_TEST_ROOT/uninstall-codex.log"
 [[ ! -e "$new_home/tools/codex/codex" && ! -e "$new_home/bin/codex" && -x "$new_home/bin/mihomo" ]]
-"$STK_TEST_BINARY" --home "$new_home" uninstall stk > "$STK_TEST_ROOT/uninstall-stk.log"
-[[ ! -e "$new_home/stk" && ! -e "$new_home/env.sh" && ! -e "$new_home/bin/mihomo" ]]
+"$STK_TEST_BINARY" --home "$new_home" uninstall cdet > "$STK_TEST_ROOT/uninstall-stk.log"
+[[ ! -e "$new_home/cdet" && ! -e "$new_home/env.sh" && ! -e "$new_home/bin/mihomo" ]]
 ! /usr/bin/grep -q 'server-toolkit-go environment' "$HOME/.bashrc"
 /usr/bin/grep -q '# user shell configuration' "$HOME/.bashrc"
 [[ -f "$new_home/run/proxy/keep.db" ]]
@@ -107,7 +107,7 @@ cmp "$STK_TEST_ROOT/session.before" "$new_codex/sessions/one.jsonl"
 cmp "$STK_TEST_ROOT/db.before" "$new_codex/state.sqlite"
 cmp "$STK_TEST_ROOT/proxy.before" "$STK_TEST_ROOT/fast-new/.local/proxy.yaml"
 cmp "$STK_TEST_ROOT/codex-before" "$original_codex"
-"$STK_TEST_BINARY" --home "$new_home" uninstall stk > "$STK_TEST_ROOT/uninstall-repeat.log"
+"$STK_TEST_BINARY" --home "$new_home" uninstall cdet > "$STK_TEST_ROOT/uninstall-repeat.log"
 /usr/bin/grep -q '完成 0 项' "$STK_TEST_ROOT/uninstall-repeat.log"
 printf 'Go CLI isolated update, takeover, self-update and data-preserving uninstall: PASS\n'
 
@@ -127,8 +127,8 @@ cmp "$STK_TEST_ROOT/codex-second" "$rollback_home/tools/codex/codex"
 "$STK_TEST_BINARY" --home "$rollback_home" rollback > "$STK_TEST_ROOT/rollback.log"
 cmp "$STK_TEST_ROOT/codex-first" "$rollback_home/tools/codex/codex"
 printf '#!/bin/sh\nprintf fixture-manager\\n\n' > "$STK_TEST_ROOT/next-manager"
-"$STK_TEST_BINARY" --home "$rollback_home" update stk --install "stk=$STK_TEST_ROOT/next-manager" > "$STK_TEST_ROOT/self-update-fixture.log"
+"$STK_TEST_BINARY" --home "$rollback_home" update cdet --install "cdet=$STK_TEST_ROOT/next-manager" > "$STK_TEST_ROOT/self-update-fixture.log"
 "$STK_TEST_BINARY" --home "$rollback_home" rollback > "$STK_TEST_ROOT/self-rollback.log"
-cmp "$STK_TEST_BINARY" "$rollback_home/stk"
+cmp "$STK_TEST_BINARY" "$rollback_home/cdet"
 /usr/bin/grep -Fxq 'ROLLBACK-AUTH' "$rollback_codex/auth.json"
 printf 'Go CLI isolated component rollback, self rollback and authentication preservation: PASS\n'

@@ -103,7 +103,7 @@ func (m *Manager) realBinary(path string) (string, map[string]string, error) {
 		if !executable(current) {
 			return "", nil, fmt.Errorf("不是可执行普通文件: %s", current)
 		}
-		if filepath.Base(current) == "codex-launcher.sh" || filepath.Base(current) == "stk" || current == m.Executable || within(filepath.Join(m.Home, "bin"), current) {
+		if filepath.Base(current) == "codex-launcher.sh" || filepath.Base(current) == "stk" || filepath.Base(current) == "cdet" || current == m.Executable || within(filepath.Join(m.Home, "bin"), current) {
 			return "", nil, fmt.Errorf("候选为 STK 启动入口")
 		}
 		if isManagedLauncher(current) {
@@ -291,7 +291,7 @@ func FindHome(hint, instance string, search []string) (string, error) {
 		if base == "" {
 			continue
 		}
-		for _, p := range []string{base, filepath.Join(base, "stk"), filepath.Join(base, ".local", "stk")} {
+		for _, p := range []string{base, filepath.Join(base, "cdetoolkit"), filepath.Join(base, ".local", "cdetoolkit"), filepath.Join(base, "stk"), filepath.Join(base, ".local", "stk")} {
 			if seen[p] {
 				continue
 			}

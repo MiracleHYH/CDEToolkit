@@ -59,6 +59,7 @@ type State struct {
 	Generated  map[string]string `json:"generated"`
 	ShellFiles []Ref             `json:"shell_files,omitempty"`
 	Aliases    map[string]Ref    `json:"path_aliases,omitempty"`
+	Entry      *ManagedLink      `json:"entry,omitempty"`
 }
 
 type ModuleConfig struct {
@@ -91,6 +92,7 @@ type Status struct {
 
 type Options struct {
 	Home         string
+	Entry        string
 	Roots        map[string]string
 	Search       []string
 	Binaries     map[string]string

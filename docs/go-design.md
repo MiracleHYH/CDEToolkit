@@ -1,12 +1,14 @@
-# STK Go：组件管理与文件生命周期
+# CDEToolkit Go：组件管理与文件生命周期
 
-STK 是按需执行的单机开发环境管理 CLI，核心是 Proxy/Codex 接管、安装、更新、卸载与路径重建。
+CDEToolkit 是按需执行的单机开发环境管理 CLI，核心是 Proxy/Codex 接管、安装、更新、卸载与路径重建。
 GDS 保持显式可选，不扩展为任务平台、通用包管理器、插件系统或额外守护进程。
 
 ## 持久状态
 
-一个 `STK_HOME` 包含 `config.toml`（用户意图）、`state.json`（目录根、组件位置、文件归属）、
-`stk`、`bin/`、`env.sh`、`services/`。后四项可重建；配置、认证与会话属于应用数据。
+命令简称为 `cdet`。`CDET_HOME` 优先于兼容变量 `STK_HOME`；既有 schema-1 的内部根名及归属标记保持兼容。
+一个 `CDET_HOME` 包含 `config.toml`（用户意图）、`state.json`（目录根、组件位置、文件归属）、
+`cdet`、`bin/`、`env.sh`、`services/`。后四项可重建；配置、认证与会话属于应用数据。
+可选的 `state.entry` 记录管理目录外显式选择的 `cdet` 相对链接，repair 与卸载只处理摘要/目标未被外部修改的入口。
 组件同时记录来源、是否拥有二进制、展开后的二进制摘要，以及可选的官方版本/包摘要/平台。
 自定义下载 URL 不写入状态或计划 JSON，避免带入临时令牌。
 
@@ -33,13 +35,13 @@ Mihomo amd64 选择 v1 或 compatible，Codex Linux 选择 musl CLI。
 
 本地文件、自定义 HTTPS、官方发布最终都进入同一个 artifact 解码器；不执行任何安装脚本或候选程序。
 下载、展开、归档项数均有上限；只读取指定模块的一个程序，不按压缩包里的路径落地。
-官方二进制额外校验 ELF/Mach-O 平台。程序写入 STK_HOME/tools/NAME/COMMAND，运行目录与用户数据原位保留。
+官方二进制额外校验 ELF/Mach-O 平台。程序写入 CDET_HOME/tools/NAME/COMMAND，运行目录与用户数据原位保留。
 
 `update` 只更新已登记模块；默认只选择拥有的 Proxy/Codex。外部程序要求由原安装器更新，
-或者明确 `--takeover` 后使用 STK 副本，不删除/改写原安装。相同官方包与本地摘要一致时不重复下载。
+或者明确 `--takeover` 后使用 CDEToolkit 副本，不删除/改写原安装。相同官方包与本地摘要一致时不重复下载。
 有明确版本参数时可切到指定稳定版。GDS 必须给出自己的 artifact，不隐式在线安装。
 
-STK 自更新也使用 artifact 流程，目标仅为 STK_HOME/stk。尚无配置的自身发布仓库，需显式 URL/文件及摘要。
+CDEToolkit 自更新也使用 artifact 流程，目标仅为 CDET_HOME/cdet。直接自更新需显式 URL/文件及摘要；POSIX 安装器负责从固定的 GitHub 仓库下载 Release 后复用此流程。
 不更新 Git checkout，不跑 post-install，不将软件包管理行为绑定到源码仓库。
 `repair` 只在管理程序缺失时重建，不因从旧副本调用而降级当前管理程序。
 
@@ -77,7 +79,7 @@ status/scan/doctor 不联网、不写文件。doctor --exec-check 是明确的�
 单元测试使用临时目录和 TLS 模拟上游；CLI 集成测试使用临时 HOME、假程序和假服务控制器。
 涵盖挂载改名、重复执行、离线/在线安装、更新/迁入副本、SHA 错误、不安全归档、平台错误、
 元数据并发漂移、事务失败/恢复、文件归属、卸载保留数据，以及真实服务控制器零调用。
-Linux 静态构建在远端临时目录执行相同测试，不针对真实 STK_HOME 执行生命周期命令。
+Linux 静态构建在远端临时目录执行相同测试，不针对真实 CDET_HOME 执行生命周期命令。
 
 当前不导入 Bash 状态、不切换现有 Bash 入口。旧实现冻结，新发行包仅包含 Go 程序。
 遗留源码删除条件见 legacy-boundary.md。
@@ -89,7 +91,7 @@ Linux 静态构建在远端临时目录执行相同测试，不针对真实 STK_
 ## 2026-10-17 审计修订
 
 路径历史保存为 state.path_aliases，既支持挂载根，也支持组件主目录单独迁移。
-当前根同时作为恒等映射，避免嵌套目录前缀在重复修复时持续展开；仅移动 STK 时保留仍存在的应用根。
+当前根同时作为恒等映射，避免嵌套目录前缀在重复修复时持续展开；仅移动 CDEToolkit 时保留仍存在的应用根。
 配置迁移按 schema 位置收敛，未知表、env 凭据和共享 YAML 锚点不盲目改写。
 
 update 与 repair 分开：先修复目录根，再仅更新选定程序及受管模板。

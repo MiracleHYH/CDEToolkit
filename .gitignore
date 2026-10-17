@@ -52,6 +52,7 @@ id_ed25519.*
 /lock
 /env.sh
 /stk
+/cdet
 /bin/
 /tools/
 /services/

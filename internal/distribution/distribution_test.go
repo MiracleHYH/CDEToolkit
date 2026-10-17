@@ -85,7 +85,7 @@ func tarFixture(t *testing.T, headers []*tar.Header, tail []byte) []byte {
 
 func TestArchiveRejectsExtraUnsafeAndCorruptContents(t *testing.T) {
 	valid := func() *tar.Header {
-		return &tar.Header{Name: "stk", Mode: 0755, Typeflag: tar.TypeReg, Format: tar.FormatUSTAR, Size: 1}
+		return &tar.Header{Name: "cdet", Mode: 0755, Typeflag: tar.TypeReg, Format: tar.FormatUSTAR, Size: 1}
 	}
 	for _, name := range []string{"traversal", "link", "directory", "mode", "extra-installer", "pax", "owner", "oversized", "truncated", "crc", "tail"} {
 		t.Run(name, func(t *testing.T) {
@@ -127,9 +127,9 @@ func TestArchiveRejectsExtraUnsafeAndCorruptContents(t *testing.T) {
 }
 
 func TestVerifyRequiresDigestFilenameAndGoIdentity(t *testing.T) {
-	data := tarFixture(t, []*tar.Header{{Name: "stk", Typeflag: tar.TypeReg, Mode: 0755, Size: 1, Format: tar.FormatUSTAR}}, nil)
+	data := tarFixture(t, []*tar.Header{{Name: "cdet", Typeflag: tar.TypeReg, Mode: 0755, Size: 1, Format: tar.FormatUSTAR}}, nil)
 	root := t.TempDir()
-	path := filepath.Join(root, "stk-linux-amd64.tar.gz")
+	path := filepath.Join(root, "cdet-linux-amd64.tar.gz")
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
