@@ -13,11 +13,16 @@ import (
 )
 
 func procDisappeared(base string, _ error) bool {
+	return procDisappearedWithin(base, 500*time.Millisecond)
+}
+
+func procDisappearedWithin(base string, timeout time.Duration) bool {
 	// Exiting processes can also return EACCES while /proc destroys their
 	// memory or file table. Confirm disappearance or a terminal state rather
 	// than inferring safety from the original error. A live or unknown process
 	// still fails closed after this bounded check of the error path only.
-	for attempt := 0; attempt < 3; attempt++ {
+	deadline := time.Now().Add(timeout)
+	for {
 		if _, err := os.Stat(base); errors.Is(err, os.ErrNotExist) {
 			return true
 		}
@@ -25,21 +30,38 @@ func procDisappeared(base string, _ error) bool {
 		if err == nil && processExited(string(status)) {
 			return true
 		}
-		if attempt < 2 {
-			time.Sleep(time.Millisecond)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return false
 		}
+		time.Sleep(min(10*time.Millisecond, remaining))
 	}
-	return false
 }
 
 func processExited(status string) bool {
+	terminal, oneThread := false, false
+	stateSeen, threadsSeen := false, false
 	for _, line := range strings.Split(status, "\n") {
-		if strings.HasPrefix(line, "State:") {
+		switch {
+		case strings.HasPrefix(line, "State:"):
+			if stateSeen {
+				return false
+			}
+			stateSeen = true
 			fields := strings.Fields(strings.TrimPrefix(line, "State:"))
-			return len(fields) > 0 && (fields[0] == "Z" || fields[0] == "X")
+			terminal = len(fields) > 0 && (fields[0] == "Z" || fields[0] == "X")
+		case strings.HasPrefix(line, "Threads:"):
+			if threadsSeen {
+				return false
+			}
+			threadsSeen = true
+			fields := strings.Fields(strings.TrimPrefix(line, "Threads:"))
+			oneThread = len(fields) == 1 && fields[0] == "1"
 		}
 	}
-	return false
+	// A terminal group leader can still have live worker threads. Its fd
+	// directory is unavailable, so do not treat that partial exit as safe.
+	return terminal && oneThread
 }
 
 func processUID(status string) (int, bool) {
@@ -78,7 +100,7 @@ func checkInactive(paths []string) error {
 			if procDisappeared(base, er) {
 				continue
 			}
-			return fmt.Errorf("无法确认进程状态（PID %d），未执行组件变更", pid)
+			return fmt.Errorf("无法确认进程状态（PID %d），未执行组件变更: %w", pid, er)
 		}
 		uid, ok := processUID(string(status))
 		if !ok {
@@ -97,7 +119,7 @@ func checkInactive(paths []string) error {
 				if procDisappeared(base, pe) {
 					continue
 				}
-				return fmt.Errorf("无法检查进程程序或工作目录（PID %d），未执行组件变更", pid)
+				return fmt.Errorf("无法检查进程程序或工作目录（PID %d），未执行组件变更: %w", pid, pe)
 			}
 			if entry == "cwd" {
 				cwd = path
@@ -113,7 +135,7 @@ func checkInactive(paths []string) error {
 				if procDisappeared(base, pe) {
 					continue
 				}
-				return fmt.Errorf("无法检查组件进程环境（PID %d），未执行组件变更", pid)
+				return fmt.Errorf("无法检查组件进程环境（PID %d），未执行组件变更: %w", pid, pe)
 			}
 			parts[i] = strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
 		}
@@ -122,7 +144,7 @@ func checkInactive(paths []string) error {
 		}
 		mappings, pe := os.ReadFile(filepath.Join(base, "maps"))
 		if pe != nil && !procDisappeared(base, pe) {
-			return fmt.Errorf("无法检查组件内存映射（PID %d），未执行组件变更", pid)
+			return fmt.Errorf("无法检查组件内存映射（PID %d），未执行组件变更: %w", pid, pe)
 		}
 		for _, line := range strings.Split(string(mappings), "\n") {
 			rest := line
@@ -141,7 +163,7 @@ func checkInactive(paths []string) error {
 		}
 		fds, pe := os.ReadDir(filepath.Join(base, "fd"))
 		if pe != nil && !procDisappeared(base, pe) {
-			return fmt.Errorf("无法检查组件打开文件（PID %d），未执行组件变更", pid)
+			return fmt.Errorf("无法检查组件打开文件（PID %d），未执行组件变更: %w", pid, pe)
 		}
 		for _, fd := range fds {
 			path, pe := os.Readlink(filepath.Join(base, "fd", fd.Name()))
@@ -152,7 +174,7 @@ func checkInactive(paths []string) error {
 				if procDisappeared(base, pe) {
 					break
 				}
-				return fmt.Errorf("无法确认组件打开文件（PID %d），未执行组件变更", pid)
+				return fmt.Errorf("无法确认组件打开文件（PID %d），未执行组件变更: %w", pid, pe)
 			}
 			if m.matches(path) {
 				return activeComponent(pid)
