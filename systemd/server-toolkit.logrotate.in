@@ -1,0 +1,25 @@
+@ROOT@/proxy/workdir/mihomo.log @ROOT@/gds/workdir/gds.log {
+    su @USER@ @GROUP@
+    size 10M
+    rotate 5
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0600 @USER@ @GROUP@
+    sharedscripts
+    prerotate
+        if systemctl is-active --quiet server-toolkit.service; then
+            : > /run/server-toolkit-logrotate.restart
+            systemctl stop server-toolkit.service
+        else
+            rm -f -- /run/server-toolkit-logrotate.restart
+        fi
+    endscript
+    postrotate
+        if [ -f /run/server-toolkit-logrotate.restart ]; then
+            rm -f -- /run/server-toolkit-logrotate.restart
+            systemctl start server-toolkit.service
+        fi
+    endscript
+}

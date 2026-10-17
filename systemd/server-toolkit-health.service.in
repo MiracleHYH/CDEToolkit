@@ -1,0 +1,10 @@
+[Unit]
+Description=Server Toolkit health recovery
+After=server-toolkit.service
+
+[Service]
+Type=oneshot
+User=@USER@
+Environment=HOME=@HOME@
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/scripts/service-start.sh health
