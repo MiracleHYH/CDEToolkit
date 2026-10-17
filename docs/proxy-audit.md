@@ -4,7 +4,28 @@
 
 ## v0.4.0 发行范围（2026-10-18）
 
-本次发行将独立 Proxy、审计修复和验证入口纳入 Nido v0.4.0，Linux amd64 为服务器验收目标。发行包仍只含 `nido`，不附带或自动安装 Mihomo，不注册服务或切换已有组件入口。下文“未发布”“版本保持 0.3.1”等说明记录对应历史阶段，不代表 v0.4.0 的发行状态。实际资产和发行状态以 [v0.4.0 Release](https://github.com/MiracleHYH/CDEToolkit/releases/tag/v0.4.0) 为准；发行后另记录签名、包校验及临时 HOME 公网安装的实际结果。
+独立 Proxy、审计修复和验证入口已纳入 [Nido v0.4.0](https://github.com/MiracleHYH/CDEToolkit/releases/tag/v0.4.0)，Linux amd64 为服务器验收目标。发行包仍只含 `nido`，不附带或自动安装 Mihomo，不注册服务或切换已有组件入口。下文“未发布”“版本保持 0.3.1”等说明记录对应历史阶段，不代表 v0.4.0 的发行状态。
+
+发行标签精确指向 `b21436368cbbef9f6619bf69f4fe3d863d5b83b2`。[版本提交 CI](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39057418555)、[标签 CI](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39057721425) 及[签名发行工作流](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39057721443) 均通过；Release 为公开稳定版且 `latest` 指向 v0.4.0。此后的验收文档补记不改动该标签或发行程序。
+
+发行后独立复核结果：
+
+| 项目 | 实际结果 |
+| --- | --- |
+| 公网资产 | 18 项资产白名单无额外项、遗漏或重复；逐项重新经真实 HTTPS 下载，大小与发布 API SHA-256 全部一致 |
+| 签名 | 四个平台包、四个摘要文件及安装器共 9 份文件独立 Sigstore 验签通过；身份精确为 `https://github.com/MiracleHYH/CDEToolkit/.github/workflows/release.yml@refs/tags/v0.4.0`，issuer 为 `https://token.actions.githubusercontent.com` |
+| 验签工具 | 本次临时使用官方 Cosign v3.0.6，下载前核对官方资产，实际程序的大小及 SHA-256 与官方发布 API 一致；所有 HOME/cache 均为临时路径 |
+| 包与来源 | 四平台包结构、Go 主程序身份、平台、CGO=0、版本及摘要均通过 `nido-dist verify`；安装器与 v0.4.0 标签源码逐字节相同 |
+| Linux amd64 原生 | J66 的 x86_64 Linux 内核实际运行公网包的 `version/status` 冒烟及完整 CLI 隔离夹具，均通过；程序报告 `0.4.0`，不以交叉编译替代原生执行 |
+| 公网安装 | 原生环境中的临时 HOME 真实完成 latest 首装、重复安装和固定版本/带空格自定义目录安装；每次下载的包与摘要先匹配已验签输入，已装程序 SHA 再与包内程序比对；生成的 Nido 配置在重复安装后保持原字节 |
+| Proxy 与入口 | 新版帮助、status/config-path、安装/更新查询/卸载/停止的 dry-run 及空组件错误反例通过；这些检查没有再下载资产或创建 Proxy 组件目录。Bash 子 Shell 显式加载环境及重复 PATH 加载通过，未切换实际入口 |
+| 数据边界 | 临时认证、会话、数据库、配置、外部 Mihomo 配置及 Shell 哨兵逐字节保留；未调用真实组件或系统服务。现有 Zsh 缺失，明确跳过该原生专项，未安装工具，也不将其写成通过 |
+
+Linux amd64 公网包大小为 **3,796,438 字节**，SHA-256 为 `6b9d5bcd519261679e292a599a3bbde04a7de1e81770c8ff22f39514d2d40f45`；包内 CLI SHA-256 为 `84c7222d8670ccf76540fca86f1eed4f22fa887611477744e0e497514500a407`。安装器为 **4,267 字节**，SHA-256 为 `c5e81a327c49bee086253cef800486c5b8e1eab9257732b688bc9e35e61c65c6`。下载器自身自动校验 SHA-256，不自动验证 Sigstore；上述签名是本次另行独立核验的结果。
+
+原生运行使用已有 bubblewrap，私有文件系统、PID、HOME/TMP；仅本次临时目录可写，系统工具/库/证书只读，不挂载宿主用户 HOME。服务器直连 GitHub TLS 预检失败后，使用本次专用、仅绑定回环的临时 SSH SOCKS 转发访问真实公网 HTTPS；没有复用用户代理、修改服务器代理或降低 TLS 校验。安装测试不 mock 公网内容；CLI 组合夹具中的外部 Codex 安装行为仍为本地假命令。隔离环境首次因缺少 `awk` 的系统链接失败，补齐只读 `/etc/alternatives` 映射后完整通过，未修改系统文件。此轮未重跑真实 Mihomo，真实转发与跨版本证据仍分别对应下方冻结源码验证；不把公网 CLI 安装验收扩称真实核心验证。
+
+本次原生 namespace、临时 HOME、下载、验签工具和辅助脚本已定向清理，临时 SSH 转发已关闭并复查回环端口无监听；正常发行构建产物保留。没有切换实际入口、安装系统服务或修改现有配置、认证、会话和数据。
 
 ## 源码提交与 GitHub CI 验收（2026-10-18）
 
