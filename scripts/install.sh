@@ -9,8 +9,8 @@ usage() {
 }
 
 version=${CDET_VERSION:-latest}
-home=${CDET_HOME:-${HOME:?HOME is required}/.local/cdetoolkit}
-if [ -z "${CDET_HOME:-}" ] && [ ! -e "$home/state.json" ] && [ ! -L "$home/state.json" ] && [ ! -e "$home/config.toml" ] && [ ! -L "$home/config.toml" ]; then
+home=${CDET_HOME:-${STK_HOME:-${HOME:?HOME is required}/.local/cdetoolkit}}
+if [ -z "${CDET_HOME:-}" ] && [ -z "${STK_HOME:-}" ] && [ ! -e "$home/state.json" ] && [ ! -L "$home/state.json" ] && [ ! -e "$home/config.toml" ] && [ ! -L "$home/config.toml" ]; then
     if [ -e "$HOME/.local/stk/state.json" ] || [ -L "$HOME/.local/stk/state.json" ]; then home=$HOME/.local/stk; fi
 fi
 bin_dir=${CDET_BIN_DIR:-$HOME/.local/bin}

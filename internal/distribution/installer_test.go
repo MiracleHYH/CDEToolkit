@@ -52,7 +52,7 @@ func TestPOSIXInstallerWithIsolatedReleaseAndHomes(t *testing.T) {
 	}
 	platform := runtime.GOOS + "/" + runtime.GOARCH
 	asset, _ := assetName(platform)
-	scenarios := []string{"fresh", "repeat", "pinned", "dry-run", "checksum", "missing-release", "extra-member", "foreign-entry", "foreign-home", "foreign-link", "linked-bin", "version-mismatch", "unsupported-arch"}
+	scenarios := []string{"fresh", "repeat", "pinned", "legacy-environment", "dry-run", "checksum", "missing-release", "extra-member", "foreign-entry", "foreign-home", "foreign-link", "linked-bin", "version-mismatch", "unsupported-arch"}
 	for _, scenario := range scenarios {
 		t.Run(scenario, func(t *testing.T) {
 			dir, err := filepath.EvalSymlinks(t.TempDir())
@@ -71,6 +71,9 @@ func TestPOSIXInstallerWithIsolatedReleaseAndHomes(t *testing.T) {
 			}
 			home := filepath.Join(dir, "user")
 			managed := filepath.Join(home, ".local", "cdetoolkit")
+			if scenario == "legacy-environment" {
+				managed = filepath.Join(home, "custom", "manager")
+			}
 			entry := filepath.Join(home, ".local", "bin", "cdet")
 			assets := filepath.Join(dir, "assets")
 			if _, err := Pack(binary, assets, "1.2.3", platform); err != nil {
@@ -146,13 +149,24 @@ case "$CDET_SCENARIO:$url" in checksum:*.tar.gz) printf corrupted >> "$output" ;
 				}
 			}
 			env := []string{"HOME=" + home, "PATH=" + filepath.Join(dir, "bin") + ":/usr/bin:/bin", "TMPDIR=" + filepath.Join(dir, "tmp"), "CODEX_HOME=" + filepath.Join(home, ".codex"), "CDET_SCENARIO=" + scenario, "CDET_ASSETS=" + assets, "CDET_CURL_CALLS=" + filepath.Join(dir, "curl-calls"), "CDET_FORBIDDEN=" + filepath.Join(dir, "forbidden")}
+			if scenario == "legacy-environment" {
+				if err := os.MkdirAll(filepath.Dir(managed), 0700); err != nil {
+					t.Fatal(err)
+				}
+				prepare := exec.Command(binary, "--home", managed, "init")
+				prepare.Env, prepare.Dir = env, dir
+				if out, err := prepare.CombinedOutput(); err != nil {
+					t.Fatalf("prepare existing custom home: %v: %s", err, out)
+				}
+				env = append(env, "STK_HOME="+managed)
+			}
 			run := func() ([]byte, error) {
 				cmd := exec.Command("/bin/sh", append([]string{filepath.Join(root, "scripts", "install.sh")}, args...)...)
 				cmd.Dir, cmd.Env = dir, env
 				return cmd.CombinedOutput()
 			}
 			out, err := run()
-			success := scenario == "fresh" || scenario == "repeat" || scenario == "pinned" || scenario == "dry-run"
+			success := scenario == "fresh" || scenario == "repeat" || scenario == "pinned" || scenario == "legacy-environment" || scenario == "dry-run"
 			if (err == nil) != success {
 				t.Fatalf("unexpected installer outcome: %v: %s", err, out)
 			}
