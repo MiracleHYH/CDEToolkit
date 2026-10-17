@@ -6,28 +6,23 @@ Nido 为 Codex 提供目录关联、环境与代理配置，以及官方安装�
 
 支持 Linux / macOS 的 amd64、arm64。Nido 本身是一个 Go 可执行文件。
 
-> **当前 main 是尚未发布的 Nido 重构。** GitHub 已有 latest Release 仍是旧 `cdet`，其一行安装地址目前不会安装 Nido。以下先从源码构建体验；仓库和 Go module 暂时保留 CDEToolkit 名称。
+从 **v0.3.0** 起，项目使用 Nido 名称和 `nido` 命令；仓库和 Go module 暂时保留 CDEToolkit 名称。旧 `cdet` 安装不会被自动迁移或替换。
 
 [快速开始](#快速开始) · [Codex](#关联或安装-codex) · [Proxy](#使用内置-proxy) · [使用指南](docs/usage.md) · [开发与发行](docs/go-ci-release.md)
 
 ## 快速开始
 
-需要 Go 1.23 或以上版本和 Make；固定发行工具链见 [.go-version](.go-version)。以下命令只初始化临时 Nido 目录，不安装组件，也不启动服务：
+需要 curl、tar 和 SHA-256 工具（Linux 通常自带 `sha256sum`，macOS 自带 `shasum`），无需 Go。下面一行安装最新 Go 版到 `~/.nido`，并在当前终端加载 `nido` 命令：
 
 ```sh
-git clone https://github.com/MiracleHYH/CDEToolkit.git
-cd CDEToolkit
-make build
-
-nido_demo_root="$(mktemp -d "${TMPDIR:-/tmp}/nido-demo.XXXXXX")"
-"./build/$(go env GOOS)-$(go env GOARCH)/nido" --root "$nido_demo_root" init --yes
-. "$nido_demo_root/env.sh"
+curl -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
+nido version
 nido status
 ```
 
-正式使用时，将 `--root` 改为自己选择的独立目录，例如 `"$HOME/.nido"`，再加载对应的 `env.sh`。Nido 只使用这一个软件目录，内置组件位于其中；外部 Codex HOME 必须在其之外。
+安装器只安装 Nido，不安装组件、不关联已有 Codex，也不启动服务。再次运行同一命令会更新 Nido，保留已有管理配置。可提前设置 `NIDO_HOME` 选择其他独立软件目录；外部 Codex HOME 必须在其之外。
 
-Nido 不自动修改 Shell 配置。需要新终端自动加载时，自行将正式目录的 `. "/实际软件目录/env.sh"` 加入 `~/.bashrc` 或 `~/.zshrc`；不要保存上述临时目录。
+安装脚本运行在子 Shell 中，不能直接更改当前终端的 PATH，因此命令末尾会显式加载 `env.sh`。Nido 不自动编辑 Shell 配置。需要新终端自动加载时，将 `. "$HOME/.nido/env.sh"` 加入 `~/.bashrc` 或 `~/.zshrc`；自定义目录请替换路径。
 
 ## 关联或安装 Codex
 
@@ -98,7 +93,12 @@ GDS 的 Go 调度启动尚未适配，当前启动操作会明确拒绝。仓库
 
 ## 开发
 
+源码构建需要 Go 1.23 或以上版本和 Make；固定发行工具链见 [.go-version](.go-version)。
+
 ```sh
+git clone https://github.com/MiracleHYH/CDEToolkit.git
+cd CDEToolkit
+make build
 make check
 make smoke
 make dist TARGET_OS=linux TARGET_ARCH=amd64

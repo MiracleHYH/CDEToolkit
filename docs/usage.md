@@ -2,18 +2,18 @@
 
 GDS 保持可选。当前 Go 版保留显式程序安装、更新和删除，调度启动尚未接入，`nido gds start` 会明确拒绝。仓库的 CUDA worker 不能单独替代旧脚本的空闲检测与 monitor。
 
-当前 main 为未发布的 Nido 单目录重构，命令为 `nido`。已有 GitHub latest Release 仍使用旧 `cdet`，不要用其下载结果验证本文行为。从 [README](../README.md#快速开始) 构建当前源码后再使用本指南。
+从 v0.3.0 起，Nido 使用单目录设计和 `nido` 命令。旧 `cdet` 版本不会被自动迁移；本指南描述 Nido 的安装和使用。
 
 ## 初始化与 Shell 环境
 
-选择一个独立软件目录，默认 `~/.nido`。从仓库构建后执行：
+选择一个独立软件目录，默认 `~/.nido`。安装最新发行版并在当前终端启用命令：
 
 ```sh
-make build
-"./build/$(go env GOOS)-$(go env GOARCH)/nido" --root "$HOME/.nido" init --yes
-. "$HOME/.nido/env.sh"
+curl -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
 nido version
 ```
+
+需要固定版本或自定义目录时，可使用 `curl -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --version 0.3.0 --root /absolute/path/to/nido`，再加载该目录下的 `env.sh`。源码构建方式见 [README](../README.md#开发)。
 
 也可以通过 `NIDO_HOME` 指定目录；显式 `--root` 优先。首次初始化只接受不存在或空目录，不把普通数据目录或旧 toolkit 目录变成 Nido。重复初始化保留配置，并刷新自己的程序和环境文件；用户修改过的 `env.sh` 不被静默覆盖。
 

@@ -2,7 +2,7 @@
 
 Nido: Lightweight Development Environment Manager。开发中的命令为 `nido`，主程序位于 `cmd/nido`；源码发行工具位于 `cmd/nido-dist`，不会进入安装包。Go module 和 GitHub 仓库仍使用 `github.com/MiracleHYH/CDEToolkit`。
 
-本次重构尚未发布。已经公开的历史 Release 不因源码改名而改变；下述新包名与安装行为需要未来发布后才会在公开下载地址生效。
+从 v0.3.0 起发布 Nido Go 版。历史 cdet Release 保留原状，新版使用下述包名和安装行为，不自动迁移旧版安装。
 
 ## 本地检查
 
@@ -43,7 +43,7 @@ nido --root /absolute/software/path init --yes
 
 `release.yml` 只响应 `v*` 标签。在上传前，它检查精确标签、源码、测试、包与本机只读冒烟，再使用 Sigstore 签名并逐项验证发布白名单。普通检查仅有 `contents: read`；只有发布 job 才拥有上传和 OIDC 权限。Action 固定完整 SHA，checkout 不保留凭据。
 
-未来发行资产仅包含：
+发行资产仅包含：
 
 - Linux/macOS × amd64/arm64 的四个 `nido-GOOS-GOARCH.tar.gz`，每包只含一个普通可执行文件 `nido`。
 - 四个对应 `.sha256` 文件。

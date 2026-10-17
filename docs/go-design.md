@@ -1,6 +1,6 @@
 # Nido 轻量单目录设计
 
-Nido: Lightweight Development Environment Manager。当前 main 的 Nido 重构尚未发布；GitHub 已有 latest Release 仍为旧 cdet。本文描述新源码，旧双目录审计仅作为历史记录。
+Nido: Lightweight Development Environment Manager。从 v0.3.0 起采用本单目录设计；旧 cdet 与双目录审计仅作为历史记录，不会自动迁入。
 
 Nido 的定位是开发环境配置助手，加少量内置工具。外部软件保留自身的数据格式、运行方式和更新机制，Nido 仅提供明确的集成；内置组件由 Nido 管理最小生命周期。
 
