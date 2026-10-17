@@ -56,6 +56,135 @@ func TestCheckWorkflowCoversDeclaredMinimumAndPinnedGo(t *testing.T) {
 	}
 }
 
+func TestLinuxWorkflowIsolatesProcessesAndDropsBackToRunner(t *testing.T) {
+	data, err := os.ReadFile("../../.github/workflows/check.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct{ If, Run string }
+		}
+	}
+	if err = yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	var linux string
+	checks := 0
+	for _, step := range workflow.Jobs["go"].Steps {
+		if !strings.Contains(step.Run, "make check smoke") {
+			continue
+		}
+		checks++
+		switch step.If {
+		case "runner.os == 'Linux'":
+			linux = step.Run
+		case "runner.os == 'macOS'":
+			if strings.TrimSpace(step.Run) != "make check smoke" {
+				t.Fatal("macOS must run the normal check targets")
+			}
+		default:
+			t.Fatal("platform checks must have explicit runner conditions")
+		}
+	}
+	if linux == "" || checks != 2 {
+		t.Fatal("missing separate Linux and macOS checks")
+	}
+	testWorkflowNamespace(t, linux, false)
+}
+
+func TestReleaseWorkflowChecksInNamespaceWithExactTag(t *testing.T) {
+	data, err := os.ReadFile("../../.github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Run string
+				Env map[string]string
+			}
+		}
+	}
+	if err = yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	checks := 0
+	for _, step := range workflow.Jobs["release"].Steps {
+		if !strings.Contains(step.Run, "make release-check") {
+			continue
+		}
+		checks++
+		if step.Env["STK_RELEASE_TAG"] != "${{ github.ref_name }}" {
+			t.Fatal("release check must receive the exact ref through its environment")
+		}
+		start := strings.Index(step.Run, "sudo unshare")
+		end := strings.Index(step.Run, "make release-check") + len("make release-check")
+		if start < 0 || start >= end || strings.TrimSpace(step.Run[:start]) != "go mod verify" || !strings.HasPrefix(strings.TrimSpace(step.Run[end:]), "go install github.com/zricethezav/gitleaks/") {
+			t.Fatal("only release-check belongs in the namespace; dependency and source checks remain on the host")
+		}
+		testWorkflowNamespace(t, step.Run[start:end], true)
+	}
+	if checks != 1 {
+		t.Fatal("release check must have exactly one isolated command")
+	}
+}
+
+func testWorkflowNamespace(t *testing.T, script string, release bool) {
+	t.Helper()
+	for _, fail := range []bool{false, true} {
+		t.Run(map[bool]string{false: "success", true: "namespace-failure"}[fail], func(t *testing.T) {
+			dir := t.TempDir()
+			bin, home := filepath.Join(dir, "bin"), filepath.Join(dir, "home")
+			if err := os.Mkdir(bin, 0700); err != nil {
+				t.Fatal(err)
+			}
+			write := func(name, text string) {
+				if err := os.WriteFile(filepath.Join(bin, name), []byte(text), 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			write("id", "#!/bin/sh\ncase \"$1\" in -u) echo 1001 ;; -g) echo 1002 ;; *) exit 97 ;; esac\n")
+			// Never run sudo, unshare or make here. Capture the exact command
+			// boundary to guard PID isolation and privilege drop independently
+			// of host OS/capabilities; Actions exercises the real namespace.
+			write("sudo", "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CDET_SUDO_ARGS\"\nexit \"$CDET_SUDO_EXIT\"\n")
+			write("make", "#!/bin/sh\nexit 98\n")
+			path, calls := bin+":/usr/bin:/bin", filepath.Join(dir, "sudo-args")
+			exitCode := "0"
+			if fail {
+				exitCode = "37"
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "/bin/bash", "--noprofile", "--norc", "-c", "set -euo pipefail\n"+script)
+			const tag = "v1.2.3-exact tag+$literal"
+			cmd.Env = []string{"PATH=" + path, "HOME=" + home, "CDET_SUDO_ARGS=" + calls, "CDET_SUDO_EXIT=" + exitCode, "STK_RELEASE_TAG=" + tag}
+			out, err := cmd.CombinedOutput()
+			if fail {
+				if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 37 {
+					t.Fatal("namespace failure must stop checks", err, string(out))
+				}
+			} else if err != nil {
+				t.Fatal("mock namespace command failed", err, string(out))
+			}
+			args, err := os.ReadFile(calls)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{"unshare", "--mount", "--pid", "--fork", "--mount-proc", "--kill-child", "--setgid=1002", "--setuid=1001", "--", "env", "HOME=" + home, "PATH=" + path, "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly"}
+			if release {
+				want = append(want, "STK_RELEASE_TAG="+tag, "make", "release-check")
+			} else {
+				want = append(want, "make", "check", "smoke")
+			}
+			if string(args) != strings.Join(want, "\n")+"\n" {
+				t.Fatal("Linux checks must isolate /proc and execute as runner, without skipping check targets", string(args))
+			}
+		})
+	}
+}
+
 func TestReleaseWorkflowOnlyPublishesVerifiedAllowlist(t *testing.T) {
 	data, err := os.ReadFile("../../.github/workflows/release.yml")
 	if err != nil {

@@ -44,7 +44,16 @@ jobs:
           go-version: ${{ matrix.go }}
           cache-dependency-path: go.sum
       - run: go mod verify
-      - run: make check smoke
+      - name: Check in isolated Linux process namespace
+        if: runner.os == 'Linux'
+        run: |
+          sudo unshare --mount --pid --fork --mount-proc --kill-child \
+            --setgid="$(id -g)" --setuid="$(id -u)" -- \
+            env HOME="$HOME" PATH="$PATH" GOTOOLCHAIN=local GOFLAGS=-mod=readonly \
+            make check smoke
+      - name: Check on macOS
+        if: runner.os == 'macOS'
+        run: make check smoke
 
   public-audit:
     runs-on: ubuntu-24.04

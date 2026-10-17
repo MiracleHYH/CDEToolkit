@@ -23,6 +23,8 @@
 
 `check.yml` 在 Linux 最低 Go、Linux 固定发行 Go 和 macOS 固定发行 Go 上执行检查与只读冒烟。源码与历史另做 gitleaks 审查。GDS job 仅在手动触发并选择时运行。
 
+Linux 检查在独立 PID 和挂载命名空间中运行，并将 `/proc` 重新挂载为该命名空间的进程视图。GitHub runner 的部分同 UID 辅助进程禁止读取程序或工作目录，会触发组件进程检查的安全拒绝；隔离后只检查测试及其合成子进程。sudo 只用于创建命名空间，执行检查前由 unshare 降回 runner 的 UID/GID；不隔离网络，不以 root 运行测试，不跳过进程检查，也不放宽生产环境的拒绝规则。macOS 继续直接执行相同检查目标。发布流程的 `make release-check` 使用相同边界，并显式传入原始标签；依赖校验、源码审查、签名和上传仍在宿主运行。
+
 `release.yml` 只响应 `v*` 标签。它复核标签、源码、测试、包与本机冒烟，再逐项签名、自验证并发布白名单资产。普通检查只有 `contents: read`；发布 job 才具有上传和 OIDC 权限。Action 固定完整提交 SHA，checkout 不保留凭据。
 
 发布白名单为：

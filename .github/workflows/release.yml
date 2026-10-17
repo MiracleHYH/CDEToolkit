@@ -37,7 +37,10 @@ jobs:
           STK_RELEASE_TAG: ${{ github.ref_name }}
         run: |
           go mod verify
-          make release-check
+          sudo unshare --mount --pid --fork --mount-proc --kill-child \
+            --setgid="$(id -g)" --setuid="$(id -u)" -- \
+            env HOME="$HOME" PATH="$PATH" GOTOOLCHAIN=local GOFLAGS=-mod=readonly \
+            STK_RELEASE_TAG="$STK_RELEASE_TAG" make release-check
           go install github.com/zricethezav/gitleaks/v8@v8.30.0
           export PATH="$(go env GOPATH)/bin:$PATH"
           ./scripts/public-audit.sh
