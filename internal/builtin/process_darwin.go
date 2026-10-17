@@ -6,8 +6,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"net"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,7 +23,9 @@ func inspectProcess(pid int) (Process, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	raw, err := exec.CommandContext(ctx, "/bin/ps", "-p", strconv.Itoa(pid), "-o", "uid=", "-o", "lstart=", "-o", "stat=").Output()
+	cmd := exec.CommandContext(ctx, "/bin/ps", "-p", strconv.Itoa(pid), "-o", "uid=", "-o", "lstart=", "-o", "stat=")
+	cmd.Env = []string{"LC_ALL=C", "PATH=/usr/bin:/bin"}
+	raw, err := cmd.Output()
 	if err != nil {
 		if syscall.Kill(pid, 0) == syscall.ESRCH {
 			return Process{}, os.ErrNotExist
@@ -62,30 +62,4 @@ func inspectProcess(pid int) (Process, error) {
 		return Process{}, fmt.Errorf("进程程序路径无效")
 	}
 	return Process{PID: pid, Executable: string(program), Started: strings.Join(f[1:6], " ")}, nil
-}
-
-func processOwnsEndpoint(pid int, endpoint string) (bool, error) {
-	u, _ := url.Parse(endpoint)
-	ip := net.ParseIP(u.Hostname())
-	if ip == nil || !ip.IsLoopback() {
-		return false, nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	b, err := exec.CommandContext(ctx, "/usr/sbin/lsof", "-nP", "-a", "-p", strconv.Itoa(pid), "-iTCP:"+u.Port(), "-sTCP:LISTEN", "-F0n").Output()
-	if err != nil {
-		return false, nil
-	}
-	for _, part := range bytes.Split(b, []byte{0}) {
-		field := strings.TrimLeft(string(part), "\r\n")
-		if !strings.HasPrefix(field, "n") {
-			continue
-		}
-		host, port, e := net.SplitHostPort(field[1:])
-		actual := net.ParseIP(host)
-		if e == nil && port == u.Port() && (host == "*" || actual != nil && (actual.Equal(ip) || actual.IsUnspecified())) {
-			return true, nil
-		}
-	}
-	return false, nil
 }

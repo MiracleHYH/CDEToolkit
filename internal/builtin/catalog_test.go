@@ -7,7 +7,7 @@ import (
 )
 
 func TestCatalogProvidesStableNamesWithoutEnablingComponents(t *testing.T) {
-	want := []string{"proxy", "gds"}
+	want := []string{"gds"}
 	names := Names()
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("unexpected catalog: %v", names)

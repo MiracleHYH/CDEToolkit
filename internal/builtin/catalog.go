@@ -10,7 +10,6 @@ type Definition struct {
 }
 
 var catalog = []Definition{
-	{Name: "proxy", Program: "mihomo", NeedsConfig: true},
 	{Name: "gds", Program: "gds"},
 }
 

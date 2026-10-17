@@ -3,10 +3,7 @@
 package builtin
 
 import (
-	"encoding/hex"
 	"fmt"
-	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -68,59 +65,4 @@ func inspectProcess(pid int) (Process, error) {
 		return Process{}, fmt.Errorf("进程程序路径无效")
 	}
 	return Process{PID: pid, Executable: program, Started: fields[19]}, nil
-}
-
-// Inspect only this recorded process's file descriptors and socket table.
-// There is no full-machine process discovery or cross-user process operation.
-func processOwnsEndpoint(pid int, endpoint string) (bool, error) {
-	u, _ := url.Parse(endpoint)
-	ip := net.ParseIP(u.Hostname())
-	port, err := strconv.Atoi(u.Port())
-	if ip == nil || !ip.IsLoopback() || err != nil {
-		return false, nil
-	}
-	base := filepath.Join("/proc", strconv.Itoa(pid))
-	table := "tcp"
-	if ip.To4() == nil {
-		table = "tcp6"
-	}
-	b, err := os.ReadFile(filepath.Join(base, "net", table))
-	if err != nil {
-		return false, err
-	}
-	inodes := map[string]bool{}
-	for _, line := range strings.Split(string(b), "\n") {
-		f := strings.Fields(line)
-		if len(f) < 10 || f[3] != "0A" {
-			continue
-		}
-		host, p, ok := strings.Cut(f[1], ":")
-		n, e := strconv.ParseUint(p, 16, 16)
-		if !ok || e != nil || int(n) != port {
-			continue
-		}
-		encoded, e := hex.DecodeString(host)
-		if e != nil || len(encoded) != 4 && len(encoded) != 16 {
-			continue
-		}
-		for i := 0; i < len(encoded); i += 4 {
-			encoded[i], encoded[i+3] = encoded[i+3], encoded[i]
-			encoded[i+1], encoded[i+2] = encoded[i+2], encoded[i+1]
-		}
-		actual := net.IP(encoded)
-		if actual.Equal(ip) || actual.IsUnspecified() {
-			inodes[f[9]] = true
-		}
-	}
-	fds, err := os.ReadDir(filepath.Join(base, "fd"))
-	if err != nil {
-		return false, err
-	}
-	for _, fd := range fds {
-		link, e := os.Readlink(filepath.Join(base, "fd", fd.Name()))
-		if e == nil && strings.HasPrefix(link, "socket:[") && strings.HasSuffix(link, "]") && inodes[strings.TrimSuffix(strings.TrimPrefix(link, "socket:["), "]")] {
-			return true, nil
-		}
-	}
-	return false, nil
 }

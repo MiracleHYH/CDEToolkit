@@ -4,6 +4,8 @@ GDS 保持可选。当前 Go 版保留显式程序安装、更新和删除，调
 
 从 v0.3.0 起，Nido 使用单目录设计和 `nido` 命令。旧 `cdet` 版本不会被自动迁移；本指南描述 Nido 的安装和使用。
 
+Proxy 章节对应当前源码。本轮未发布新版本或切换实际入口，已有发行版以其命令帮助为准。
+
 ## 初始化与 Shell 环境
 
 选择一个独立软件目录，默认 `~/.nido`。安装最新发行版并在当前终端启用命令：
@@ -36,7 +38,10 @@ nido version
   env.sh
   proxy/              # 显式安装后创建
     mihomo
-    config.yaml       # 用户提供
+    config.yaml       # configure 保存的唯一主配置
+    process.json      # 最近一次受管启动及配置摘要
+    output.log
+    providers/        # 默认模板使用的 provider 缓存
   gds/                # 显式安装后创建
     gds
 
@@ -113,7 +118,7 @@ nido codex proxy http://127.0.0.1:7890
 nido codex proxy builtin
 ```
 
-这只读取 `<Nido 软件目录>/proxy/config.yaml`，不证明代理正在运行或可以联网，也不会启动服务。配置变化供后续启动使用，不影响已经运行的 Codex。
+这通过 Proxy 组件读取默认端点，不证明可以联网，也不会启动服务；停止时仍可绑定并提示运行状态。默认优先使用名为 `common` 的入口，否则必须只有一个入口。多个入口有歧义或入口配置了认证时，请改用显式代理 URL。端口变更后重新绑定，已写入 Codex 的地址不会自动跟随。
 
 仅清理 Nido 的代理块：
 
@@ -133,43 +138,76 @@ nido codex update --proxy http://127.0.0.1:7890
 
 ## 内置 Proxy
 
-从 Mihomo 官方稳定版下载当前平台内核，不导入外部 Proxy：
+Proxy 独立管理 `<Nido 软件目录>/proxy`，不依赖 Codex，不接管外部 Mihomo 或旧 Bash 环境。从 Mihomo 官方稳定版下载当前平台程序：
 
 ```sh
 nido proxy install
-```
-
-也可使用本地独立程序或 gzip 程序包：
-
-```sh
-nido proxy install --artifact /absolute/path/to/mihomo.gz
-```
-
-可加 `--sha256` 校验本地输入。该选项接受 64 位十六进制摘要；程序还会检查平台和格式。当前不接受任意自定义下载 URL。
-
-安装后自行提供固定位置的配置文件：
-
-```text
-<Nido 软件目录>/proxy/config.yaml
-```
-
-Nido 不生成订阅、节点或认证。准备好配置后：
-
-```sh
+nido proxy configure
+nido proxy validate
 nido proxy start
 nido proxy status
-nido proxy stop
 ```
 
-`start` 直接启动本实例内核并记录进程归属，不注册 systemd、Supervisor 或自启动。停止和更新不会只凭进程名称发信号。
+首次 `configure` 交互隐藏订阅 URL，生成一个本地 mixed 入口、一个 provider 和代理组，默认端口为 7890。订阅必须提供原生 Mihomo provider 格式；不设置转换服务。模板通过 DIRECT 取回订阅，业务流量默认使用订阅首个节点，订阅组为空时拒绝转发。已有配置时只显示路径和后续验证方式，不覆盖文件。
+
+也可显式导入完整原生 YAML：
 
 ```sh
-nido proxy update
+chmod 600 /absolute/path/to/config.yaml
+nido proxy configure --file /absolute/path/to/config.yaml
+nido proxy config-path
 ```
 
-内置 Proxy 的官方本地更新接口适用且能确认控制器归属时优先使用，可能重启内核；否则本地替换要求组件已经停止。已提交官方更新后结果不明，不再静默下载覆盖。安装、文件替换和卸载不会代替用户停止或启动组件。
+`--file` 要求绝对路径、普通文件及私有权限。配置在停止状态下经过静态和核心验证后原子保存为 `proxy/config.yaml`；不复制外部缓存或资源。缺少程序、空配置、重复键、多文档、非法端口或核心验证失败时不提交配置。安装、配置和更新均不自动启动。
 
-下载继承当前终端已有的代理环境，不会为了下载自动启动 Proxy。
+配置策略限定为回环显式代理：
+
+- 支持传统 `mixed-port`、`port`、`socks-port` 和 `listeners` 的 mixed/http/socks；至少需要一个有效入口。
+- 独立 `listeners` 必须显式设置字面回环 IP，不能依赖 `allow-lan: false` 限制它；传统端口在 `allow-lan: false` 时使用 `127.0.0.1`。传统 IPv6 在启用 `allow-lan` 后使用带方括号的 `bind-address: '[::1]'`。
+- HTTP/file provider 必须显式指定组件根内的相对 `path`。provider、规则及已支持的顶层 TLS 文件资源不能覆盖受管文件或核心固定缓存、数据库；链接与共享硬链接会被拒绝。`tls.custom-certifactes` 使用内联证书字符串列表。完整节点与规则语义继续交给核心，这些检查不能隔离任意 outbound 扩展或不可信配置。
+- 策略字段使用规范的小写连字符名称。传统端口使用 YAML 整数，端口整数不能带前导零；listeners 另支持引号包围的十进制端口。
+- 当前不支持 TUN、透明代理、非回环监听、其他入站类型、TLS/Reality 代理入站、脚本、外部 UI 或 YAML 别名与合并键。可选 HTTP controller 必须使用字面回环地址和非空 secret；Nido 不调用它。
+
+配置检查与运行确认含义不同：`status` 只观察本地程序、静态配置与受管进程，`config=readable` 不代表核心验证通过；`validate` 执行 `mihomo -t`，不证明端口能绑定、provider 内容已加载或远端可达。核心检查可能按上游行为访问缓存，因此不属于只读状态查询。
+
+`start` 在有限期限内核验进程和全部导出代理监听的归属；其他进程占用端口不能算启动成功。它不注册 systemd、launchd、Supervisor 或自动重启。`stop` 只向本实例的精确进程发送终止信号，超时或无法确认身份时保留记录并报错，不隐式强杀。
+
+编辑固定配置后，用 `restart` 应用：
+
+```sh
+nido proxy restart
+nido proxy endpoint
+nido proxy endpoint common
+nido proxy logs --tail 100
+nido proxy probe --url https://example.com
+```
+
+`restart` 先验证新配置，失败时保持旧进程；停止后重新启动失败会明确报错。当前不提供热 reload。运行期间手工改动主配置后，状态通过 `config_changed` 提醒磁盘与受管启动快照不同。
+
+`endpoint` 只导出配置意图，优先 `common`，否则要求唯一；传统入口名为 `mixed`、`http`、`socks`。混合入口输出 HTTP URL，SOCKS 输出 `socks5h` URL，均不含凭据。配置了认证时，端点命令、自动绑定和无凭据探测会拒绝；按来源地址豁免认证时仍保守报告已配置认证。
+
+`logs` 有界读取普通日志文件，不执行日志内容。日志保留核心原文，分享前自行检查其中的订阅或节点信息。`probe` 明确通过已就绪的默认端点测试指定 HTTP/HTTPS 目标，不跟随重定向；请求前后复核同一受管实例，记录、配置、程序或监听变化时拒绝成功。检查和连接并非原子操作，结果只说明该目标在当时的响应。状态、端点和 dry-run 均不联网或启动核心。
+
+查看当前和最新版本，再在停止状态更新：
+
+```sh
+nido proxy update --check
+nido proxy stop
+nido proxy update
+nido proxy start
+```
+
+`--check` 显式联网查询发布信息，并执行本地核心版本查询；不修改组件。实际更新不调用 controller 或 `/upgrade`，只在停止状态下准备私有临时程序，检查格式、版本与现有配置，再复核快照并原子替换。失败不覆盖现有程序，成功后仍保持停止。`meta-update`、`meta-backup` 及其他未知数据不被清理。
+
+本地独立程序或 gzip 包可用于安装及更新：
+
+```sh
+nido proxy update --artifact /absolute/path/to/mihomo.gz --sha256 SHA256_HEX
+```
+
+`--sha256` 接受 64 位十六进制摘要；在线下载也检查官方资产摘要、平台与展开大小。摘要验证不等于签名验证。下载继承当前终端代理，或使用本次 `--proxy URL`，不为了下载自动启动 Proxy。若下载需要当前 Proxy，先另行获取本地包，再停止并使用 `--artifact` 更新。
+
+常规隔离测试使用临时根、假核心及回环辅助程序。真实核心兼容测试可通过 `NIDO_TEST_MIHOMO=/absolute/path/to/verified/mihomo make check-proxy-real` 显式执行，不自动下载核心，仅使用临时 HOME、软件根及回环 provider、HTTP/SOCKS/HTTPS 夹具。已执行的版本、结果和范围见[审计记录](proxy-audit.md)；本地夹具不能替代真实订阅、全部节点协议及其他平台的验证。
 
 ## 状态与预览
 
@@ -200,7 +238,7 @@ nido proxy stop
 nido proxy remove
 ```
 
-内置组件卸载只删除其程序及已停止的进程记录，保留配置、日志、数据和未知文件。GDS 同样使用 `nido gds remove`。
+Proxy 卸载要求停止，仅移除程序，保留配置、日志、进程历史、缓存和未知文件。GDS 使用 `nido gds remove`，同样保留配置与数据。
 
 当前没有 Nido 自身卸载、递归清理数据或 Codex 卸载命令。准备移除软件目录时，先按需解除外部关联、停止内置组件，并自行保留所需配置数据；不要把程序更新理解为数据备份。
 

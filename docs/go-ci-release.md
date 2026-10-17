@@ -41,6 +41,10 @@ nido --root /absolute/software/path init --yes
 
 `check.yml` 在 Linux 最低 Go、Linux 固定 Go 和 macOS 固定 Go 上执行 `make check smoke`。单独检查源码与历史中的敏感内容。GDS job 只在手动选择后运行。
 
+Proxy 的真实核心与跨版本测试需要显式提供已核验程序，普通 CI 不会下载这些输入，不能把 `make check smoke` 通过解释为完成全部平台的真实核心验证。Linux 的两个隔离入口会拒绝 TestOS 或显式跨版本测试跳过、缺少 PASS 及子命令失败；纯 mock 回归只验证这些入口判定和清理边界。预构建输入的架构、CLI 元数据和 race 符号检查不能证明其来自当前提交；需另记录冻结源码与产物摘要。当前各平台的实际证据、缺口及发布阻塞项见 [Proxy 最终审计](proxy-audit.md#跨版本验证后的最终发布审计2026-10-18)。
+
+本次 Proxy 的服务器部署目标已限定为 Linux amd64，其他平台的验证缺口不阻塞该目标；Nido 的四平台包构建与静态校验仍按原流程保留。
+
 `release.yml` 只响应 `v*` 标签。在上传前，它检查精确标签、源码、测试、包与本机只读冒烟，再使用 Sigstore 签名并逐项验证发布白名单。普通检查仅有 `contents: read`；只有发布 job 才拥有上传和 OIDC 权限。Action 固定完整 SHA，checkout 不保留凭据。
 
 发行资产仅包含：

@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 )
 
 type Manager struct {
@@ -116,9 +115,7 @@ func (m *Manager) install(name, artifact, checksum string, update bool) error {
 	return atomicWrite(program, data, 0700)
 }
 
-// Update prefers Mihomo's official local updater only when its controller is
-// owned by the exact recorded process. Otherwise replacement requires stopped
-// components. A submitted official update never falls back to file replacement.
+// Update replaces a stopped optional component without changing its data.
 func (m *Manager) Update(name, artifact, checksum string) error {
 	return m.withLock(name, func() error { return m.update(name, artifact, checksum) })
 }
@@ -126,11 +123,6 @@ func (m *Manager) Update(name, artifact, checksum string) error {
 func (m *Manager) update(name, artifact, checksum string) error {
 	if _, _, err := m.paths(name); err != nil {
 		return err
-	}
-	if name == "proxy" && (artifact == "" || artifact == "latest") && checksum == "" {
-		if handled, err := m.officialUpdate(); handled || err != nil {
-			return err
-		}
 	}
 	return m.install(name, artifact, checksum, true)
 }
@@ -193,20 +185,7 @@ func (m *Manager) Status(name string) Status {
 		s.Configured = false
 		s.Problem = gdsUnavailable
 	}
-	if name == "proxy" {
-		info, e := os.Lstat(filepath.Join(dir, "config.yaml"))
-		if e == nil {
-			if !info.Mode().IsRegular() {
-				s.Problem = "Proxy 配置不是普通文件"
-			} else if _, e = m.proxyConfig(); e != nil {
-				s.Problem = e.Error()
-			} else {
-				s.Configured = true
-			}
-		} else if !errors.Is(e, os.ErrNotExist) {
-			s.Problem = "无法检查 Proxy 配置"
-		}
-	}
+
 	p, e := m.process(name)
 	if e != nil {
 		s.Problem = e.Error()
@@ -216,59 +195,15 @@ func (m *Manager) Status(name string) Status {
 	return s
 }
 
+// Start remains unavailable until GDS has its own scheduler adapter.
 func (m *Manager) Start(name string) error {
-	if name == "gds" {
-		// The optional CUDA worker is not a complete scheduler. Until the
-		// monitor has a dedicated Go adapter, never run an arbitrary artifact
-		// as though idle detection and GPU handoff had been implemented.
-		return errors.New(gdsUnavailable)
+	if _, _, err := m.paths(name); err != nil {
+		return err
 	}
-	return m.withLock(name, func() error { return m.start(name) })
+	return errors.New(gdsUnavailable)
 }
 
 const gdsUnavailable = "GDS 调度运行尚未适配；仓库 scheduler 仅为 CUDA worker，不能直接启动"
-
-func (m *Manager) start(name string) error {
-	dir, program, err := m.paths(name)
-	if err != nil {
-		return err
-	}
-	s := m.Status(name)
-	if s.Problem != "" {
-		return errors.New(s.Problem)
-	}
-	if s.Running {
-		return nil
-	}
-	if !s.Installed || !s.Configured {
-		return fmt.Errorf("%s 程序或配置尚未准备好", name)
-	}
-	if err = safePath(m.Root, filepath.Join(dir, "output.log")); err != nil {
-		return err
-	}
-	args := []string(nil)
-	if name == "proxy" {
-		args = []string{"-d", dir, "-f", filepath.Join(dir, "config.yaml")}
-	}
-	env := m.Env
-	if env == nil {
-		env = os.Environ()
-	}
-	p, err := m.runner().Start(Command{Program: program, Dir: dir, Log: filepath.Join(dir, "output.log"), Args: args, Env: env})
-	if err != nil {
-		return err
-	}
-	if p.PID <= 1 || p.Executable != program || p.Started == "" {
-		return fmt.Errorf("组件启动后未获得可靠的进程归属")
-	}
-	b, _ := json.Marshal(p)
-	if err = atomicWrite(filepath.Join(dir, "process.json"), append(b, '\n'), 0600); err != nil {
-		// Stop receives the complete identity, never just an unverified PID.
-		_ = m.runner().Stop(p)
-		return err
-	}
-	return nil
-}
 
 func (m *Manager) Stop(name string) error {
 	return m.withLock(name, func() error { return m.stop(name) })
@@ -344,5 +279,3 @@ func removeRecord(path string) error {
 	}
 	return err
 }
-
-func cleanValue(s string) bool { return !strings.ContainsAny(s, "\x00\r\n") }

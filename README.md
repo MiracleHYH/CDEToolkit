@@ -59,19 +59,42 @@ nido codex update
 
 ## 使用内置 Proxy
 
+以下 Proxy 行为对应当前源码；本轮尚未发布，已安装发行版以其 `--help` 为准。
+
+Proxy 的服务器验证目标为 Linux amd64，已完成原生 race 和指定版本对的真实停机更新；各平台的历史证据与验证边界见 [Proxy 发布前审计](docs/proxy-audit.md#跨版本验证后的最终发布审计2026-10-18)。其他平台的验证缺口不作为该部署目标的发布阻塞项。
+
 ```sh
 nido proxy install
+nido proxy configure
+nido proxy validate
+nido proxy start
+nido proxy status
+nido proxy endpoint
 ```
 
-将自己的 Mihomo 配置放到 **`$NIDO_HOME/proxy/config.yaml`**，再显式启动：
+`configure` 首次交互隐藏订阅 URL，生成原生 Mihomo provider 配置；已有配置时只显示路径。也可用 `nido proxy configure --file /absolute/config.yaml` 导入私有 YAML 文件，文件须禁止 group/other 访问。安装和配置均不自动启动；主配置固定为 **`$NIDO_HOME/proxy/config.yaml`**。
+
+默认只接受本地回环 HTTP/SOCKS 代理。端点优先选择名为 `common` 的入口，否则要求唯一；多个入口用 `nido proxy endpoint NAME` 显式选择。`status` 只做本地文件与进程观察，`validate` 执行核心检查，显式 `probe` 才测试指定网络目标：
 
 ```sh
-nido proxy start
-nido status
+nido proxy logs --tail 100
+nido proxy probe --url https://example.com
+nido proxy restart
 nido codex proxy builtin
 ```
 
-最后一条只把内置 Proxy 的本地地址配置给已关联 Codex，不会启动或重启任何组件。网络受限时，下载可使用当前终端已有的代理；Nido 不为了下载自动启动代理。
+`restart` 先验证新配置，失败时保留旧进程。最后一条只把默认无认证端点写入已关联 Codex 的代理块，不会启动组件。Proxy 不依赖 Codex，也不配置全局代理。
+
+更新先显式停止，替换完成后仍保持停止：
+
+```sh
+nido proxy update --check
+nido proxy stop
+nido proxy update
+nido proxy start
+```
+
+更新不调用 controller 热更新，不清理已有未知数据。下载可使用当前终端代理或本次 `--proxy URL`；需要借用旧代理下载时，先另行准备本地包，再停止并通过 `--artifact /absolute/path/to/mihomo.gz` 更新。详见 [Proxy 使用说明](docs/usage.md#内置-proxy)及[组件设计](docs/proxy-design.md)。
 
 ## 常用命令
 
@@ -82,7 +105,7 @@ nido codex proxy builtin
 | 仅为本次 Codex 安装更新指定代理 | `nido codex update --proxy http://127.0.0.1:7890` |
 | 清理 Nido 写入的 Codex 代理块 | `nido codex proxy off` |
 | 解除 Codex 关联，保留程序与数据 | `nido codex detach` |
-| 更新内置 Proxy | `nido proxy update` |
+| 查询 / 停止状态下更新内置 Proxy | `nido proxy update --check` / `nido proxy update` |
 | 停止 / 卸载内置 Proxy 程序 | `nido proxy stop` / `nido proxy remove` |
 | 显式安装可选 GDS | `nido gds install --artifact /absolute/path/to/gds` |
 | 查看命令说明 | `nido --help` |
@@ -104,7 +127,13 @@ make smoke
 make dist TARGET_OS=linux TARGET_ARCH=amd64
 ```
 
-测试使用临时目录、模拟安装器和组件夹具，不需要真实 Codex、代理服务或 GPU。GDS 的额外隔离测试通过 `make check-gds` 显式选择。
+常规测试使用临时目录、模拟安装器和组件夹具，不需要真实 Codex、代理服务或 GPU。GDS 的额外隔离测试通过 `make check-gds` 显式选择。
+
+真实 Mihomo 的回环兼容测试通过 `NIDO_TEST_MIHOMO=/absolute/path/to/verified/mihomo make check-proxy-real` 显式执行；测试不下载程序，仅使用临时 HOME、临时软件根和本地 provider/HTTP/SOCKS 夹具。核心来源、结果和验证范围见 [Proxy 审计记录](docs/proxy-audit.md)。
+
+已有 Linux Docker engine 时，可用已核验的 Linux 核心执行 `NIDO_TEST_MIHOMO=/absolute/path/to/linux-mihomo make check-proxy-linux`。它在无外部网络、无宿主挂载的临时同架构容器中原生运行，不安装系统服务。
+
+原生 Linux 主机已有 bubblewrap 时，可用 `make check-proxy-linux-native` 运行同样的四产物隔离检查；race 模式要求 CLI 和两份测试程序全部启用检测。预构建输入、静态链接和两种入口的用法见 [Proxy 验证说明](docs/proxy-design.md#linux-race-与原生主机入口)。
 
 - [使用指南](docs/usage.md)：目录、代理、官方安装更新与数据边界。
 - [设计说明](docs/go-design.md)：外部集成与内置组件的职责及扩展方式。

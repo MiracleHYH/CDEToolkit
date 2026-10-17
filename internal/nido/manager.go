@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/MiracleHYH/CDEToolkit/internal/builtin"
+	"github.com/MiracleHYH/CDEToolkit/internal/components/proxy"
 	"github.com/MiracleHYH/CDEToolkit/internal/integrations/codex"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -39,6 +40,7 @@ type Manager struct {
 	Env                        []string
 	Codex                      codex.Service
 	Builtins                   builtin.Manager
+	Proxy                      proxy.Service
 	configBytes                []byte
 	rootInfo                   os.FileInfo
 }
@@ -98,6 +100,7 @@ func New(root string) (*Manager, error) {
 	}
 	m.Codex = codex.Service{Root: root, UserHome: home, Env: m.Env}
 	m.Builtins = builtin.Manager{Root: root, Env: m.Env}
+	m.Proxy = proxy.Service{Root: root, Env: m.Env, Launcher: exe}
 	b, err := readFile(filepath.Join(root, "config.toml"), 1<<20)
 	if err == nil {
 		var config Config
@@ -156,7 +159,7 @@ func readFile(path string, limit int64) ([]byte, error) {
 	if !s.Mode().IsRegular() || s.Size() > limit {
 		return nil, fmt.Errorf("需要大小受限的普通文件: %s", path)
 	}
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -495,7 +498,31 @@ func (m *Manager) ConfigureCodex(fn func(codex.Config) (codex.Config, error)) er
 // cannot be committed. It never rolls back upstream programs or application
 // data, and refuses compensation over concurrent user edits.
 func (m *Manager) ConfigureProxy(endpoint string, detach bool) error {
+	return m.configureProxy(endpoint, detach, nil)
+}
+
+// ConfigureBuiltinProxy keeps the selected component snapshot valid across
+// confirmation and the external .env edit, without coupling either component.
+func (m *Manager) ConfigureBuiltinProxy(expected proxy.Endpoint) error {
+	return m.configureProxy(expected.URL(), false, &expected)
+}
+
+func (m *Manager) checkBuiltinEndpoint(expected *proxy.Endpoint) error {
+	if expected == nil {
+		return nil
+	}
+	current, err := m.Proxy.Endpoint(expected.Name)
+	if err != nil || current != *expected || current.Authentication {
+		return fmt.Errorf("内置 Proxy 端点在操作期间发生变化；未保存过期代理地址")
+	}
+	return nil
+}
+
+func (m *Manager) configureProxy(endpoint string, detach bool, expected *proxy.Endpoint) error {
 	return m.mutate(false, func() error {
+		if err := m.checkBuiltinEndpoint(expected); err != nil {
+			return err
+		}
 		before := m.Config
 		priorBytes := append([]byte(nil), m.configBytes...)
 		if detach && m.Config.Codex.ProxyBlock == "" {
@@ -510,6 +537,12 @@ func (m *Manager) ConfigureProxy(endpoint string, detach bool) error {
 		}
 		next, undo, err := m.Codex.ChangeProxy(m.Config.Codex, endpoint)
 		if err != nil {
+			return err
+		}
+		if err := m.checkBuiltinEndpoint(expected); err != nil {
+			if undoErr := undo(); undoErr != nil {
+				return fmt.Errorf("%w；代理块已变化，无法安全恢复本次修改: %v", err, undoErr)
+			}
 			return err
 		}
 		if detach {
@@ -542,6 +575,31 @@ type Status struct {
 func (m *Manager) Status() []Status {
 	c := m.Codex.Status(m.Config.Codex)
 	rows := []Status{{Name: "codex", Kind: "external", Configured: m.Config.Codex.Home != "", State: c.State, Version: c.Version, Directory: c.Home, Detail: c.Detail}}
+	p := m.Proxy.Status()
+	state := "未安装"
+	if p.Program == "present" {
+		state = "已停止"
+		if p.Config != "readable" {
+			state = "待配置"
+		}
+		if p.Runtime.State == "running" {
+			state = "运行中"
+		}
+		if p.Runtime.State == "starting" {
+			state = "启动中"
+		}
+		if p.Runtime.State == "exited" {
+			state = "已退出"
+		}
+	}
+	if len(p.Problems) != 0 {
+		state = "异常"
+	}
+	detail := strings.Join(p.Problems, "；")
+	if p.ConfigChanged {
+		detail += " 配置已修改，请显式 restart"
+	}
+	rows = append(rows, Status{Name: "proxy", Kind: "builtin", Configured: p.Config == "readable", State: state, Directory: filepath.Join(m.Root, "proxy"), Detail: strings.TrimSpace(detail)})
 	for _, name := range builtin.Names() {
 		b := m.Builtins.Status(name)
 		state := "未安装"

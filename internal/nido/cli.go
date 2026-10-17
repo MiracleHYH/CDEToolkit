@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/MiracleHYH/CDEToolkit/internal/builtin"
+	"github.com/MiracleHYH/CDEToolkit/internal/components/proxy"
 	"github.com/MiracleHYH/CDEToolkit/internal/integrations/codex"
 )
 
@@ -26,7 +27,13 @@ nido [--root DIR] COMMAND
   codex proxy URL|builtin|off   配置 .env 中属于 Nido 的代理块
   codex detach                 解除关联，保留全部 Codex 程序和数据
   proxy install / update       安装或更新内置 Mihomo，不自动启动
-  proxy start / stop / remove  只控制本实例；卸载保留配置和数据
+  proxy configure [--file FILE] 配置原生 YAML，替换前要求停止
+  proxy validate / config-path 核心验证 / 查询配置路径
+  proxy start / stop / restart 只控制本实例并确认监听就绪
+  proxy status / endpoint [NAME] / logs [--tail N]
+  proxy update --check         查询当前与最新核心版本
+  proxy probe --url URL / remove
+                               显式测试目标 / 卸载保留配置数据
   gds install / update / remove
                                GDS 显式可选，需本地程序；Go 调度启动待适配
   path / version               输出软件目录 / CLI 版本
@@ -36,6 +43,8 @@ nido [--root DIR] COMMAND
   --home DIR                   外部 CODEX_HOME，不得位于 Nido 目录内
   --proxy URL                  仅为本次官方安装、更新或版本查询指定代理
   --artifact FILE --sha256 HASH 内置组件程序来源与校验
+  --file FILE / --url URL / --tail N
+                               Proxy 的配置输入 / 探测目标 / 日志行数
   --yes                        确认显式操作，不猜测来源或迁移数据
   --dry-run                    只读预览，不下载、不安装、不写配置
   --json                       结构化输出
@@ -51,11 +60,13 @@ type CLI struct {
 	promptOut io.Writer
 	tty       *os.File
 	// Runner is injected only by Go isolation tests, never a CLI flag.
-	Runner codex.Runner
+	Runner      codex.Runner
+	ProxyRunner proxy.Runner
 }
 
 type cliOptions struct {
 	root, home, proxy, artifact, checksum string
+	file, url, tail                       string
 	yes, dry, json, check                 bool
 }
 
@@ -74,7 +85,7 @@ func parse(args []string) (cliOptions, []string, error) {
 			o.json = true
 		case "--check":
 			o.check = true
-		case "--root", "--home", "--proxy", "--artifact", "--sha256":
+		case "--root", "--home", "--proxy", "--artifact", "--sha256", "--file", "--url", "--tail":
 			if seen[a] {
 				return o, nil, fmt.Errorf("重复选项: %s", a)
 			}
@@ -98,6 +109,12 @@ func parse(args []string) (cliOptions, []string, error) {
 				o.artifact = v
 			case "--sha256":
 				o.checksum = v
+			case "--file":
+				o.file = v
+			case "--url":
+				o.url = v
+			case "--tail":
+				o.tail = v
 			}
 		default:
 			if strings.HasPrefix(a, "-") {
@@ -167,7 +184,7 @@ func (c CLI) Run(args []string) int {
 	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if a == "--root" || a == "--home" || a == "--proxy" || a == "--artifact" || a == "--sha256" {
+		if a == "--root" || a == "--home" || a == "--proxy" || a == "--artifact" || a == "--sha256" || a == "--file" || a == "--url" || a == "--tail" {
 			i++
 			continue
 		}
@@ -189,7 +206,10 @@ func (c CLI) Run(args []string) int {
 	}
 	command := words[0]
 	words = words[1:]
-	component := command == "codex" || builtin.Known(command)
+	component := command == "codex" || command == "proxy" || builtin.Known(command)
+	if command != "proxy" && (o.file != "" || o.url != "" || o.tail != "") {
+		return c.fail(fmt.Errorf("--file、--url、--tail 仅用于 Proxy 对应操作"))
+	}
 	if !component && (o.home != "" || o.proxy != "" || o.artifact != "" || o.checksum != "" || o.check) {
 		return c.fail(fmt.Errorf("组件选项不能用于 %s", command))
 	}
@@ -209,6 +229,9 @@ func (c CLI) Run(args []string) int {
 	}
 	if c.Runner != nil {
 		m.Codex.Run = c.Runner
+	}
+	if c.ProxyRunner != nil {
+		m.Proxy.Runner = c.ProxyRunner
 	}
 	switch command {
 	case "path":
@@ -297,6 +320,8 @@ func (c CLI) Run(args []string) int {
 		}
 	case "codex":
 		return c.codex(m, o, words)
+	case "proxy":
+		return c.proxy(m, o, words)
 	default:
 		if builtin.Known(command) {
 			return c.builtin(m, o, command, words)
@@ -483,12 +508,20 @@ func (c *CLI) codex(m *Manager, o cliOptions, args []string) int {
 			return c.fail(fmt.Errorf("使用 codex proxy URL|builtin|off"))
 		}
 		endpoint := rest[0]
+		var builtinEndpoint *proxy.Endpoint
 		if endpoint == "builtin" {
-			v, e := m.Builtins.ProxyEndpoint()
+			v, e := m.Proxy.Endpoint("")
 			if e != nil {
 				return c.fail(e)
 			}
-			endpoint = v
+			if v.Authentication {
+				return c.fail(fmt.Errorf("内置入口需要认证；请显式提供代理 URL"))
+			}
+			endpoint = v.URL()
+			builtinEndpoint = &v
+			if !o.dry && m.Proxy.Status().Runtime.State != "running" {
+				fmt.Fprintln(c.Err, "内置 Proxy 尚未运行；仅保存端点，不启动服务。")
+			}
 		}
 		if o.dry {
 			checkEndpoint := endpoint
@@ -506,7 +539,12 @@ func (c *CLI) codex(m *Manager, o cliOptions, args []string) int {
 		if endpoint == "off" {
 			endpoint = ""
 		}
-		e := m.ConfigureProxy(endpoint, false)
+		var e error
+		if builtinEndpoint != nil {
+			e = m.ConfigureBuiltinProxy(*builtinEndpoint)
+		} else {
+			e = m.ConfigureProxy(endpoint, false)
+		}
 		if e != nil {
 			return c.fail(e)
 		}
