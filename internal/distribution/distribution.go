@@ -47,7 +47,7 @@ func assetName(platform string) (string, error) {
 	if !slices.Contains(Platforms, platform) {
 		return "", fmt.Errorf("不支持的发布平台: %s", platform)
 	}
-	return "cdet-" + strings.ReplaceAll(platform, "/", "-") + ".tar.gz", nil
+	return "nido-" + strings.ReplaceAll(platform, "/", "-") + ".tar.gz", nil
 }
 
 func checkBinary(data []byte, version, platform string) error {
@@ -58,8 +58,8 @@ func checkBinary(data []byte, version, platform string) error {
 		return err
 	}
 	info, err := buildinfo.Read(bytes.NewReader(data))
-	if err != nil || info.Path != "github.com/MiracleHYH/CDEToolkit/cmd/cdet" || info.Main.Path != "github.com/MiracleHYH/CDEToolkit" {
-		return fmt.Errorf("发布文件不是 STK Go 主程序")
+	if err != nil || info.Path != "github.com/MiracleHYH/CDEToolkit/cmd/nido" || info.Main.Path != "github.com/MiracleHYH/CDEToolkit" {
+		return fmt.Errorf("发布文件不是 Nido Go 主程序")
 	}
 	settings := map[string]string{}
 	for _, setting := range info.Settings {
@@ -104,7 +104,7 @@ func Pack(binary, output, version, platform string) (string, error) {
 func writeArchive(out io.Writer, binary []byte) error {
 	gz := gzip.NewWriter(out)
 	tw := tar.NewWriter(gz)
-	header := &tar.Header{Name: "cdet", Typeflag: tar.TypeReg, Mode: 0755, Size: int64(len(binary)), ModTime: time.Unix(0, 0), Format: tar.FormatUSTAR}
+	header := &tar.Header{Name: "nido", Typeflag: tar.TypeReg, Mode: 0755, Size: int64(len(binary)), ModTime: time.Unix(0, 0), Format: tar.FormatUSTAR}
 	if err := tw.WriteHeader(header); err != nil {
 		return err
 	}
@@ -150,8 +150,8 @@ func unpack(data []byte) ([]byte, error) {
 	limited := &io.LimitedReader{R: gz, N: maxBinary + 4097}
 	tr := tar.NewReader(limited)
 	header, err := tr.Next()
-	if err != nil || header.Name != "cdet" || header.Typeflag != tar.TypeReg || header.Format != tar.FormatUSTAR || header.Mode != 0755 || header.Size < 1 || header.Size > maxBinary || header.Linkname != "" || len(header.PAXRecords) != 0 || header.Uid != 0 || header.Gid != 0 || header.Uname != "" || header.Gname != "" {
-		return nil, fmt.Errorf("发布包必须只含一个普通可执行文件 cdet")
+	if err != nil || header.Name != "nido" || header.Typeflag != tar.TypeReg || header.Format != tar.FormatUSTAR || header.Mode != 0755 || header.Size < 1 || header.Size > maxBinary || header.Linkname != "" || len(header.PAXRecords) != 0 || header.Uid != 0 || header.Gid != 0 || header.Uname != "" || header.Gname != "" {
+		return nil, fmt.Errorf("发布包必须只含一个普通可执行文件 nido")
 	}
 	binary, err := io.ReadAll(tr)
 	if err != nil {
@@ -205,7 +205,7 @@ func writeFile(path string, data []byte) error {
 	if err = os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".cdet-dist-*")
+	f, err := os.CreateTemp(filepath.Dir(path), ".nido-dist-*")
 	if err != nil {
 		return err
 	}

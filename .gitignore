@@ -46,6 +46,8 @@ id_ed25519
 id_ed25519.*
 
 # Go management state, generated launchers, service files and rollback data
+/.nido/
+/nido
 /.cdet/
 /.cdet-store/
 /state.json

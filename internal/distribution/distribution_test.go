@@ -85,7 +85,7 @@ func tarFixture(t *testing.T, headers []*tar.Header, tail []byte) []byte {
 
 func TestArchiveRejectsExtraUnsafeAndCorruptContents(t *testing.T) {
 	valid := func() *tar.Header {
-		return &tar.Header{Name: "cdet", Mode: 0755, Typeflag: tar.TypeReg, Format: tar.FormatUSTAR, Size: 1}
+		return &tar.Header{Name: "nido", Mode: 0755, Typeflag: tar.TypeReg, Format: tar.FormatUSTAR, Size: 1}
 	}
 	for _, name := range []string{"traversal", "link", "directory", "mode", "extra-installer", "pax", "owner", "oversized", "truncated", "crc", "tail"} {
 		t.Run(name, func(t *testing.T) {
@@ -127,9 +127,9 @@ func TestArchiveRejectsExtraUnsafeAndCorruptContents(t *testing.T) {
 }
 
 func TestVerifyRequiresDigestFilenameAndGoIdentity(t *testing.T) {
-	data := tarFixture(t, []*tar.Header{{Name: "cdet", Typeflag: tar.TypeReg, Mode: 0755, Size: 1, Format: tar.FormatUSTAR}}, nil)
+	data := tarFixture(t, []*tar.Header{{Name: "nido", Typeflag: tar.TypeReg, Mode: 0755, Size: 1, Format: tar.FormatUSTAR}}, nil)
 	root := t.TempDir()
-	path := filepath.Join(root, "cdet-linux-amd64.tar.gz")
+	path := filepath.Join(root, "nido-linux-amd64.tar.gz")
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestVerifyRequiresDigestFilenameAndGoIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := Verify(path, "1.2.3", "linux/amd64"); err == nil {
-			t.Fatal("wrong digest/path or a non-STK program was accepted")
+			t.Fatal("wrong digest/path or a non-Nido program was accepted")
 		}
 	}
 }
@@ -169,7 +169,7 @@ func TestPackRejectsForeignProgramBeforeCreatingOutput(t *testing.T) {
 	}
 	out := filepath.Join(t.TempDir(), "dist")
 	if _, err = Pack(self, out, "1.2.3", runtime.GOOS+"/"+runtime.GOARCH); err == nil {
-		t.Fatal("a test executable was packaged as the STK app")
+		t.Fatal("a test executable was packaged as the Nido app")
 	}
 	if _, err = os.Lstat(out); !os.IsNotExist(err) {
 		t.Fatal("invalid input created distribution files")

@@ -1,6 +1,6 @@
 # Server Toolkit — 旧 Bash 入口兼容说明
 
-本文记录仍保留的旧入口行为，不代表新版 Go 功能范围。当前开发、验证和发行以 [Go README](../README.md) 与 [CI/发布说明](go-ci-release.md) 为准。旧入口和运行目录尚未切换。
+> **仅适用于旧 Bash 入口，不适用于当前 Nido CLI。** 本文中的 stk、Supervisor、迁移和历史安装命令均作为旧行为记录保留。当前 main 的 Nido 重构尚未发布，使用方式见 [README](../README.md) 与 [使用指南](usage.md)；已有真实入口和运行目录没有因源码重构而切换。
 
 面向持久化开发容器的一体化工具包。`stk` 提供统一配置、模块安装、状态、日志、诊断和生命周期管理；当前运行模块由 supervisord 直接监管，不依赖 Kubernetes 层配置。
 

@@ -34,13 +34,10 @@ jobs:
           cache-dependency-path: go.sum
       - name: Check exact tag, source, packages and native executable
         env:
-          STK_RELEASE_TAG: ${{ github.ref_name }}
+          NIDO_RELEASE_TAG: ${{ github.ref_name }}
         run: |
           go mod verify
-          sudo unshare --mount --pid --fork --mount-proc --kill-child \
-            --setgid="$(id -g)" --setuid="$(id -u)" -- \
-            env HOME="$HOME" PATH="$PATH" GOTOOLCHAIN=local GOFLAGS=-mod=readonly \
-            STK_RELEASE_TAG="$STK_RELEASE_TAG" make release-check
+          make release-check
           go install github.com/zricethezav/gitleaks/v8@v8.30.0
           export PATH="$(go env GOPATH)/bin:$PATH"
           ./scripts/public-audit.sh
@@ -54,7 +51,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          assets=(dist/cdet-{linux,darwin}-{amd64,arm64}.tar.gz{,.sha256} dist/install.sh)
+          assets=(dist/nido-{linux,darwin}-{amd64,arm64}.tar.gz{,.sha256} dist/install.sh)
           files=()
           for asset in "${assets[@]}"; do
             cosign sign-blob --yes --bundle "${asset}.sigstore.json" "$asset"

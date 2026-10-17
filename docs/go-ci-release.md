@@ -1,119 +1,65 @@
-# Go 检查与发行
+# Nido 构建、检查与发行
 
-当前文档描述 v0.2.1 起的双目录版本。命令为 `cdet`，主程序位于 `cmd/cdet`，发行辅助工具位于 `cmd/cdet-dist`。Go 生命周期不调用旧 Bash 或 Python 安装后端。
+Nido: Lightweight Development Environment Manager。开发中的命令为 `nido`，主程序位于 `cmd/nido`；源码发行工具位于 `cmd/nido-dist`，不会进入安装包。Go module 和 GitHub 仓库仍使用 `github.com/MiracleHYH/CDEToolkit`。
 
-## 本地入口
+本次重构尚未发布。已经公开的历史 Release 不因源码改名而改变；下述新包名与安装行为需要未来发布后才会在公开下载地址生效。
+
+## 本地检查
 
 | 命令 | 范围 |
 |---|---|
-| `make check` | 格式、Shell 语法、vet、race、隔离安装器和 CLI 测试 |
-| `make smoke` | 构建本机包、校验包与摘要，只读运行版本和空环境状态 |
-| `make dist TARGET_OS=linux TARGET_ARCH=amd64` | 构建并校验一个平台包 |
-| `make release` | 本地构建四平台包、摘要和 POSIX 下载器 |
-| `make verify-release` | 本地复核四包及下载器源码一致性 |
-| `make check-gds` | 显式选择 Linux 的模拟 GPU/CUDA 隔离测试 |
+| `make check` | 格式、Shell 语法、vet、race、下载器与 CLI 隔离验证 |
+| `make smoke` | 构建并校验本机发行包，运行只读版本与空环境状态检查 |
+| `make dist TARGET_OS=linux TARGET_ARCH=amd64` | 构建、打包并校验指定平台 |
+| `make release` | 仅在本地构建四个平台包、摘要与 POSIX 下载器 |
+| `make verify-release` | 复核四个平台包与下载器源码一致性 |
+| `make check-gds` | 显式运行假 GPU、假 CUDA 和 CPU worker 的 GDS 隔离测试 |
 
-这些构建目标不上传产物、不安装真实组件，也不启动服务。`make check` 会在临时目录部署测试 CLI，并运行合成组件；不会使用真实 HOME、认证、会话或配置。
+这些目标不会上传、安装或启动真实组件。安装器测试使用临时 HOME、合成 Release、本地 curl 夹具及禁止执行的组件命令；验证外部 Codex 配置、认证、会话、数据库、代理文件和 Shell 配置保持原样。
 
-`VERSION` 是版本来源。正式发布检查使用 `STK_RELEASE_TAG=vX.Y.Z make release-check`，要求标签存在、等于 VERSION、指向当前 HEAD 且工作树干净。此目标仍只检查和构建，不替用户提交、创建标签或推送。
+`VERSION` 是软件版本来源，`.go-version` 固定发行工具链，`go.mod` 声明最低 Go 版本。`NIDO_RELEASE_TAG=vX.Y.Z make release-check` 还会核验 Git 工作树干净、标签等于 VERSION 且指向当前 HEAD；它不会替用户创建标签或推送。
 
-源码最低 Go 1.23；固定发行工具链为 `.go-version` 中的 Go 1.27.2。运行时是单个 CGO=0 程序，无 SQLite 驱动、Python、Node 或宿主 sqlite3 依赖。配置解析只使用 TOML/YAML 基础依赖。
+Go 检查直接使用 runner 普通权限。Codex 外部辅助集成不扫描全机进程，不再为迁移检查额外创建特权 PID 或挂载命名空间。
+
+## 安装边界
+
+`scripts/install.sh` 是 POSIX 下载器，只依赖 curl、tar 和 SHA-256 工具。它接受 `--version`、`--root`、`--yes` 与 `--dry-run`，软件目录默认为 `~/.nido`，可通过 `NIDO_HOME` 指定。旧的 `--prefix`、`--store` 和迁移参数不再支持。
+
+下载器只获取当前平台 Nido 包与摘要，核对摘要、单成员归档和程序报告的版本，再由临时 Nido 执行：
+
+```sh
+nido --root /absolute/software/path init --yes
+```
+
+初始化只把 Nido 放入 `<root>/bin/nido`，写入自己的配置与 `env.sh` 并输出 Shell 接入说明。它不会下载内置组件、发现或关联 Codex、启动服务、覆盖其他入口或编辑用户 Shell 文件。已有无归属的文件与链接必须拒绝覆盖。
+
+安装器可用本地夹具验证，不能为了测试而下载并执行真实 Codex 安装脚本。外部 Codex 的关联、代理和官方安装委托由独立集成逻辑与对应隔离测试负责。
+
+根目录 `install.sh` 和其他历史 Bash 入口暂时保留为冻结源码；它们不是 Nido 下载器，也不会打入 Go 包。
 
 ## GitHub Actions
 
-`check.yml` 在 Linux 最低 Go、Linux 固定发行 Go 和 macOS 固定发行 Go 上执行检查与只读冒烟。源码与历史另做 gitleaks 审查。GDS job 仅在手动触发并选择时运行。
+`check.yml` 在 Linux 最低 Go、Linux 固定 Go 和 macOS 固定 Go 上执行 `make check smoke`。单独检查源码与历史中的敏感内容。GDS job 只在手动选择后运行。
 
-Linux 检查在独立 PID 和挂载命名空间中运行，并将 `/proc` 重新挂载为该命名空间的进程视图。GitHub runner 的部分同 UID 辅助进程禁止读取程序或工作目录，会触发组件进程检查的安全拒绝；隔离后只检查测试及其合成子进程。sudo 只用于创建命名空间，执行检查前由 unshare 降回 runner 的 UID/GID；不隔离网络，不以 root 运行测试，不跳过进程检查，也不放宽生产环境的拒绝规则。macOS 继续直接执行相同检查目标。发布流程的 `make release-check` 使用相同边界，并显式传入原始标签；依赖校验、源码审查、签名和上传仍在宿主运行。
+`release.yml` 只响应 `v*` 标签。在上传前，它检查精确标签、源码、测试、包与本机只读冒烟，再使用 Sigstore 签名并逐项验证发布白名单。普通检查仅有 `contents: read`；只有发布 job 才拥有上传和 OIDC 权限。Action 固定完整 SHA，checkout 不保留凭据。
 
-`release.yml` 只响应 `v*` 标签。它复核标签、源码、测试、包与本机冒烟，再逐项签名、自验证并发布白名单资产。普通检查只有 `contents: read`；发布 job 才具有上传和 OIDC 权限。Action 固定完整提交 SHA，checkout 不保留凭据。
+未来发行资产仅包含：
 
-发布白名单为：
+- Linux/macOS × amd64/arm64 的四个 `nido-GOOS-GOARCH.tar.gz`，每包只含一个普通可执行文件 `nido`。
+- 四个对应 `.sha256` 文件。
+- 来自 `scripts/install.sh` 的单个 `install.sh`。
+- 上述九个文件各自的 `.sigstore.json` bundle。
 
-- Linux/macOS × amd64/arm64 的四份 `cdet-GOOS-GOARCH.tar.gz`。
-- 四份对应 `.sha256`。
-- 来自 `scripts/install.sh` 的单份 POSIX 下载器。
-- 每项资产对应的 `.sigstore.json`。
+发行流程不会上传用户数据、仓库快照、旧 Bash 安装器或 dist 中其他文件。源码 URL 和仓库名保持不变：
 
-每个压缩包只含一个 `cdet` 程序，不含组件、配置、认证、会话、缓存、旧 Bash 或整份源码。签名或验证失败时阻止发布；额外 `dist/` 文件不会被通配上传。
+```text
+https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh
+```
 
-包校验使用 Go 标准库，检查摘要、归档结构、固定权限、程序身份和目标平台；拒绝越界、链接、额外成员、损坏压缩流和异常尾随数据。跨平台产物只做静态校验，本机产物才执行只读冒烟。
+## 发行校验
 
-## 安装器与隔离验证
+包校验检查 Go 主程序身份、GOOS/GOARCH、CGO=0、唯一普通成员、权限、大小、归档尾部和 SHA-256 文件名，拒绝链接、越界路径、额外成员、损坏 CRC 和尾随数据。归档时间和所有者固定，避免泄露构建机器信息。
 
-POSIX 下载器依赖系统 curl、tar 和 SHA-256 工具，获取并校验 CLI 后交给 Go `init`。它只接受两个目标根；已有安装由 Go 的归属和身份规则处理，不代替组件安装。
+原生冒烟只运行 `version` 与 `status --json`；验证 Codex 分类为外部集成，Proxy、GDS 分类为内置组件，且空环境不配置任何组件、不创建软件目录。跨平台包只做静态校验，不尝试执行。
 
-公开入口为 `https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh`，从最新正式 Release 获取当前平台 CLI。指定 `--version X.Y.Z` 则使用对应标签的包。v0.1.0 的旧管理状态不能原位升级至 v0.2.1；新版需要独立双目录，组件迁入另行确认和执行。
-
-隔离测试使用临时 HOME、下载夹具、合成原生组件和禁止服务调用的哨兵。Codex 安装更新只执行假 curl 返回的本地模拟脚本；Mihomo 控制 API 使用本地 HTTP 夹具，不运行真实官方安装器或真实服务。发布脚本测试使用假 cosign/gh，不进行真实签名或上传。服务器验证只在独立临时目录运行并清理，不操作既有安装。
-
-Go 最低版本、完整测试、四平台构建和 Linux 临时环境的结果应以本轮实际输出记录到 [验证范围](two-root-audit.md)，不能沿用已删除数据库实现的历史结果。
-
-## 历史清理记录（原文保留）
-
-以下为 CI 初次迁移时的清理和验证记录，不作为当前布局或测试通过的声明。
-
-## 已删除的源码
-
-共 28 个文件。删除前已制作源码备份并记录逐文件摘要；解除工作流及 check.sh 的调用后复查了保留源码的引用。GDS 独立测试仍使用的三份夹具（nvcc、gds-nvidia-smi、gds-worker.c）保留。
-
-- `scripts/bootstrap.sh`
-- `scripts/release-check.sh`
-- `scripts/release-smoke.sh`
-- `tests/bootstrap-pty.py`
-- `tests/fault-injection.sh`
-- `tests/fixtures/bootstrap-bin/cosign`
-- `tests/fixtures/bootstrap-bin/curl`
-- `tests/fixtures/bootstrap-bin/mv`
-- `tests/fixtures/codex`
-- `tests/fixtures/codex-installer.sh`
-- `tests/fixtures/conda`
-- `tests/fixtures/curl`
-- `tests/fixtures/git-fault`
-- `tests/fixtures/gitleaks`
-- `tests/fixtures/gzip-fault`
-- `tests/fixtures/mihomo-core`
-- `tests/fixtures/mihomo-curl`
-- `tests/fixtures/mihomo-release.json`
-- `tests/fixtures/pm`
-- `tests/fixtures/sleep`
-- `tests/fixtures/slow-editor.sh`
-- `tests/fixtures/supervisorctl`
-- `tests/fixtures/systemctl`
-- `tests/installer-pty.py`
-- `tests/platform.sh`
-- `tests/run.sh`
-- `tests/supervisor-integration.sh`
-- `tests/toolkit-menu-pty.py`
-
-## 保留及原因
-
-| 范围 | 保留原因 |
-| --- | --- |
-| toolkit.sh、install.sh、codex-launcher.sh、lib、modules、platforms | 旧入口尚未切换；动态 module/source 链和安装器仍依赖它们，不能拆空当前入口 |
-| proxy 的管理器、安装器、Python helper、公开模板与 runtime.lock | 旧 pm/install/codex 仍有引用；不为源码清理动实际代理配置或运行时 |
-| preflight-update.sh、check.sh、public-audit.sh | lifecycle 仍调用预检，预检要求后两路径存在；check.sh 已收敛为 Go 检查入口，public-audit 仍服务 CI |
-| service-start.sh、log-maintenance.sh、ssh-agent.sh、systemd 模板 | 可能被已注册服务或 Shell 引用；保留固定路径，不迁移或卸载实际注册内容 |
-| gds 目录及其依赖的 common/config/codex/modules 等库 | 可选 GDS 的安装/直管模式仍需依赖；运行源码及现有配置原样保留 |
-
-没有为了删除模块而改写用户 Skill、AGENTS、Shell 或服务配置。旧核心不会进入 Go 包，也不会被 Go 作为安装、下载、解包或配置后端调用。实际入口未来切换后，再按新的引用快照清理剩余兼容组。
-
-## 验证范围
-
-发布工具新增单元检查覆盖版本/tag、可复现包元数据、归档越界/链接/额外成员/CRC/尾随数据、摘要文件名、输出链接保护和错误程序身份。
-本轮还验证 Go 最低版本与固定工具链、四个平台的包、macOS/Linux 原生只读冒烟、Go CLI 数据哨兵、可选 GDS 的假 worker 清理、actionlint，以及隔离 Git 仓库中的源码/历史审查。
-真实组件保护基线和源码清单在同步前后独立核对；部署只允许明确修改/删除的源码路径，摘要冲突立即停止。测试二进制、工具链与产物只放在工作区或远端临时目录。
-
-## 历史：CDEToolkit 命名与首次一行安装
-
-本节对应 schema-1 的首次发布，保留当时验证记录；文件事务、自更新回滚及旧入口兼容均不是当前 schema-4 功能。
-
-首次提交 5ecfb46 的 GitHub Actions 全部通过（Linux Go 1.23/1.27.2、macOS、public-audit）；GDS 按可选策略跳过，没有失败项。
-
-Go module 使用 github.com/MiracleHYH/CDEToolkit，主程序入口为 cmd/cdet，发行辅助入口为 cmd/cdet-dist。
-四个平台包改为 cdet-GOOS-GOARCH.tar.gz，包内只有 cdet；独立 install.sh 来自 scripts/install.sh，逐字节核对源码后才签名发布。
-发布白名单包含四包、四摘要和一个 POSIX 安装器及各自的 Sigstore bundle；不会上传旧根目录 install.sh 或其他 dist 文件。
-
-安装器不依赖 Bash、Go 或 Python，使用系统 curl/tar/SHA-256 工具。其首次初始化、自更新、入口登记仍由 Go 文件事务完成。
-新增隔离验证覆盖初装/重复/版本固定/预览、错误摘要、无 Release、额外归档成员、无归属文件和链接、父目录链接、版本不匹配及不支持的架构。
-另验证 schema-1 旧入口兼容、管理命令相对链接的挂载重定位和安全卸载，以及包含新命令入口的更新记录退役/回滚。
-所有安装验证使用临时 HOME、TLS/下载夹具及假服务命令，不针对现有组件执行生命周期操作。
+发布测试只调用假的 cosign 与 gh，覆盖签名或验签失败后停止上传，以及发布白名单。测试本身不产生标签、发布、推送或真实服务操作。
