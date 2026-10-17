@@ -1,135 +1,150 @@
 # CDEToolkit
 
-Cloud Development Environment Toolkit，命令名 **`cdet`**。轻量管理开发机上的 Codex、Proxy 和可选 GDS：统一目录、完整迁入、重建入口，并调用软件自身的安装与更新能力。
+**用 `cdet` 统一管理开发机上的 Codex 和代理。**
 
-自 v0.2.1 起采用 schema-4 双目录协议。v0.1.0 使用旧布局，其管理状态不支持原位升级；请为新版选择独立的安装目录和组件存储目录，已有组件需通过新版的完整迁入流程另行处理。
+CDEToolkit（Cloud Development Environment Toolkit）是一个轻量的命令行工具：新开发机上直接安装组件，已有环境中完整迁入组件数据，持久化存储换了挂载位置后重新定位并修复入口。
 
-## 一行安装
+支持 **Linux / macOS · amd64 / arm64**。运行时只需一个 Go 编译的可执行文件，无需安装 Go、Python 或 Node。
+
+[快速开始](#快速开始) · [已有组件迁入](#已有组件迁入) · [常用命令](#常用命令) · [使用指南](docs/usage.md) · [下载版本](https://github.com/MiracleHYH/CDEToolkit/releases/latest)
+
+## 快速开始
+
+### 1. 安装 CDEToolkit
+
+在需要管理的开发机终端执行：
 
 ```sh
 curl -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh
 ```
 
-安装器会询问两个目标目录，只下载并初始化最新正式版 Go CLI，不安装、迁入或启动组件，也不改写 Shell 配置。无交互安装可指定两个目录：
+安装器下载最新正式版，并询问两个目录。直接回车即可使用默认值：
 
-```sh
-curl -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh \
-  | sh -s -- --prefix /persistent/cdet-cli --store /persistent/components
-```
+| 目录 | 默认位置 | 用途 |
+| --- | --- | --- |
+| 安装目录 | `~/.cdet` | `cdet` 和组件的命令入口 |
+| 组件存储目录 | `~/.cdet-store` | Codex、Proxy 等组件的程序和完整数据 |
 
-使用默认安装目录时，可在当前 Shell 加载 PATH：
+两个目录应选择在持久化存储上，且互不包含。安装器需要 `curl`、`tar` 和 SHA-256 工具（`sha256sum` 或 `shasum`）。这一步只安装管理工具，组件在下一步单独安装。
+
+### 2. 让终端找到 cdet
+
+使用默认安装目录时，在当前 Bash / Zsh 终端执行：
 
 ```sh
 eval "$("$HOME/.cdet/bin/cdet" env bash)"
 cdet version
 ```
 
-自定义目录时，将上述 CLI 路径替换为 `<安装目录>/bin/cdet`。也可通过安装器的 `--version 0.2.1` 固定版本。
+若选择了自定义安装目录，将第一行中的 `$HOME/.cdet/bin/cdet` 替换为实际的 `<安装目录>/bin/cdet`。命令中的 `env bash` 输出也适用于 Zsh。
 
-## 两个目录
+安装器不自动修改 Shell 配置。希望每次打开终端都能使用时，将上面的 `eval` 行加入自己的 `~/.bashrc` 或 `~/.zshrc`。
 
-首次只选择 **cdet 安装目录** 和 **组件存储目录**，默认分别为 `~/.cdet`、`~/.cdet-store`，也可通过 `CDET_PREFIX`、`CDET_STORE` 指定。
-
-```text
-<安装目录>/
-  .instance
-  config.toml
-  bin/cdet
-  bin/codex
-  bin/mihomo
-<组件存储目录>/
-  .cdet/
-    state.json
-    bin/codex                 # 由官方安装器管理
-    bin/mihomo
-    bin/gds                   # 显式安装后才有
-  codex/                      # 完整 CODEX_HOME
-  proxy/                      # config.yaml、规则、缓存等
-  gds/                        # 显式安装后才有
-```
-
-两根互不包含。组件数据直接位于 `<store>/<组件名>`，程序使用固定入口。清单记录当前安装状态、来源及必要的归属信息，不维护历史版本仓库。
-
-## 初始化、安装与迁入
+### 3. 安装并使用 Codex
 
 ```sh
-cdet init
-# 只询问：cdet 安装目录、组件存储目录
+cdet install codex
+codex
+```
 
-cdet init --prefix /persistent/cdet-cli --store /persistent/components
+没有已有安装时，`cdet` 调用 Codex 官方脚本安装程序，并使用受管的 `CODEX_HOME`。进入你的项目目录运行 `codex`，按 Codex 的提示完成首次登录即可。Codex 本身的使用见[官方文档](https://learn.chatgpt.com/docs/codex/cli#getting-started)。
+
+如果发现已有 Codex，命令会提示将**完整 CODEX_HOME** 迁入组件存储目录，并保留来源副本。迁入前请先退出使用该目录的 Codex、daemon / app-server 等进程。可先运行 `cdet install codex --dry-run` 查看计划。
+
+## CDEToolkit 能帮你做什么
+
+| 场景 | 使用方式 |
+| --- | --- |
+| 准备一台新开发机 | 安装 Codex、Mihomo 代理；目录统一管理 |
+| 整理已有开发环境 | 将组件的完整数据迁入存储目录，保留来源副本 |
+| 持久化存储挂载路径变化 | 核对原存储身份，重新定位并重建受管命令入口 |
+| 日常维护 | 查看组件状态、比较软件版本、更新程序、卸载并保留数据 |
+
+程序安装、迁入和路径修复不会自动注册或启动服务。组件需要时由你显式运行。
+
+## 安装与使用 Proxy
+
+Proxy 使用 **Mihomo** 内核：
+
+```sh
+cdet install proxy
+cdet status
+```
+
+已有安装会提示完整迁入；没有安装时下载官方最新程序。新装后，将自己的 Mihomo 配置放到 `<组件存储目录>/proxy/config.yaml`，然后在前台运行：
+
+```sh
+cdet exec proxy --
+```
+
+也可使用生成的 `mihomo` 命令入口。工具会传入受管的数据目录和配置位置；订阅、节点及凭据由你自行提供。
+
+下载和受管组件继承当前终端的代理环境。网络受限时，先确保已有代理可用；`cdet` 不会为了下载自动启动代理。
+
+## 已有组件迁入
+
+先查看标准 HOME / XDG 目录及 PATH 中能发现的组件：
+
+```sh
 cdet scan
 cdet install codex proxy --dry-run
-cdet install codex proxy --yes
-
-cdet install codex --from codex=/existing/.codex --dry-run
-cdet install codex --from codex=/existing/.codex
-cdet install proxy --from proxy=/existing/mihomo
 ```
 
-`init` 只部署 CLI 和空清单，不安装组件或修改 Shell。`cdet env bash` 输出需要加入当前 Shell 的 PATH。发布的 `install.sh` 来自项目的 `scripts/install.sh`，下载并核对 CLI 包的 SHA-256 后转交 Go `init`。
-
-`install` 在没有组件时新装；发现已有组件时，将完整数据目录复制到存储根，校验后生成入口。`--from NAME=DIR` 指定确切的数据根，不自动下钻其 `data/` 子目录；`--fresh` 明确跳过外部安装。默认发现使用标准 HOME/XDG 目录及 PATH，不搜索整盘。自动发现的迁入需要确认或 `--yes`，显式 `--from` 表示选择该来源。
-
-**Codex 的程序安装和更新统一使用官方安装脚本**，不接受 `--artifact codex=...` 或 `--sha256 codex=...`。安装器使用受管 `CODEX_HOME`、程序目标和隔离的临时 HOME，避免修改用户的 Shell 文件。下载、安装和组件执行继承现有代理环境；CDEToolkit 不为了下载自动启动代理。
-
-Proxy 可迁入已有独立程序，或从 Mihomo 官方发布包安装。自定义 HTTPS 包必须提供摘要；GDS 始终显式可选，必须提供本地独立程序包。
+确认计划后运行 `cdet install codex proxy`。自定义位置可以明确指定来源：
 
 ```sh
-cdet install proxy --fresh --artifact proxy=latest --dry-run
-cdet install proxy --fresh --artifact proxy=/cache/mihomo.gz
-cdet install proxy --fresh --artifact proxy=https://example.org/mihomo.gz \
-  --sha256 proxy=64位十六进制摘要
-cdet install gds --fresh --artifact gds=/cache/gds
+cdet install codex --from codex=/path/to/existing/.codex --dry-run
+cdet install codex --from codex=/path/to/existing/.codex
+cdet install proxy --from proxy=/path/to/existing/mihomo
 ```
 
-新装 Proxy 可以处于待配置状态，配置放在 `<store>/proxy/config.yaml`。工具不生成订阅、凭据，也不注册或启动服务。
+`--from` 指向完整数据根，表示明确选择该来源，实际执行时不再二次询问。迁入前退出相关进程；工具复制并校验完整目录，不改写原件或解析 Codex 内部数据库。外置数据库、外部链接及系统 keyring 等边界见[迁入说明](docs/usage.md#完整迁入已有组件)。
 
-## 完整目录的安全边界
+## 常用命令
 
-Codex 迁入整个 `CODEX_HOME`，包括配置、目录内认证、会话、插件、技能和数据库。所有内容按文件复制，不解析、筛选或改写数据库，不提供“只迁对话”。迁入后运行环境为 `CODEX_HOME=<store>/codex`。
+| 目的 | 命令 |
+| --- | --- |
+| 查看组件状态和本机版本 | `cdet status` |
+| 检查是否需要修复 | `cdet doctor` |
+| 查看当前与上游最新版本 | `cdet versions` |
+| 预览组件更新 | `cdet update codex --dry-run` |
+| 更新 Codex / Proxy | `cdet update codex` / `cdet update proxy` |
+| 显式运行受管组件 | `cdet exec codex --` / `cdet exec proxy --` |
+| 卸载程序并保留数据 | `cdet remove codex` / `cdet remove proxy` |
+| 查看完整选项 | `cdet --help` |
 
-来源原件始终保留。复制在同一存储中的临时目录完成，校验后通过 rename 发布；保留权限和普通文件 mtime。合法内部链接可重定位，内部规范绝对链接仅在副本中转为相对链接。外部或循环链接、特殊文件和已识别的外置资源会阻止不完整迁入。
+更新会展示计划并请求确认。Codex 使用官方安装脚本；Mihomo 优先使用官方更新接口，该操作**可能重启 Mihomo**。更新 `cdet` 本身时，重新运行一行安装并选择原来的两个目录；自定义目录可[显式指定](docs/usage.md#安装选项与更新-cdet)。
 
-迁入前须退出访问该目录的 Codex CLI、daemon/app-server 或其他进程。工具检查进程与源文件状态，不自动停止进程；无法可靠检查时停止操作。
+## 挂载路径变化后修复
 
-通过 `cdet exec` 或生成入口启动的组件持有共享运行锁，本地程序替换、迁入和路径修复取得同组件的独占写锁。这只覆盖经 cdet 启动的进程；外部直接启动的程序仍须退出，并接受进程检查。Mihomo 官方在线更新 POST 由上游处理，不用独占写锁阻断正在运行的 Mihomo。
-
-外置 `CODEX_SQLITE_HOME`、显式 `sqlite_home`、外部附件、项目目录、MCP/插件依赖不随 HOME 自动搬迁。系统 keyring 认证也不在目录中，需要时重新登录。挂载修复重建工具定位、环境和已知官方程序链接，不能据此假定所有内部绝对路径都已适配。
-
-## 状态、版本与更新
-
-```sh
-cdet status
-cdet versions codex proxy
-cdet update codex --dry-run
-cdet update codex
-cdet update proxy --yes
-```
-
-`status` 只查询本机程序版本，不联网检查最新版本。`versions` 查询当前与上游最新版本；网络失败会明确显示。`update` 先展示版本和计划，再确认；`--yes` 跳过确认，`--dry-run` 不运行安装器、不下载程序、不调用更新 POST。
-
-Codex 交由官方脚本更新。Mihomo 在本地官方控制 API 可用时优先使用官方更新；**该操作可能重启 Mihomo**，确认前会提示。不适用时才下载、校验并替换本地程序。官方更新调用失败后不会暗中切换到另一种更新方式。
-
-工具只保留当前安装信息，不提供版本仓库、`rollback`、`self rollback` 或通用事务回放。更新 cdet 本身使用项目官方安装器。组件自身的数据兼容与恢复遵循其上游规则。
-
-## 挂载变化与卸载
+先退出使用受管组件的进程。安装目录和组件存储目录一起移动、且相对关系保持不变时，从新位置运行：
 
 ```sh
 /new/location/cdet-cli/bin/cdet repair --dry-run
 /new/location/cdet-cli/bin/cdet repair
-cdet repair --store /new/location/components
-
-cdet remove codex
-cdet remove self
 ```
 
-两根一起移动时，使用新 CLI 位置和相对关系定位存储；只移动存储时显式指定新位置。核对安装与存储身份，遇到同 ID 副本要求明确选择，缺失存储不会变成空实例。`repair` 重建引导和入口，并将已知官方 Codex `current` 与可见命令链接安全重绑为相对链接；只处理这些链接，不改写组件配置、认证、会话或数据库，也不重建旧挂载。安装根变化后需要重新载入 PATH。
+仅组件存储目录移动时：
 
-操作按组件顺序执行，不要求多组件全部成功或全部撤销。未完成操作只保留必要的短期标记；已经发布的数据目录不会被自动回滚删除。失败时保留现场并报告需处理的位置，不提供可重放任意文件变更的日志。
+```sh
+cdet repair --store /new/location/components --dry-run
+cdet repair --store /new/location/components
+```
 
-`remove` 移除受管程序和入口，完整保留 `<store>/<组件名>` 及未知文件；没有数据 purge。`remove self` 保留组件存储和引导身份，后续可重新 `init`。原来源的清理由用户验证后的独立操作完成。
+修复会核对原存储身份，重建入口和已知的官方程序链接。安装目录变化后，重新加载新位置的 PATH。组件配置中的任意绝对路径、外部项目和插件依赖仍需单独处理，详见[路径修复](docs/usage.md#挂载路径变化后的修复)。
 
-## 开发与验证
+## 更多用法
+
+- [使用指南](docs/usage.md)：自定义目录、固定版本、明确全新安装、Proxy 本地包、可选 GDS、迁入边界和卸载。
+- [设计说明](docs/go-design.md)：双目录与上游安装更新职责。
+- [安全与验证范围](docs/two-root-audit.md)：数据保留、进程检查和隔离测试。
+- [开发与发行](docs/go-ci-release.md)：本地构建、CI、四平台包和签名。
+
+**旧版提示：** v0.1.0 的管理状态不能原位升级到当前双目录版本。请选择独立的安装目录和组件存储目录，再按完整迁入流程处理已有组件。
+
+## 参与开发
+
+源码最低要求 Go 1.23，固定发行工具链见 [.go-version](.go-version)。
 
 ```sh
 make check
@@ -137,8 +152,4 @@ make smoke
 make dist TARGET_OS=linux TARGET_ARCH=amd64
 ```
 
-源码最低 Go 1.23，固定发布工具链见 `.go-version`。运行时为单个 CLI，不依赖 Go、Python、Node、sqlite3 或常驻管理进程。Codex 官方安装路径需要系统 curl 和 POSIX sh；Proxy 包处理使用 Go。
-
-隔离测试只用临时 HOME、本地假 curl/假安装器、合成程序和服务调用哨兵，不执行真实上游安装器或真实服务。`make smoke` 只读检查本机发行包，`make release` 和 `make verify-release` 只本地构建与核验。
-
-旧 Bash 源码冻结保留，不作为 Go 生命周期后端或进入发行包；旧 schema 实验状态不原位兼容。详见 [设计](docs/go-design.md)、[验证边界](docs/two-root-audit.md)、[CI 与发行](docs/go-ci-release.md) 和 [旧 Bash 边界](docs/legacy-boundary.md)。
+检查使用临时目录、模拟安装器和组件夹具。旧 Bash 源码冻结保留，不作为 Go 生命周期后端或进入发行包，详见[旧实现边界](docs/legacy-boundary.md)。
