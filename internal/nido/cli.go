@@ -13,6 +13,7 @@ import (
 	"github.com/MiracleHYH/CDEToolkit/internal/components/gds"
 	"github.com/MiracleHYH/CDEToolkit/internal/components/proxy"
 	"github.com/MiracleHYH/CDEToolkit/internal/integrations/codex"
+	"github.com/MiracleHYH/CDEToolkit/internal/integrations/conda"
 )
 
 const help = `Nido: Lightweight Development Environment Manager
@@ -22,13 +23,19 @@ nido [--root DIR] COMMAND
   update [--check]             更新 Nido 自身，仅替换受管程序
   download show / set VALUE    查看或设置 GitHub 下载加速策略
   status / doctor              只读检查外部集成与内置组件
-  env [bash|zsh]               输出 PATH 和已关联的 CODEX_HOME
+  env [bash|zsh]               输出 PATH 和已关联工具的环境
   codex setup [--home DIR]      发现并关联已有外部目录，不移动数据
   codex status                 只读查看关联、命令及代理状态
   codex install --home DIR      在外部目录调用官方安装器
   codex update [--check]        委托官方更新；--check 只查版本
   codex proxy URL|builtin|off   配置 .env 中属于 Nido 的代理块
   codex detach                 解除关联，保留全部 Codex 程序和数据
+  conda status / show / mirrors 查看 conda/pip 配置、激活状态及镜像预设
+  conda setup [conda|pip|all]   首次记录本机镜像为持久 default
+  conda mirror conda|pip VALUE default / official / tuna / off
+  conda cache conda|pip DIR|off 原生配置中直接设置包缓存路径
+  conda envs DIR|off            原生配置中直接设置环境目录
+  conda validate / reset       核对配置 / 释放管理，保留原镜像和路径
   proxy install / update       安装或更新内置 Mihomo，不自动启动
   proxy configure [--file FILE] 配置原生 YAML，替换前要求停止
   proxy endpoints              只枚举 listeners，可任意命名
@@ -80,6 +87,7 @@ type CLI struct {
 	Runner      codex.Runner
 	ProxyRunner proxy.Runner
 	GDSRunner   gds.Runner
+	CondaRunner conda.Runner
 	// GDSHTTP is injected only by Go isolation tests, never a CLI flag.
 	GDSHTTP *http.Client
 	// UpdateHTTP is an isolated-test seam, not a configurable API endpoint.
@@ -285,6 +293,9 @@ func (c CLI) Run(args []string) int {
 	if c.GDSRunner != nil {
 		m.GDS.Runner = c.GDSRunner
 	}
+	if c.CondaRunner != nil {
+		m.Conda.Runner = c.CondaRunner
+	}
 	if c.GDSHTTP != nil {
 		m.GDS.HTTP = c.GDSHTTP
 	}
@@ -385,6 +396,8 @@ func (c CLI) Run(args []string) int {
 		}
 	case "codex":
 		return c.codex(m, o, words)
+	case "conda":
+		return c.conda(m, o, words)
 	case "proxy":
 		return c.proxy(m, o, words)
 	case "gds":

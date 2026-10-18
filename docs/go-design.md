@@ -9,6 +9,7 @@ Nido 的定位是开发环境配置助手，加少量内置工具。外部软件
 | 类型 | 组件 | Nido 的责任 | 上游或用户的责任 |
 | --- | --- | --- | --- |
 | 外部集成 | Codex | 发现和关联 HOME、生成环境、局部代理配置、官方安装更新委托、状态和版本查询 | 程序运行、认证、会话、数据库、插件、daemon 和原渠道安装 |
+| 外部集成（自 v0.8.0） | Conda / pip | 持久原镜像 default、镜像切换、缓存与环境位置原生配置、静态状态与显式只读验证 | 程序安装和初始化、频道选择、包与环境创建、数据迁移及缓存清理 |
 | 内置组件 | Proxy | 原生配置、静态与核心验证、端点导出、精确启停、停止更新、程序卸载 | 节点、规则、provider、连接与核心数据 |
 | 可选组件 | GDS | 独立程序配置与启停、UUID 空闲观察、有限许可显存保留 | NVIDIA 驱动与受支持宿主环境；真实 GPU 验收 |
 
@@ -18,6 +19,7 @@ Nido 的定位是开发环境配置助手，加少量内置工具。外部软件
 <Nido>/bin/nido
 <Nido>/config.toml
 <Nido>/env.sh
+<Nido>/conda/          # v0.8.0 起：确定性内容命名的镜像覆盖文件
 <Nido>/proxy/          # 内核、固定 config.yaml、日志与进程记录
 <Nido>/gds/            # 可选独立程序、日志与进程记录
 <外部 CODEX_HOME>/    # 留在 Nido 目录之外
@@ -63,6 +65,18 @@ Codex HOME 本身作为不透明数据使用。Nido 不读取认证、会话和�
 
 最新版本在显式 `update --check` 或更新确认前查询；普通本地状态只运行受关联程序的 `--version`。不自行实现 Codex 下载替换、版本仓库、回滚或数据兼容处理。
 
+## 外部 Conda / pip 集成
+
+本集成自 v0.8.0 提供。实现位于 `internal/integrations/conda`，管理层只组合配置与命令，不把 Conda 当作 Nido 内置程序。`setup [conda|pip|all]` 首次捕获本机原有效镜像为持久 default；第一次直接切换镜像时也自动捕获对应工具，失败不切换，已有快照不覆盖。default、official（别名 conda/pypi）与镜像预设并列；off 释放单项，reset 清空选择但保留 default。
+
+镜像定义写入 Nido 主配置、环境文件和 `<Nido>/conda/mirror-<hash>.yaml`。没有显式文件时通过 overlay 的 `CONDARC` 激活；已有外部 CONDARC 时持久保留原路径，仅在原文件更新七个镜像字段，证书、代理、未知非镜像键继续实时读取，原标准文件去重、变量引用和目标 prefix 优先级不变。预设保留当前频道选择，标准用户文件同步 `channels` 防止早先列表合并。显式 default 将受管标准用户与显式源文件的完整已捕获镜像字段恢复，清除后来新增的映射；旧五字段快照仅恢复已记录字段。off/reset 不回写原生值并保留来源关联。默认输出不泄露快照凭据；所有新复制的镜像凭据均不得传播到他人可读文件。旧镜像资源不递归清理。
+
+缓存和环境目录原地修改 Conda 的 `envs_dirs` / `pkgs_dirs` 及 pip 的 `global.cache-dir`。已选择 Conda 镜像时，原生频道和目录同步标准用户 `.condarc` 与持久关联的原显式 `CONDARC`；任一目标不安全则预检失败，不改不可变 overlay。保留其他键语义、注释、权限与所属组，YAML 格式可能调整；pip 尽量保留非目标行。预览列出实际文件。不设置路径环境覆盖或 `PIP_CONFIG_FILE`，已有覆盖报冲突。目录无需 source，off/reset 只停跟踪，不恢复原生值或搬迁清理数据。
+
+`env.sh` 仅对镜像变量保存加载前值，off/reset 后再次 source 恢复；用户手改的新值保留。它不为 cache/envs 创建环境恢复状态。持久 default 可跨 Shell 和重启重新选择，不依赖这份短期撤销状态；镜像变更不会直接改变父 Shell。
+
+`status` / `show` / `mirrors` 和 init 不执行上游程序。setup、镜像切换和 validate 显式调用本地 Conda 与 `python -m pip` 做只读查询，不联网、不安装；validate 不向子进程注入尚未 source 的镜像。检查覆盖原生目录、实际镜像与额外 index 等因素。详细语义、预设来源和隔离测试见 [Conda 设计](conda-design.md)。
+
 ## 内置组件
 
 Proxy 实现集中在 `internal/components/proxy`。它拥有独立固定目录、原生 `config.yaml` 和受管进程记录，不导入 `internal/nido` 或 Codex，也不沿用旧 `internal/builtin` 的 Proxy 适配。主配置是唯一配置事实来源，Nido 的 `config.toml` 不复制端口或订阅。
@@ -97,6 +111,7 @@ GDS 使用独立 `gds` 程序，源码位于 `internal/components/gds`、`intern
 
 - `internal/nido`：CLI、单根配置、环境和组件组合。
 - `internal/integrations/codex`：独立外部集成，通过显式配置与命令执行接口提供功能。
+- `internal/integrations/conda`：自 v0.8.0 提供的 Conda / pip 配置、镜像覆盖与只读核对，不管理上游程序生命周期。
 - `internal/components/proxy`：独立 Proxy 的配置、端点、程序来源、进程和平台实现。
 - `internal/components/gds`：可选 GDS 的程序、配置和管理接口；旧 `internal/builtin` 已退出。
 - `internal/gdsapi`、`internal/gdsutil`、`internal/gdsruntime`：GDS 的协议、局部文件与进程保护、状态机及运行程序。

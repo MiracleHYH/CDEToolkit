@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -227,7 +228,7 @@ func TestAssociationCannotTransferOrDiscardProxyOwnership(t *testing.T) {
 			}
 			configAfter, _ := os.ReadFile(filepath.Join(m.Root, "config.toml"))
 			envAfter, _ := os.ReadFile(envPath)
-			if !bytes.Equal(configBefore, configAfter) || !bytes.Equal(envBefore, envAfter) || m.Config != intentBefore {
+			if !bytes.Equal(configBefore, configAfter) || !bytes.Equal(envBefore, envAfter) || !reflect.DeepEqual(m.Config, intentBefore) {
 				t.Fatal("rejected ownership change modified integration state")
 			}
 		})

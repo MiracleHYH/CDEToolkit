@@ -86,7 +86,7 @@ func TestCLIDoctorJSONReportsErrorsWithoutChangingEnvironmentFile(t *testing.T) 
 		Components []Status `json:"components"`
 		Issues     []string `json:"issues"`
 	}
-	if code != 1 || json.Unmarshal([]byte(out), &report) != nil || len(report.Components) != 3 || len(report.Issues) == 0 {
+	if code != 1 || json.Unmarshal([]byte(out), &report) != nil || len(report.Components) != 4 || len(report.Issues) == 0 {
 		t.Fatalf("code=%d out=%q err=%q", code, out, stderr)
 	}
 	got, err := os.ReadFile(path)

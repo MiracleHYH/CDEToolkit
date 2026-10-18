@@ -9,7 +9,7 @@ BINARY = build/$(TARGET_OS)-$(TARGET_ARCH)/nido
 PACKAGE = dist/nido-$(TARGET_OS)-$(TARGET_ARCH).tar.gz
 RELEASE_PLATFORMS = linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
-.PHONY: build test fmt-check check dist smoke release verify-release release-check gds-release gds-release-check gds-verify-release check-gds check-gds-linux-native check-gds-legacy build-gds check-proxy-real check-proxy-linux check-proxy-linux-race check-proxy-linux-native check-proxy-quickstart-linux-native check-proxy-quickstart-real-linux check-proxy-public-release
+.PHONY: build test fmt-check check dist smoke release verify-release release-check gds-release gds-release-check gds-verify-release check-gds check-gds-linux-native check-gds-legacy build-gds check-proxy-real check-proxy-linux check-proxy-linux-race check-proxy-linux-native check-proxy-quickstart-linux-native check-proxy-quickstart-real-linux check-proxy-public-release check-nido-public-release
 build:
 	CGO_ENABLED=0 GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) "$(GO)" build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w -X=github.com/MiracleHYH/CDEToolkit/internal/nido.Version=$(VERSION)' -o "$(BINARY)" ./cmd/nido
 
@@ -31,12 +31,15 @@ fmt-check:
 	bash -n tests/proxy-linux-isolation.sh tests/proxy-linux-bwrap.sh tests/gds-linux-native-isolation.sh tests/gds-public-release-isolation.sh
 	bash -n tests/proxy-quickstart-linux-native.sh tests/proxy-quickstart-cli-isolation.sh tests/proxy-quickstart-real-linux.sh
 	bash -n tests/proxy-public-release-isolation.sh
+	bash -n tests/conda-cli-isolation.sh
+	bash -n tests/nido-public-release-isolation.sh tests/nido-public-release-inner.sh
 
 check: fmt-check
 	"$(GO)" vet ./...
 	"$(GO)" test -race ./...
 	$(MAKE) build TARGET_OS=$(HOST_OS) TARGET_ARCH=$(HOST_ARCH)
 	bash tests/nido-cli-isolation.sh "$(CURDIR)/build/$(HOST_OS)-$(HOST_ARCH)/nido"
+	bash tests/conda-cli-isolation.sh "$(CURDIR)/build/$(HOST_OS)-$(HOST_ARCH)/nido"
 	@proxy_fixture_dir=$$(mktemp -d); trap 'rm -rf -- "$$proxy_fixture_dir"' EXIT; \
 	CGO_ENABLED=0 "$(GO)" build -trimpath -buildvcs=false -o "$$proxy_fixture_dir/fake-mihomo" ./tests/fixtures/proxy-core && \
 	bash tests/proxy-quickstart-cli-isolation.sh "$(CURDIR)/build/$(HOST_OS)-$(HOST_ARCH)/nido" "$$proxy_fixture_dir/fake-mihomo"
@@ -127,3 +130,8 @@ check-proxy-quickstart-real-linux:
 # and an inert core only. Never part of the offline check/release targets.
 check-proxy-public-release:
 	bash tests/proxy-public-release-isolation.sh
+
+# Explicit public HTTPS acceptance against independently verified new and old
+# releases; all installation, upgrade and Conda fixtures use temporary homes.
+check-nido-public-release:
+	bash tests/nido-public-release-isolation.sh

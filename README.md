@@ -2,13 +2,13 @@
 
 **用 `nido` 配置外部开发工具，维护少量内置组件。**
 
-Nido 为 Codex 提供目录关联、环境与代理配置，以及官方安装更新入口；Proxy（Mihomo）和可选 GDS 则由 Nido 安装和管理。Codex 数据留在原处，你继续直接使用官方 `codex` 命令。
+Nido 为 Codex 提供目录关联、环境与代理配置，以及官方安装更新入口；Proxy（Mihomo）和可选 GDS 则由 Nido 安装和管理。自 v0.8.0 起提供 Conda / pip 镜像、缓存与环境目录配置。外部工具保留原有数据和命令入口。
 
 支持 Linux / macOS 的 amd64、arm64。Nido 本身是一个 Go 可执行文件。
 
 从 **v0.3.0** 起，项目使用 Nido 名称和 `nido` 命令；仓库和 Go module 暂时保留 CDEToolkit 名称。旧 `cdet` 安装不会被自动迁移或替换。
 
-[快速开始](#快速开始) · [Codex](#关联或安装-codex) · [Proxy](#使用内置-proxy) · [使用指南](docs/usage.md) · [开发与发行](docs/go-ci-release.md)
+[快速开始](#快速开始) · [Codex](#关联或安装-codex) · [Conda / pip](#配置-conda--pip) · [Proxy](#使用内置-proxy) · [使用指南](docs/usage.md) · [开发与发行](docs/go-ci-release.md)
 
 ## 快速开始
 
@@ -87,6 +87,26 @@ nido codex update
 
 代理只写入 `$CODEX_HOME/.env` 中属于 Nido 的配置块，保留其他内容；已有代理变量冲突时停止。更新委托官方脚本，并注入目录和代理。npm、Homebrew 等已有安装继续使用原渠道更新。
 
+## 配置 Conda / pip
+
+本组件自 v0.8.0 提供。首次启用先保存本机原有镜像为持久的 `default`，之后可在原配置、官方和清华之间切换。缓存与环境位置直接写入上游原生配置。
+
+```sh
+nido conda setup
+nido conda mirrors
+nido conda mirror conda tuna
+nido conda mirror pip tuna
+nido conda cache conda "$HOME/.cache/conda/pkgs"
+nido conda cache pip "$HOME/.cache/pip"
+nido conda envs "$HOME/.conda/envs"
+. "$NIDO_HOME/env.sh"
+nido conda validate
+```
+
+Conda 镜像支持 `default`、`official`（别名 `conda`）、`tuna`、`off`；pip 官方别名为 `pypi`，另支持 `ustc` 和自定义 HTTPS simple index。首次切换也会自动捕获对应工具的 `default`，以后不会覆盖；`default` 跨 Shell 和重启保留。已有自定义 CONDARC 时保留原路径，只原地修改镜像字段，证书、代理等设置继续实时读取；没有显式文件时使用镜像 overlay。选定镜像与环境覆盖需重新加载 `env.sh`；缓存和环境目录写入原生配置后即持久保留，无需 source。
+
+原生修改保留其他键的语义、注释、权限和所属组，Conda YAML 的格式可能调整；不迁移或清空数据。显式 `default` 恢复受管标准用户文件和原 CONDARC 中已捕获的镜像字段，清除后来新增的镜像映射，保留证书、代理等非镜像设置。新复制的镜像凭据不得写入他人可读的文件。`off` 只停止管理单项，`reset` 清空选择但保留 `default`、原 CONDARC 关联及原生值。`status` / `show` / `mirrors` 为静态查看；setup、镜像切换和 `validate` 会显式查询本地工具，不联网或安装包。详见[使用指南](docs/usage.md#conda--pip)、[设计说明](docs/conda-design.md)与[v0.8.0 发行说明](docs/conda-release.md)。
+
 ## 使用内置 Proxy
 
 独立 Proxy 组件自 v0.4.0 提供；下述 quick start、节点链接解析和类别/单工具代理绑定自 **v0.6.0** 提供。Nido 安装包只包含 CLI，Mihomo 需显式安装。
@@ -148,6 +168,8 @@ nido proxy start
 | 仅为本次 Codex 安装更新指定代理 | `nido codex update --proxy http://127.0.0.1:7890` |
 | 清理 Nido 写入的 Codex 代理块 | `nido codex proxy off` |
 | 解除 Codex 关联，保留程序与数据 | `nido codex detach` |
+| 查看 / 核对 Conda 与 pip 配置 | `nido conda status` / `nido conda validate` |
+| 停止 Conda 与 pip 配置管理 | `nido conda reset` |
 | 查询 / 停止状态下更新内置 Proxy | `nido proxy update --check` / `nido proxy update` |
 | 停止 / 卸载内置 Proxy 程序 | `nido proxy stop` / `nido proxy remove` |
 | 安装官方可选 GDS | `nido gds install` |
@@ -171,7 +193,7 @@ make smoke
 make dist TARGET_OS=linux TARGET_ARCH=amd64
 ```
 
-常规测试使用临时目录、模拟安装器和组件夹具，不需要真实 Codex、代理服务或 GPU。GDS 的 CPU 状态机、协议与假驱动测试进入常规测试，也可用 `make check-gds` 单独执行；普通用户 Linux amd64 原生 namespace 验证见[测试入口](docs/usage.md#可选-gds)。历史 Shell 测试通过 `make check-gds-legacy` 选择。
+常规测试使用临时目录、模拟安装器和组件夹具，不需要真实 Codex、Conda、代理服务或 GPU。Conda CLI 隔离测试进入 `make check`，仅使用临时 HOME 与假命令，覆盖配置、撤销及重复加载环境。GDS 的 CPU 状态机、协议与假驱动测试进入常规测试，也可用 `make check-gds` 单独执行；普通用户 Linux amd64 原生 namespace 验证见[测试入口](docs/usage.md#可选-gds)。历史 Shell 测试通过 `make check-gds-legacy` 选择。
 
 真实 Mihomo 的回环兼容测试通过 `NIDO_TEST_MIHOMO=/absolute/path/to/verified/mihomo make check-proxy-real` 显式执行；测试不下载程序，仅使用临时 HOME、临时软件根和本地 provider/HTTP/SOCKS 夹具。核心来源、结果和验证范围见 [Proxy 审计记录](docs/proxy-audit.md)。
 

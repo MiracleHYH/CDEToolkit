@@ -40,7 +40,7 @@ func fixture(t *testing.T) (*Manager, string) {
 
 func TestStatusAndDryRunDoNotInitialize(t *testing.T) {
 	m, _ := fixture(t)
-	if rows := m.Status(); len(rows) != 3 {
+	if rows := m.Status(); len(rows) != 4 {
 		t.Fatalf("rows=%v", rows)
 	}
 	var out, stderr bytes.Buffer

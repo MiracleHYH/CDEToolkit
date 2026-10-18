@@ -9,11 +9,13 @@ trap 'rm -rf -- "$NIDO_TEST_ROOT"' EXIT
 export HOME="$NIDO_TEST_ROOT/user" PATH="$NIDO_TEST_ROOT/forbidden:/usr/bin:/bin" TMPDIR="$NIDO_TEST_ROOT/tmp"
 unset NIDO_HOME CDET_PREFIX CDET_STORE CDET_HOME STK_HOME CODEX_HOME CODEX_SQLITE_HOME XDG_CONFIG_HOME
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+unset CONDARC CONDA_EXE CONDA_ENVS_PATH CONDA_PKGS_DIRS CONDA_CHANNELS CONDA_DEFAULT_CHANNELS CONDA_CUSTOM_CHANNELS CONDA_CUSTOM_MULTICHANNELS CONDA_CHANNEL_ALIAS
+unset PIP_CONFIG_FILE PIP_INDEX_URL PIP_EXTRA_INDEX_URL PIP_NO_INDEX PIP_CACHE_DIR PIP_NO_CACHE_DIR
 export NIDO_FIXTURE_FORBIDDEN_LOG="$NIDO_TEST_ROOT/forbidden-calls"
 root="$NIDO_TEST_ROOT/software path/nido"
 codex_home="$HOME/.codex"
 mkdir -p "$codex_home/sessions" "$HOME/.config/mihomo" "$NIDO_TEST_ROOT/forbidden" "$TMPDIR"
-for tool in curl systemctl supervisorctl sudo codex mihomo gds; do
+for tool in curl systemctl supervisorctl sudo codex mihomo gds conda pip python python3; do
   cat > "$NIDO_TEST_ROOT/forbidden/$tool" <<'FIXTURE'
 #!/bin/sh
 printf 'forbidden\n' >> "$NIDO_FIXTURE_FORBIDDEN_LOG"

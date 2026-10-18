@@ -18,6 +18,7 @@ import (
 	"github.com/MiracleHYH/CDEToolkit/internal/components/proxy"
 	"github.com/MiracleHYH/CDEToolkit/internal/githubdownload"
 	"github.com/MiracleHYH/CDEToolkit/internal/integrations/codex"
+	"github.com/MiracleHYH/CDEToolkit/internal/integrations/conda"
 	"github.com/MiracleHYH/CDEToolkit/internal/integrations/gitproxy"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -34,6 +35,7 @@ type Config struct {
 	// application checksum, installation inventory or history.
 	EnvDigest string          `toml:"env_digest,omitempty"`
 	Codex     codex.Config    `toml:"codex"`
+	Conda     conda.Config    `toml:"conda"`
 	Git       gitproxy.Config `toml:"git"`
 	Download  DownloadConfig  `toml:"download"`
 }
@@ -47,6 +49,7 @@ type Manager struct {
 	Config                     Config
 	Env                        []string
 	Codex                      codex.Service
+	Conda                      conda.Service
 	Git                        gitproxy.Service
 	GDS                        gds.Service
 	Proxy                      proxy.Service
@@ -111,6 +114,7 @@ func New(root string) (*Manager, error) {
 		return nil, e
 	}
 	m.Codex = codex.Service{Root: root, UserHome: home, Env: m.Env}
+	m.Conda = conda.Service{Root: root, UserHome: home, Env: m.Env}
 	m.Git = gitproxy.Service{Root: root, UserHome: home, Env: m.Env}
 	m.GDS = gds.Service{Root: root, Env: m.Env}
 	m.Proxy = proxy.Service{Root: root, Env: m.Env, Launcher: exe}
@@ -131,6 +135,9 @@ func New(root string) (*Manager, error) {
 		}
 		if e := m.Git.ValidateConfig(config.Git); e != nil {
 			return nil, fmt.Errorf("Git 代理归属配置无效: %w", e)
+		}
+		if e := m.Conda.ValidateConfig(config.Conda); e != nil {
+			return nil, fmt.Errorf("Conda 配置无效: %w", e)
 		}
 		// Validate download policy when it is used. A malformed preference
 		// must not prevent offline operations, Codex, or correcting that field.
@@ -315,6 +322,7 @@ func (m *Manager) Environment() string {
 	if m.Config.Codex.Home != "" {
 		s += "export CODEX_HOME=" + shellQuote(m.Config.Codex.Home) + "\n"
 	}
+	s += condaEnvironment(m.Conda.Variables(m.Config.Conda), m.Conda.UnsetVariables(m.Config.Conda)...)
 	return s
 }
 
@@ -683,6 +691,8 @@ type Status struct {
 func (m *Manager) Status() []Status {
 	c := m.Codex.Status(m.Config.Codex)
 	rows := []Status{{Name: "codex", Kind: "external", Configured: m.Config.Codex.Home != "", State: c.State, Version: c.Version, Directory: c.Home, Detail: c.Detail}}
+	condaStatus := m.CondaStatus()
+	rows = append(rows, Status{Name: "conda", Kind: "external", Configured: condaStatus.Configured, State: condaStatus.State, Detail: strings.Join(condaStatus.Issues, "；")})
 	p := m.Proxy.Status()
 	state := "未安装"
 	if p.Program == "present" {

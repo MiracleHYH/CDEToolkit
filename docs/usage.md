@@ -42,7 +42,7 @@ nido version
 
 自定义目录请替换路径。配置 Codex 后重新加载同一文件，才能更新当前终端的环境；CLI 无法直接修改父 Shell。
 
-`nido env bash` / `nido env zsh` 输出同样的环境片段。未关联 Codex 时，只配置 Nido 自身路径；关联后增加 `CODEX_HOME` 和已识别的 Codex 命令目录，不生成 Codex 包装入口。重复加载不会不断增加 PATH。
+`nido env bash` / `nido env zsh` 输出同样的环境片段。未配置外部集成时，只激活 Nido 自身路径；关联 Codex 后增加 `CODEX_HOME` 和已识别的 Codex 命令目录，不生成 Codex 包装入口。自 v0.8.0 起还按所选 Conda / pip 镜像输出变量；缓存和环境目录直接保存到上游配置，不通过环境片段激活。重复加载不会不断增加 PATH。
 
 ## GitHub 下载与 Nido 自身更新
 
@@ -77,6 +77,8 @@ Nido 自身更新只替换自己的程序，保留管理配置、生成环境、
   bin/nido
   config.toml
   env.sh
+  conda/              # v0.8.0 起，显式选择 Conda 镜像后创建
+    mirror-<hash>.yaml # 内容确定的镜像覆盖文件
   proxy/              # 显式安装后创建
     mihomo
     config.yaml       # configure 保存的唯一主配置
@@ -178,6 +180,88 @@ nido codex update --proxy http://127.0.0.1:7890
 本次覆盖不写入 `.env`。Nido 的环境片段不全局导出代理，以免影响其他程序。
 
 进程代理变量的小写形式优先于大写形式，显式空值也会覆盖 `.env`，并同步到安装子进程的两种大小写变量。本次 `--proxy` 只覆盖代理端点，保留 `NO_PROXY`。对于变量展开、转义或冲突的 `.env` 代理表达式，Nido 明确报错，不尝试执行或完整解释 dotenv。
+
+## Conda / pip
+
+本节命令自 v0.8.0 提供。Nido 把 Conda 与 pip 作为外部工具配置，不要求先安装内置 Proxy，也不安装 Conda 或执行 `conda init`。
+
+先查看保存值和可选镜像：
+
+```sh
+nido conda
+nido conda status --json
+nido conda show
+nido conda mirrors
+```
+
+`conda`、`status`、`show` 和 `mirrors` 都只读取本地状态，不执行 Conda / Python 或访问网络。首次启用先记录本机原有镜像：
+
+```sh
+nido conda setup             # 缺省为 all
+nido conda setup conda       # 也可分别记录
+nido conda setup pip
+```
+
+原有有效镜像被持久保存为 `default`，以后重复 setup 或切换镜像不会覆盖它。首次直接执行某个工具的 mirror 切换时，也会先自动捕获该工具的 default；捕获失败不切换。default 保存在 Nido 配置中，可跨 Shell、终端重启和机器重启继续选择。状态和镜像列表只显示是否已记录，默认不展开可能包含凭据的原 URL。
+
+镜像、包缓存和环境目录分别配置：
+
+```sh
+nido conda mirror conda tuna
+nido conda mirror pip tuna
+nido conda cache conda "$HOME/.cache/conda/pkgs"
+nido conda cache pip "$HOME/.cache/pip"
+nido conda envs "$HOME/.conda/envs"
+. "$NIDO_HOME/env.sh"
+```
+
+镜像的 `default` 指首次保存的本机原配置，`official` 指官方地址，两者并列。`off` 停止镜像管理，重新加载后释放受管变量；它不选择任何预设，也不删除 default 快照。
+
+| 项目 | 接受值 | 作用 |
+| --- | --- | --- |
+| Conda 镜像 | `default`、`official` / `conda`、`tuna`、`off` | 原镜像、官方或清华；通过 `CONDARC` 加载 |
+| pip 镜像 | `default`、`official` / `pypi`、`tuna`、`ustc`、HTTPS simple index、`off` | 通过 `PIP_INDEX_URL` 选择一个 index |
+| Conda 缓存 | 目录或 `off` | 原生 `.condarc` 的 `pkgs_dirs`；off 只停止跟踪 |
+| pip 缓存 | 目录或 `off` | 原生 pip 配置的 `global.cache-dir`；off 只停止跟踪 |
+| Conda 环境目录 | 目录或 `off` | 原生 `.condarc` 的 `envs_dirs`；off 只停止跟踪 |
+
+例如 `nido conda mirror pip https://packages.example.com/simple` 可使用自己的 HTTPS index；新输入 URL 不能包含认证信息、查询参数或片段。目录必须为外部绝对路径，支持作为参数传入的字面 `~/`；包含空格时加引号。已有目标必须是目录，不能与 Nido 软件目录相同或相互包含。Nido 不创建指定的数据目录；路径尚不存在时由上游工具在首次需要时创建，也不搬动已有包或环境。
+
+Conda 镜像定义保存在 `$NIDO_HOME/conda/mirror-<hash>.yaml`，由内容确定文件名。没有显式外部 CONDARC 时通过该文件加载；已有外部 CONDARC 时保留原路径，镜像字段直接修改原文件。官方和清华预设保留本次选择时的频道顺序与范围，包括后来新增的私有频道，并保留私有频道映射和别名；只将已知 defaults/main/r/msys2、conda-forge/bioconda 地址映射到相应预设。标准用户文件还同步 `channels`，避免旧频道列表被合并；缓存、环境目录和 pip 命令不会顺便重写镜像。default 会把受管标准用户文件和显式源文件的已捕获镜像字段一起恢复，清除后来新增的映射；如果需要新增带凭据的地址，两个目标都必须保持足够私密的权限。中科大目前仅提供社区频道的动态缓存，因此不提供完整 Conda 预设。
+
+`CONDARC` 是上游配置合并链的一部分，系统、root、用户和目标环境文件保持原顺序，管理员 `#!final` 或环境变量仍可能影响结果。存在自定义 CONDARC 时，Nido 记录并保留同一个规范绝对文件路径，只原地修改七个镜像字段；证书、客户端证书及私钥、代理、超时等其他设置及优先级不变，也不复制进 Nido。后续编辑或原子替换原文件，下次 Conda 调用实时读取；标准 `.condarc` 不重复加载，`$CONDARC` 引用和 `--prefix` 的原有含义保留。原文件必须是可安全修改的普通文件；缺失、不安全或目录型输入会明确拒绝切源。
+
+pip 不设置或更改 `PIP_CONFIG_FILE`，保留原有配置文件读取方式；`PIP_INDEX_URL` 优先于文件中的全局与命令专属 index，但已有 `extra-index-url`、`no-index`、禁用缓存等其他设置仍可能影响结果。Nido 不把附加 index 当作备用镜像，也不关闭 TLS 校验。
+
+Conda 镜像操作会立即写入相关原生镜像字段，选定 CONDARC 与受管环境覆盖仍需重新 source；CLI 本身不能更改父 Shell。缓存和环境位置直接修改原生配置，不设置 `CONDA_ENVS_PATH`、`CONDA_PKGS_DIRS` 或 `PIP_CACHE_DIR`，无需 source。如果这些变量已覆盖相应路径，变更会报冲突，需用户先明确处理；Nido 不以保存成功掩盖环境覆盖。pip INI 无法精确保留路径首尾空白，setter 会拒绝这类输入；Conda 路径同样拒绝首尾空白。
+
+原生配置优先使用当前显式的外部 `CONDARC` / `PIP_CONFIG_FILE`，否则选择用户标准配置文件；已选择 Nido Conda 镜像时，频道和目录写入标准用户 `.condarc`，并同步持久关联的原显式外部 `CONDARC`（若存在），新 Shell 无原值 marker 时也能使用。这样避免释放镜像后旧文件重新覆盖设置，不修改不可变 overlay。任一目标文件不安全则预检失败，不作部分更新。其他键的语义、注释、权限和所属组保留，Conda YAML 重新序列化时格式可能调整；pip 尽量保留非目标行。`--dry-run` 的 `files` 和成功结果列出实际修改的文件。若本次需要把带凭据的新镜像地址写入他人可读的文件，会拒绝操作。
+
+用下面命令核对当前环境和上游实际读取值：
+
+```sh
+nido conda validate
+nido conda validate --json
+```
+
+`validate` 显式调用本地 Conda（已有 `CONDA_EXE` 时使用它，否则从 PATH 查找），以及当前 Python 的 `python -m pip`；没有 `python` 时查找 `python3`。只读检查配置和缓存位置，不联网、不安装包、不执行 `clean` 或 `conda init`。检查以当前进程环境为准，不在子进程偷偷注入保存值；尚未加载 `env.sh`、工具缺失、实际值不符，以及附加源等覆盖因素都会报告。因此保存成功和验证成功是两个不同状态。
+
+切回首次记录的镜像，或停止管理：
+
+```sh
+nido conda mirror conda default
+nido conda mirror pip default
+. "$NIDO_HOME/env.sh"
+nido conda mirror conda off
+nido conda cache pip off
+nido conda envs off
+nido conda reset
+. "$NIDO_HOME/env.sh"
+```
+
+镜像环境片段记住本 Shell 加载前的 `CONDARC` / `PIP_INDEX_URL`，并管理有限的 Conda 频道覆盖变量，防止旧环境镜像覆盖所选预设。default 重放首次捕获的覆盖变量；其他预设临时清除这些覆盖。off 或 reset 后重新加载，仍是 Nido 上次设置状态的变量恢复原值或 unset；用户在期间手动改过的值保留。这个短期 Shell 撤销状态与持久的 default 快照分开，切换到 default 不依赖之前那个终端仍然打开。
+
+变更命令支持 `--dry-run` 只读预检，以及 `--yes` 明确确认。off 和 reset 只停止管理，不回写旧镜像或目录；显式选择 default 才恢复首次镜像。reset 清空当前选择但保留 default 快照、原 CONDARC 路径关联、原生配置及历史镜像定义，不删除、迁移或清空用户环境和缓存。已有来源时，pip 操作和重复 setup 不会因当前临时的 CONDARC 覆盖而偷偷更换关联。配置合并、来源与测试边界见 [Conda 设计](conda-design.md)。
 
 ## 类别与单工具快捷代理配置
 
@@ -324,7 +408,7 @@ nido doctor
 nido doctor --json
 ```
 
-状态按外部 Codex 集成、内置 Proxy 和 GDS 分类，不联网或顺便修复配置。关联 Codex 的版本通过其 `--version` 查询，不宣称认证、会话或联网可用。`doctor` 另外检查生成环境及当前终端的 `CODEX_HOME` 是否一致。
+状态按外部集成、内置 Proxy 和 GDS 分类，不联网或顺便修复配置。关联 Codex 的版本通过其 `--version` 查询，不宣称认证、会话或联网可用。`doctor` 另外检查生成环境及当前终端的 `CODEX_HOME` 是否一致。自 v0.8.0 提供的 Conda / pip 状态为静态观察，实际工具核对通过显式 `nido conda validate` 执行。
 
 `doctor --json` 输出 `components` 与 `issues`，发现问题时返回非零退出码。交互提示和查询警告写入 stderr，成功的 JSON 结果单独写入 stdout；`env` 输出可加载的 Shell 代码，不接受 `--json`。即使安装配置损坏，仍可运行 `nido version`。
 

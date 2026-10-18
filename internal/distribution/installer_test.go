@@ -439,7 +439,7 @@ ulimit() {
 				var rows []struct {
 					Configured bool `json:"configured"`
 				}
-				if err != nil || json.Unmarshal(out, &rows) != nil || len(rows) != 3 {
+				if err != nil || json.Unmarshal(out, &rows) != nil || len(rows) != 4 {
 					t.Fatal("invalid fresh status", err, string(out))
 				}
 				for _, row := range rows {

@@ -4,6 +4,8 @@ Nido: Lightweight Development Environment Manager。开发中的命令为 `nido`
 
 从 v0.3.0 起发布 Nido Go 版。历史 cdet Release 保留原状，新版使用下述包名和安装行为，不自动迁移旧版安装。
 
+v0.8.0 增加 Conda / pip 外部配置集成，随同四平台 Nido 包提供，不增加 Conda 安装包或独立组件资产。功能、隔离验证入口与本次发行记录见 [Conda 发行说明](conda-release.md)。
+
 ## 本地检查
 
 | 命令 | 范围 |
@@ -59,6 +61,8 @@ nido --root /absolute/software/path init --yes
 
 `check.yml` 在 Linux 最低 Go、Linux 固定 Go 和 macOS 固定 Go 上执行 `make check smoke`。单独检查源码与历史中的敏感内容。GDS 的假驱动、CPU worker 测试和普通用户原生隔离验证自动运行；历史 Shell GDS 测试另保留显式入口。
 
+Conda / pip 的单元、race 与 CLI 隔离测试进入 `make check`，使用临时 HOME、配置和假命令；普通 CI 不要求安装 Conda/Python，也不访问镜像。真实 Conda 配置合并与来源保护验收须显式提供已有程序，分别运行 [Conda 发行说明](conda-release.md#验证入口)中的离线入口。源码检查、实际上游本地配置核对和公开发行资产验收分别记录，不能互相替代。
+
 Proxy 的真实核心与跨版本测试需要显式提供已核验程序，普通 CI 不会下载这些输入，不能把 `make check smoke` 通过解释为完成全部平台的真实核心验证。Linux 隔离入口会拒绝指定测试跳过、缺少 PASS 及子命令失败；新版 quick start 真实入口还要求 17 个节点配置子项逐项精确 PASS。纯 mock 回归只验证这些入口判定和清理边界。预构建输入的架构、CLI 元数据和 race 符号检查不能证明其来自当前提交；需另记录冻结源码与产物摘要。新版 quick start 的假核心/真实核心入口、实际结果和协议边界见 [Proxy 审计](proxy-audit.md)与[独立入口说明](proxy-design.md#quick-start-的-linux-amd64-真实核心隔离验证)。
 
 本次 Proxy 的服务器部署目标已限定为 Linux amd64，其他平台的验证缺口不阻塞该目标；Nido 的四平台包构建与静态校验仍按原流程保留。
@@ -86,7 +90,7 @@ GDS 发布明确使用 `--latest=false`，Nido 发布明确使用 `--latest`。N
 
 包校验检查 Go 主程序身份、GOOS/GOARCH、CGO=0、唯一普通成员、权限、大小、归档尾部和 SHA-256 文件名，拒绝链接、越界路径、额外成员、损坏 CRC 和尾随数据。归档时间和所有者固定，避免泄露构建机器信息。
 
-原生冒烟只运行 `version` 与 `status --json`；验证 Codex 分类为外部集成，Proxy、GDS 分类为内置组件，且空环境不配置任何组件、不创建软件目录。跨平台包只做静态校验，不尝试执行。
+原生冒烟只运行 `version` 与 `status --json`；验证 Codex、Conda 分类为外部集成，Proxy、GDS 分类为内置组件，且空环境不配置任何组件、不创建软件目录。跨平台包只做静态校验，不尝试执行。
 
 发布测试只调用假的 cosign 与 gh，覆盖签名或验签失败后停止上传，以及发布白名单。测试本身不产生标签、发布、推送或真实服务操作。
 
