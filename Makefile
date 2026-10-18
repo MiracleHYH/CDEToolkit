@@ -32,6 +32,8 @@ fmt-check:
 	bash -n tests/proxy-quickstart-linux-native.sh tests/proxy-quickstart-cli-isolation.sh tests/proxy-quickstart-real-linux.sh
 	bash -n tests/proxy-public-release-isolation.sh
 	bash -n tests/conda-cli-isolation.sh
+	bash -n tests/conda-p0-isolation.sh
+	sh -n tests/fixtures/conda-p0-runtime/nido-p0-strace
 	bash -n tests/nido-public-release-isolation.sh tests/nido-public-release-inner.sh
 
 check: fmt-check
@@ -100,6 +102,12 @@ gds-release-check:
 check-proxy-real:
 	@test -n "$${NIDO_TEST_MIHOMO:-}" || { printf 'set NIDO_TEST_MIHOMO to an absolute verified Mihomo path\n' >&2; exit 1; }
 	"$(GO)" test -count=1 -v ./internal/nido -run '^TestProxyRealMihomo(CrossVersion)?$$'
+
+# Opt-in exact-version Conda/pip acceptance; never downloads or uses host tools.
+# Supply a verified Linux binary, a prepared local runtime image and a new output.
+.PHONY: check-conda-p0
+check-conda-p0:
+	bash tests/conda-p0-isolation.sh
 
 # Cross-build with the existing host Go and execute inside a disposable native
 # Linux container. No host mounts, external network, core download, or daemon setup.

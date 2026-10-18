@@ -204,7 +204,11 @@ func (s Service) prepareNativePaths(previous, next Config, scopes ...NativeScope
 				return nil, fmt.Errorf("原始 CONDARC 不存在；未创建仅含镜像的新文件，请先修复原始配置")
 			}
 			var mirror []byte
-			if manageChannels && (next.CondaMirror == "default" || next.SourceCONDARC != "" && path == next.SourceCONDARC) {
+			// A final flag in a later Conda overlay stops subsequent sources,
+			// but does not remove lists/maps merged from this user file. Replace
+			// its complete selected mirror context as well, or an implicit
+			// .condarc can keep old default_channels beside the new preset.
+			if manageChannels {
 				_, mirror = s.MirrorFile(next)
 				if len(mirror) == 0 {
 					return nil, fmt.Errorf("无法生成原始 CONDARC 的镜像配置")

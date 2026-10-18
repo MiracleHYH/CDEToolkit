@@ -1,0 +1,5 @@
+FROM nido-conda-p0:24.1.2-amd64
+COPY strace_6.1-0.1_arm64.deb libc6_2.36-9+deb12u14_arm64.deb /tmp/
+RUN echo '751817724af91cb95df566a21a154f9a7dcdd938e700e5cb9a5a47eb19752ea2  /tmp/strace_6.1-0.1_arm64.deb' | sha256sum -c - && echo '01f4330719fd4f65580e16ea5a0527f372fca750e8f588d26deaf09f2d3b1cf4  /tmp/libc6_2.36-9+deb12u14_arm64.deb' | sha256sum -c - && mkdir -p /opt/native && dpkg-deb -x /tmp/libc6_2.36-9+deb12u14_arm64.deb /opt/native && dpkg-deb -x /tmp/strace_6.1-0.1_arm64.deb /opt/native && rm /tmp/*.deb
+COPY nido-p0-strace /usr/local/bin/nido-p0-strace
+RUN chmod 755 /usr/local/bin/nido-p0-strace && chown -R 1000:1000 /runtime/miniconda

@@ -89,7 +89,7 @@ nido codex update
 
 ## 配置 Conda / pip
 
-本组件自 v0.8.0 提供。首次启用先保存本机原有镜像为持久的 `default`，之后可在原配置、官方和清华之间切换。缓存与环境位置直接写入上游原生配置。
+本组件自 v0.8.0 提供。本次 v0.8.1 发布候选修复隐式用户 `.condarc` 切源时混入旧 defaults 的问题，并按实际管理项查询配置；[发行与公开包验收状态](docs/conda-v0.8.1-release.md)单独记录。首次启用先保存本机原有镜像为持久的 `default`，之后可在原配置、官方和清华之间切换。缓存与环境位置直接写入上游原生配置。
 
 ```sh
 nido conda setup
@@ -105,7 +105,7 @@ nido conda validate
 
 Conda 镜像支持 `default`、`official`（别名 `conda`）、`tuna`、`off`；pip 官方别名为 `pypi`，另支持 `ustc` 和自定义 HTTPS simple index。首次切换也会自动捕获对应工具的 `default`，以后不会覆盖；`default` 跨 Shell 和重启保留。已有自定义 CONDARC 时保留原路径，只原地修改镜像字段，证书、代理等设置继续实时读取；没有显式文件时使用镜像 overlay。选定镜像与环境覆盖需重新加载 `env.sh`；缓存和环境目录写入原生配置后即持久保留，无需 source。
 
-原生修改保留其他键的语义、注释、权限和所属组，Conda YAML 的格式可能调整；不迁移或清空数据。显式 `default` 恢复受管标准用户文件和原 CONDARC 中已捕获的镜像字段，清除后来新增的镜像映射，保留证书、代理等非镜像设置。新复制的镜像凭据不得写入他人可读的文件。`off` 只停止管理单项，`reset` 清空选择但保留 `default`、原 CONDARC 关联及原生值。`status` / `show` / `mirrors` 为静态查看；setup、镜像切换和 `validate` 会显式查询本地工具，不联网或安装包。详见[使用指南](docs/usage.md#conda--pip)、[设计说明](docs/conda-design.md)与[v0.8.0 发行说明](docs/conda-release.md)。
+原生修改保留其他键的语义、注释、权限和所属组，Conda YAML 的格式可能调整；不迁移或清空数据。镜像操作将完整选中上下文同步到受管标准用户文件及原 CONDARC，显式 `default` 使用首次已捕获的镜像字段，保留证书、代理等非镜像设置。新复制的镜像凭据不得写入他人可读的文件。`off` 只停止管理单项，`reset` 清空选择但保留 `default`、原 CONDARC 关联及原生值。`status` / `show` / `mirrors` 为静态查看；setup、镜像切换和 `validate` 会显式查询本地工具，不联网或安装包。旧 Conda 的 envs 查询可能尝试打开 base history 测可写性，Nido 的配置查询不是上游进程沙箱。详见[使用指南](docs/usage.md#conda--pip)、[设计说明](docs/conda-design.md)及[目标版本 P0 验收](docs/conda-p0-acceptance.md)。
 
 ## 使用内置 Proxy
 

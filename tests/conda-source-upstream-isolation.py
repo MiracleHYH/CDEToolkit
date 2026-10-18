@@ -38,6 +38,7 @@ OTHER_KEYS = (
     "envs_dirs",
     "pkgs_dirs",
 )
+DIRECTORY_KEYS = ("envs_dirs", "pkgs_dirs")
 
 
 def run(argv: list[str], env: dict[str, str]) -> str:
@@ -145,6 +146,11 @@ class Scenario:
             prefix / ".condarc": (prefix / ".condarc").read_bytes()
             for prefix in (self.prefix, self.alternate)
         }
+        self.supports_prefix_flag = "--prefix" in run(
+            [self.conda_binary, "config", "--help"], self.base_env
+        )
+        if not self.supports_prefix_flag:
+            print("INFO conda config lacks --prefix; alternate environment reads use child-only CONDA_PREFIX")
 
     def create_source(self) -> None:
         # A $CONDARC reference proves the original environment value survives;
@@ -243,12 +249,20 @@ create_default_packages:
         alternate: bool = False,
     ) -> dict[str, object]:
         arguments = [self.conda_binary, "config"]
+        query_env = self.env if env is None else env
         if alternate:
-            arguments += ["--prefix", str(self.alternate)]
+            if self.supports_prefix_flag:
+                arguments += ["--prefix", str(self.alternate)]
+            else:
+                # Older Conda config has no --prefix option. Its native
+                # configuration search uses CONDA_PREFIX for the same target
+                # environment; override only this child, keeping the original
+                # source and the caller's active environment unchanged.
+                query_env = {**query_env, "CONDA_PREFIX": str(self.alternate)}
         arguments += ["--show", *keys, "--json"]
-        return json.loads(run(arguments, self.env if env is None else env))
+        return json.loads(run(arguments, query_env))
 
-    def source_values(self) -> dict[str, object]:
+    def source_values(self, *, exclude_paths: bool = False) -> dict[str, object]:
         sources = json.loads(
             run(
                 [self.conda_binary, "config", "--show-sources", "--json"],
@@ -256,22 +270,28 @@ create_default_packages:
             )
         )
         source = sources[str(self.source)]
-        return {key: value for key, value in source.items() if key not in MIRROR_KEYS}
+        excluded = MIRROR_KEYS + (DIRECTORY_KEYS if exclude_paths else ())
+        return {key: value for key, value in source.items() if key not in excluded}
 
     def check_other_settings(
         self,
         expected: dict[str, object],
         alternate_expected: dict[str, object],
         source_expected: dict[str, object],
+        *,
+        exclude_paths: bool = False,
     ) -> None:
-        require_equal(self.show(OTHER_KEYS), expected, "effective settings changed")
+        keys = tuple(key for key in OTHER_KEYS if not exclude_paths or key not in DIRECTORY_KEYS)
+        require_equal(self.show(keys), expected, "effective settings changed")
         require_equal(
-            self.show(OTHER_KEYS, alternate=True),
+            self.show(keys, alternate=True),
             alternate_expected,
-            "--prefix changed the original non-mirror search precedence",
+            "alternate environment read changed the original non-mirror search precedence",
         )
         require_equal(
-            self.source_values(), source_expected, "unrelated source keys changed"
+            self.source_values(exclude_paths=exclude_paths),
+            source_expected,
+            "unrelated source keys changed",
         )
         require_equal(
             self.show(("client_ssl_cert",))["client_ssl_cert"],
@@ -291,6 +311,156 @@ create_default_packages:
             if comment not in self.source.read_text(encoding="utf-8"):
                 raise AssertionError("an unrelated source comment was lost")
 
+    def configuration_files(self) -> dict[str, tuple[bytes, int, int]]:
+        paths = {self.source, self.home / ".condarc"}
+        paths.update(path for path in self.root.rglob("*") if path.is_file())
+        return {
+            str(path): (
+                path.read_bytes(),
+                path.stat().st_mode & 0o777,
+                path.stat().st_gid,
+            )
+            for path in sorted(paths)
+            if path.is_file()
+        }
+
+    def check_native_directories(self) -> None:
+        # An active mirror must keep both the ordinary user file and the
+        # original explicit CONDARC synchronized, so releasing its environment
+        # overlay cannot revive an old directory. Without mirror management,
+        # Conda's explicit source alone is the native write target.
+        self.nido("conda", "mirror", "conda", "default", "--yes")
+        self.reload()
+        # Use this process's own upstream baseline. A strict read-only runtime
+        # may order fallback envs differently from a normally writable one.
+        non_path_keys = tuple(key for key in OTHER_KEYS if key not in DIRECTORY_KEYS)
+        effective_before = self.show(non_path_keys)
+        alternate_before = self.show(non_path_keys, alternate=True)
+        source_before = self.source_values(exclude_paths=True)
+        metadata_before = {
+            path: (path.stat().st_mode & 0o777, path.stat().st_gid)
+            for path in {self.source, self.home / ".condarc"}
+        }
+        native = self.configuration_files()
+        for variable, command in (
+            ("CONDA_ENVS_PATH", ("envs",)),
+            ("CONDA_PKGS_DIRS", ("cache", "conda")),
+        ):
+            target = self.directory / "must remain absent" / variable
+            previous = self.env.get(variable)
+            self.env[variable] = str(self.directory / "conflicting override" / variable)
+            try:
+                result = subprocess.run(
+                    [self.nido_binary, "--root", str(self.root), "conda", *command, str(target), "--yes"],
+                    env=self.env,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                if result.returncode == 0 or variable not in result.stderr:
+                    raise AssertionError(f"{variable} conflict was not explicitly rejected")
+                require_equal(
+                    self.configuration_files(), native,
+                    f"{variable} conflict changed native/Nido files",
+                )
+                if target.exists():
+                    raise AssertionError("a rejected directory setter created its data target")
+            finally:
+                if previous is None:
+                    self.env.pop(variable, None)
+                else:
+                    self.env[variable] = previous
+
+        targets = {
+            "envs_dirs": self.directory / "new data path" / "envs",
+            "pkgs_dirs": self.directory / "new data path" / "pkgs",
+        }
+        self.nido("conda", "envs", str(targets["envs_dirs"]), "--yes")
+        self.nido("conda", "cache", "conda", str(targets["pkgs_dirs"]), "--yes")
+        self.reload()
+        for variable in ("CONDA_ENVS_PATH", "CONDA_ENVS_DIRS", "CONDA_PKGS_DIRS"):
+            if variable in self.env:
+                raise AssertionError(f"native setter exported directory override {variable}")
+        for alternate in (False, True):
+            actual = self.show(DIRECTORY_KEYS, alternate=alternate)
+            for key, target in targets.items():
+                require_equal(actual[key][0], str(target), f"upstream did not prefer native {key}")
+
+        sources = json.loads(
+            run([self.conda_binary, "config", "--show-sources", "--json"], self.base_env)
+        )
+        for path, metadata in metadata_before.items():
+            for key, target in targets.items():
+                require_equal(
+                    sources[str(path)][key], [str(target)],
+                    f"{path.name} did not retain synchronized native {key}",
+                )
+            require_equal(
+                (path.stat().st_mode & 0o777, path.stat().st_gid), metadata,
+                "directory setter changed configuration mode/group",
+            )
+        self.check_other_settings(
+            effective_before, alternate_before, source_before, exclude_paths=True
+        )
+
+        self.nido("conda", "validate", "--json")
+        for path in targets.values():
+            if path.exists():
+                raise AssertionError("directory configuration/query created its data target")
+
+        # off/reset release tracking while preserving the native directory
+        # selections and all data. They do not mean cache disable or rollback.
+        retained = {path: path.read_bytes() for path in metadata_before}
+        self.nido("conda", "envs", "off", "--yes")
+        self.nido("conda", "cache", "conda", "off", "--yes")
+        self.nido("conda", "reset", "--yes")
+        self.reload()
+        for path, content in retained.items():
+            require_equal(path.read_bytes(), content, "off/reset restored old native directories")
+        for key, target in targets.items():
+            require_equal(
+                self.show(DIRECTORY_KEYS)[key][0], str(target),
+                "off/reset changed an effective native directory",
+            )
+            if target.exists():
+                raise AssertionError("off/reset created a data directory")
+        self.check_other_settings(
+            effective_before, alternate_before, source_before, exclude_paths=True
+        )
+
+        if not self.standard_source:
+            user = self.home / ".condarc"
+            user_before = (
+                user.read_bytes(), user.stat().st_mode & 0o777, user.stat().st_gid
+            )
+            source_only = self.directory / "source-only data path" / "envs"
+            self.nido("conda", "envs", str(source_only), "--yes")
+            require_equal(
+                (user.read_bytes(), user.stat().st_mode & 0o777, user.stat().st_gid),
+                user_before,
+                "inactive mirror directory setter changed the ordinary user file",
+            )
+            for alternate in (False, True):
+                require_equal(
+                    self.show(DIRECTORY_KEYS, alternate=alternate)["envs_dirs"][0],
+                    str(source_only),
+                    "inactive mirror did not use the original explicit CONDARC",
+                )
+            self.check_other_settings(
+                effective_before, alternate_before, source_before, exclude_paths=True
+            )
+            self.nido("conda", "validate", "--json")
+            source_after = self.source.read_bytes()
+            self.nido("conda", "reset", "--yes")
+            self.reload()
+            require_equal(
+                self.source.read_bytes(), source_after,
+                "reset rewrote the source-only directory setting",
+            )
+            if source_only.exists():
+                raise AssertionError("source-only setter/query created a data directory")
+
     def execute(self) -> None:
         before = self.show(OTHER_KEYS)
         alternate_before = self.show(OTHER_KEYS, alternate=True)
@@ -305,7 +475,7 @@ create_default_packages:
             require_equal(
                 alternate_before["ssl_verify"],
                 str(self.alternate_certificate),
-                "fixture must exercise --prefix certificate precedence",
+                "fixture must exercise alternate environment certificate precedence",
             )
         else:
             require_equal(
@@ -385,8 +555,10 @@ create_default_packages:
         self.reload()
         self.check_other_settings(updated, alternate_updated, source_updated)
         require_equal(self.source.read_bytes(), source_bytes, "reset rewrote native settings")
+        self.check_native_directories()
         label = "standard ~/.condarc" if self.standard_source else "nonstandard CONDARC"
-        print(f"PASS {label}: mirror/default/off, TLS/proxy, live edits and --prefix")
+        prefix_method = "--prefix" if self.supports_prefix_flag else "child CONDA_PREFIX"
+        print(f"PASS {label}: mirror/default/off, native envs/cache setters and conflicts, TLS/proxy, live edits and {prefix_method}")
 
 
 def main() -> None:

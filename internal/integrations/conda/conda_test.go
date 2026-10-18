@@ -247,7 +247,7 @@ func TestValidateUsesCurrentEnvironmentAndAcceptsCondaChannelSerializationVersio
 		calls := 0
 		s.Runner = func(name string, args, env []string) ([]byte, error) {
 			calls++
-			if name != "conda" || !reflect.DeepEqual(args, []string{"config", "--show", "channels", "default_channels", "custom_channels", "custom_multichannels", "channel_alias", "migrated_channel_aliases", "migrated_custom_channels", "envs_dirs", "pkgs_dirs", "--json"}) || !reflect.DeepEqual(env, s.Env) {
+			if name != "conda" || !reflect.DeepEqual(args, []string{"config", "--show", "channels", "default_channels", "custom_channels", "custom_multichannels", "channel_alias", "migrated_channel_aliases", "migrated_custom_channels", "--json"}) || !reflect.DeepEqual(env, s.Env) {
 				t.Fatalf("unexpected command or desired environment injection: %s %v %v", name, args, env)
 			}
 			return configJSON(t, "tuna", objects), nil

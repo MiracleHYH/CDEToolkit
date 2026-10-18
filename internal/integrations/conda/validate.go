@@ -39,7 +39,21 @@ func (s Service) Validate(c Config) ([]string, error) {
 	}
 	var checked []string
 	if c.CondaMirror != "" || c.EnvsDir != "" || c.PkgsDir != "" {
-		b, err := s.run("conda", "config", "--show", "channels", "default_channels", "custom_channels", "custom_multichannels", "channel_alias", "migrated_channel_aliases", "migrated_custom_channels", "envs_dirs", "pkgs_dirs", "--json")
+		args := []string{"config", "--show"}
+		if c.CondaMirror != "" {
+			args = append(args, defaultMirrorKeys...)
+		}
+		// Conda 24 evaluates root writability while resolving envs_dirs. Do not
+		// trigger that unrelated upstream probe during mirror/cache checks.
+		// A selected directory still uses Conda's actual effective value.
+		if c.EnvsDir != "" {
+			args = append(args, "envs_dirs")
+		}
+		if c.PkgsDir != "" {
+			args = append(args, "pkgs_dirs")
+		}
+		args = append(args, "--json")
+		b, err := s.run("conda", args...)
 		if err != nil {
 			return checked, err
 		}

@@ -1,0 +1,9 @@
+*
+!Dockerfile
+!Dockerfile.trace
+!nido-p0-strace
+!Miniconda3-py312_24.1.2-0-Linux-x86_64.sh
+!strace_6.1-0.1_amd64.deb
+!libunwind8_1.6.2-3_amd64.deb
+!strace_6.1-0.1_arm64.deb
+!libc6_2.36-9+deb12u14_arm64.deb

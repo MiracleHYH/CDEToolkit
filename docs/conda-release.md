@@ -2,6 +2,8 @@
 
 Conda / pip 外部配置集成自 Nido v0.8.0 提供，包含在 Linux/macOS amd64、arm64 的 Nido 包中。Nido 不安装 Conda、初始化 Shell、安装包或迁移环境与缓存。日常命令见 [使用指南](usage.md#conda--pip)，配置格式与保护边界见 [设计说明](conda-design.md)。
 
+本文保留 v0.8.0 的历史发行记录。后续 [目标版本 P0 验收](conda-p0-acceptance.md) 发现：无显式 CONDARC、用户 `.condarc` 已有其他 `default_channels` 时，v0.8.0 切源可能合并保留旧地址；完整七字段同步及按项查询修复纳入 [v0.8.1 发布候选](conda-v0.8.1-release.md)。修复源码通过不等于新公开包通过，不回填为 v0.8.0 通过该目标形态；本次发行与公网验收状态在新记录中逐项补充。
+
 ## 发行功能
 
 - 首次 `setup` 或直接切源前，将 Conda 和 pip 原有有效镜像分别持久保存为 `default`。重复 setup、后续切换和 reset 不覆盖快照，新 Shell 与重启后仍可选择。
@@ -36,9 +38,9 @@ conda run -n agent --no-capture-output python tests/pip-upstream-isolation.py /a
 NIDO_TEST_REAL_CONDA=/absolute/path/to/conda go test ./internal/integrations/conda -run '^TestFinalAuditRuntime' -count=1
 ```
 
-这些入口将写入限制在临时 HOME、软件根和配置夹具；来源保护脚本另建临时 Conda root、prefix 及证书夹具。pip 入口使用当前 Python 的真实 pip，检查冷进程恢复原 default、原生缓存、证书、代理和 reset 保留。这些入口只读查询已有工具，不联网、不安装包、不修改真实机器配置。标准及自定义 CONDARC 的优先级、证书和代理保护、default 完整恢复等历史通过记录见 [组件审计](conda-audit.md)。这些结果不证明镜像下载、包完整性或所有平台的实际上游行为。
+这些入口把 Nido 配置写入临时 HOME、软件根和配置夹具；来源保护脚本另建临时 Conda root、prefix 及证书夹具。pip 入口使用当前 Python 的真实 pip，检查冷进程恢复原 default、原生缓存、证书、代理和 reset 保留。它们不联网、不安装包；单独替换 HOME 不是上游安装目录拒写保证，Conda 24.1.2 查询 envs 会尝试以 `a+` 打开 base history。需要完整运行时与内核拒写边界时，使用 [P0 容器入口](conda-p0-acceptance.md#复现与证据)。标准及自定义 CONDARC 的优先级、证书和代理保护、default 完整恢复等历史通过记录见 [组件审计](conda-audit.md)。这些结果不证明镜像下载、包完整性或所有平台的实际上游行为。
 
-## 本次发行记录
+## v0.8.0 历史发行记录
 
 v0.8.0 于 2026-10-18 发布。以下记录区分源码检查、公开资产核验与实际执行的验收；发布前审计保留在历史记录中。
 
@@ -59,11 +61,13 @@ v0.8.0 于 2026-10-18 发布。以下记录区分源码检查、公开资产核�
 
 公开包与签名的校验规则见 [构建与发行](go-ci-release.md#发行校验)。安装客户端核对 SHA-256，当前不验证 Sigstore；工作流签名不能代替客户端下载时的真实性验证。发行和临时目录验收均不表示已经在真实机器部署或改写其 Conda/pip 配置。
 
-公开包验收须先独立核对新、旧版本的发布来源、平台、摘要及对应 tag 的 Sigstore 签名，再提供资产目录：
+下面保留 v0.8.0 发行时的执行参数；当时 latest 指向 v0.8.0。latest 随新版改变后，使用 [v0.8.1 记录](conda-v0.8.1-release.md#验证入口)中的新旧版本参数。公开包验收须先独立核对新、旧版本的发布来源、平台、摘要及对应 tag 的 Sigstore 签名，再提供资产目录：
 
 ```sh
 NIDO_ACCEPT_INPUT=/absolute/path/to/verified-v0.8.0/assets \
 NIDO_ACCEPT_OLD_INPUT=/absolute/path/to/verified-v0.7.0/assets \
+NIDO_ACCEPT_VERSION=0.8.0 \
+NIDO_ACCEPT_OLD_VERSION=0.7.0 \
 NIDO_ACCEPT_OUTPUT=/absolute/path/to/new-evidence-directory \
 make check-nido-public-release
 ```

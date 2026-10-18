@@ -9,11 +9,11 @@ fail() { printf 'FAIL: %s\n' "$*" >&2; exit 2; }
 input=${NIDO_ACCEPT_INPUT:?set the new cosign-verified asset directory}
 old_input=${NIDO_ACCEPT_OLD_INPUT:?set the old cosign-verified asset directory}
 output=${NIDO_ACCEPT_OUTPUT:?set a fresh evidence directory}
-version=${NIDO_ACCEPT_VERSION:-0.8.0}
-old_version=${NIDO_ACCEPT_OLD_VERSION:-0.7.0}
+tests_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+version=${NIDO_ACCEPT_VERSION:-$(cat "$tests_dir/../VERSION")}
+old_version=${NIDO_ACCEPT_OLD_VERSION:-0.8.0}
 mode=${NIDO_ACCEPT_MODE:-native}
 platform=${NIDO_ACCEPT_PLATFORM:-}
-tests_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 stable='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
 [[ $version =~ $stable && $old_version =~ $stable && $version != "$old_version" ]] || fail 'invalid release versions'
 for directory in "$input" "$old_input"; do
@@ -41,7 +41,10 @@ for directory in "$input" "$old_input"; do
   done
 done
 [[ -s $input/install.sh && -s $input/install.sh.sigstore.json && ! -L $input/install.sh ]] || fail 'new signed installer input is required'
-for command in tar cmp awk curl; do command -v "$command" >/dev/null || fail "missing existing command: $command"; done
+for command in tar cmp awk curl jq; do command -v "$command" >/dev/null || fail "missing existing command: $command"; done
+sha256_file() {
+  if command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi
+}
 mkdir "$output"
 output=$(cd "$output" && pwd -P)
 mkdir -p "$output/inputs/new" "$output/inputs/old" "$output/inputs/harness"
@@ -51,8 +54,29 @@ for name in "$asset" "$asset.sha256"; do
 done
 cp "$input/install.sh" "$input/install.sh.sigstore.json" "$output/inputs/new/"
 cp "$tests_dir/nido-public-release-inner.sh" "$tests_dir/conda-cli-isolation.sh" "$output/inputs/harness/"
-printf 'new_version=%s\nold_version=%s\nplatform=%s\nmode=%s\nold_binary=actual-preverified-public-release\n' \
-  "$version" "$old_version" "$platform" "$mode" > "$output/provenance.txt"
+# Recheck the current official API against the already signed input bytes
+# before any released program runs. This is an additional input freshness gate;
+# the client's real update path still uses its own API digest and SHA-256 checks.
+for kind in new old; do
+  selected_version=$version
+  [[ $kind = new ]] || selected_version=$old_version
+  metadata="$output/$kind-public-api-before.json"
+  curl_args=(-q --http1.1 --fail --silent --show-error --location --proto '=https' --proto-redir '=https'
+    --connect-timeout 15 --max-time 120 --max-filesize 4194304)
+  [[ -z ${NIDO_ACCEPT_GENERAL_PROXY:-} ]] || curl_args+=(--proxy "$NIDO_ACCEPT_GENERAL_PROXY")
+  curl "${curl_args[@]}" --output "$metadata" "https://api.github.com/repos/MiracleHYH/CDEToolkit/releases/tags/v$selected_version"
+  jq -e --arg tag "v$selected_version" '.tag_name == $tag and .draft == false and .prerelease == false' "$metadata" >/dev/null
+  names=("$asset" "$asset.sha256")
+  [[ $kind != new ]] || names+=(install.sh)
+  for name in "${names[@]}"; do
+    selected="$output/inputs/$kind/$name"
+    jq -e --arg name "$name" --arg digest "sha256:$(sha256_file "$selected")" --argjson size "$(wc -c < "$selected")" \
+      --arg url "https://github.com/MiracleHYH/CDEToolkit/releases/download/v$selected_version/$name" \
+      '[.assets[] | select(.name == $name)] | length == 1 and .[0].digest == $digest and .[0].size == $size and .[0].browser_download_url == $url' "$metadata" >/dev/null
+  done
+done
+printf 'new_version=%s\nold_version=%s\nplatform=%s\nmode=%s\nhost_uname=%s\nold_binary=actual-preverified-public-release\nofficial_api_inputs_match_before_execution=true\n' \
+  "$version" "$old_version" "$platform" "$mode" "$(uname -srm)" > "$output/provenance.txt"
 if [[ $mode = native ]]; then
   env -i PATH=/usr/bin:/bin NIDO_ACCEPT_INPUT="$output/inputs" NIDO_ACCEPT_OUTPUT="$output" \
     NIDO_ACCEPT_VERSION="$version" NIDO_ACCEPT_OLD_VERSION="$old_version" NIDO_ACCEPT_PLATFORM="$platform" \
