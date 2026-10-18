@@ -12,17 +12,48 @@ Nido 为 Codex 提供目录关联、环境与代理配置，以及官方安装�
 
 ## 快速开始
 
-需要 curl、tar 和 SHA-256 工具（Linux 通常自带 `sha256sum`，macOS 自带 `shasum`），无需 Go。下面一行安装最新 Go 版到 `~/.nido`，并在当前终端加载 `nido` 命令：
+本节的 `--github-proxy`、`nido download` 和 `nido update` 已在源码实现，**随下一版本发布，当前公开 v0.6.0 尚不支持**。安装当前发布版可先使用 `curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh`；下面两条是下一版的安装方式。
+
+需要 curl、tar 和 SHA-256 工具（Linux 通常自带 `sha256sum`，macOS 自带 `shasum`），无需 Go。首次安装请选择一种下载方式，安装最新 Go 版到 `~/.nido`。
+
+**能直接访问 GitHub：** 脚本和安装包都从 GitHub 下载。
 
 ```sh
-curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
+curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy direct
+```
+
+**GitHub 访问困难：** 脚本和安装包都通过第三方加速前缀下载。
+
+```sh
+curl --http1.1 -fsSL https://gh-proxy.org/https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy https://gh-proxy.org
+```
+
+第二种方式会执行第三方转发的脚本，仅在信任该服务时使用。安装器核对包的 SHA-256，当前客户端不会验证 Sigstore 签名；第三方也能同时替换脚本、包和摘要，因此加速下载不能提供与官方直链相同的真实性保证。
+
+然后在当前终端加载命令：
+
+```sh
+. "${NIDO_HOME:-$HOME/.nido}/env.sh"
 nido version
 nido status
 ```
 
 安装器只安装 Nido，不安装组件、不关联已有 Codex，也不启动服务。再次运行同一命令会更新 Nido，保留已有管理配置。可提前设置 `NIDO_HOME` 选择其他独立软件目录；外部 Codex HOME 必须在其之外。
 
-安装脚本运行在子 Shell 中，不能直接更改当前终端的 PATH，因此命令末尾会显式加载 `env.sh`。Nido 不自动编辑 Shell 配置。需要新终端自动加载时，将 `. "$HOME/.nido/env.sh"` 加入 `~/.bashrc` 或 `~/.zshrc`；自定义目录请替换路径。
+安装脚本运行在子 Shell 中，不能直接更改当前终端的 PATH，因此安装后需要加载 `env.sh`。Nido 不自动编辑 Shell 配置。需要新终端自动加载时，将 `. "$HOME/.nido/env.sh"` 加入 `~/.bashrc` 或 `~/.zshrc`；自定义目录请替换路径。
+
+之后可直接检查和更新 Nido 本身：
+
+```sh
+nido update --check
+nido update
+nido download show
+nido download set auto
+```
+
+自身更新只操作当前运行的受管 `bin/nido`。相同版本不会下载，不支持降级；源码 `dev` 构建请通过源码更新。需要选择明确的新版本时使用 `nido update --version X.Y.Z`。
+
+GitHub 下载策略支持 `direct`、`auto` 或自定义 HTTPS 前缀。`auto` 先短时尝试官方地址，失败后依次尝试少量内置第三方前缀；仅用于支持的公开 GitHub 下载，不是全局 HTTP 代理，不改写 Codex 官方脚本地址。首次显式选择会保存，重复安装未指定时保留既有配置；一次更新可用 `--github-proxy` 覆盖。详细参数与信任边界见[使用指南](docs/usage.md#github-下载与-nido-自身更新)。
 
 ## 关联或安装 Codex
 
@@ -113,6 +144,8 @@ nido proxy start
 | --- | --- |
 | 本地状态 / 环境检查 | `nido status` / `nido doctor` |
 | 输出 Shell 环境 | `nido env bash` / `nido env zsh` |
+| 检查 / 更新 Nido 本身 | `nido update --check` / `nido update` |
+| 查看 / 保存 GitHub 下载策略 | `nido download show` / `nido download set auto` |
 | 仅为本次 Codex 安装更新指定代理 | `nido codex update --proxy http://127.0.0.1:7890` |
 | 清理 Nido 写入的 Codex 代理块 | `nido codex proxy off` |
 | 解除 Codex 关联，保留程序与数据 | `nido codex detach` |

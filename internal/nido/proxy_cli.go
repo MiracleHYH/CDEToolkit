@@ -30,6 +30,9 @@ func (c *CLI) proxy(m *Manager, o cliOptions, args []string) int {
 		args = args[1:]
 	}
 	fail := func(err error) int { return c.proxyError(o, err) }
+	if o.githubProxy != "" && (action != "install" && action != "update" || o.artifact != "") {
+		return fail(fmt.Errorf("--github-proxy 仅用于在线安装、更新或版本查询"))
+	}
 	if action == "bind" {
 		return c.proxyBind(m, o, args)
 	}
@@ -50,6 +53,13 @@ func (c *CLI) proxy(m *Manager, o cliOptions, args []string) int {
 	}
 	if o.check && (o.artifact != "" || o.checksum != "") {
 		return fail(fmt.Errorf("版本查询不接受程序包选项"))
+	}
+	if (action == "install" || action == "update") && o.artifact == "" {
+		policy, err := m.githubPolicy(o.githubProxy)
+		if err != nil {
+			return fail(err)
+		}
+		m.Proxy.GitHubProxy = policy
 	}
 	if o.proxy != "" {
 		if action != "install" && action != "update" {

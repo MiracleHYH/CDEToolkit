@@ -3,15 +3,12 @@ package gds
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/MiracleHYH/CDEToolkit/internal/gdsutil"
+	"github.com/MiracleHYH/CDEToolkit/internal/githubdownload"
 )
 
 const releaseRepository = "MiracleHYH/CDEToolkit"
@@ -217,55 +214,5 @@ func (s *Service) downloadRelease(source, supplied string) (preparedArtifact, er
 }
 
 func (s *Service) get(source string, maximum int64) ([]byte, error) {
-	if err := httpsURL(source); err != nil {
-		return nil, err
-	}
-	base := s.HTTP
-	if base == nil {
-		base = &http.Client{}
-	}
-	client := *base
-	if client.Timeout == 0 || client.Timeout > 2*time.Minute {
-		client.Timeout = 2 * time.Minute
-	}
-	previousRedirect := client.CheckRedirect
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 5 {
-			return fmt.Errorf("官方发布重定向过多")
-		}
-		if err := httpsURL(req.URL.String()); err != nil {
-			return err
-		}
-		if previousRedirect != nil {
-			return previousRedirect(req, via)
-		}
-		return nil
-	}
-	req, err := http.NewRequest(http.MethodGet, source, nil)
-	if err != nil {
-		return nil, fmt.Errorf("GDS 官方下载地址无效")
-	}
-	req.Header.Set("User-Agent", "Nido")
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("GDS 官方发布下载失败；地址未输出")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || resp.ContentLength > maximum {
-		return nil, fmt.Errorf("GDS 官方发布下载返回 HTTP %d 或大小越界", resp.StatusCode)
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maximum+1))
-	if err != nil || int64(len(data)) > maximum {
-		return nil, fmt.Errorf("GDS 官方发布下载不完整或大小越界")
-	}
-	return data, nil
-}
-
-func httpsURL(source string) error {
-	u, err := url.Parse(source)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" {
-		return fmt.Errorf("GDS 官方下载地址必须是无认证信息的 HTTPS URL")
-	}
-	return nil
+	return githubdownload.Get(s.HTTP, source, maximum, s.GitHubProxy)
 }

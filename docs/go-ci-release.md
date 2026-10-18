@@ -27,13 +27,27 @@ Go 检查直接使用 runner 普通权限。Codex 外部辅助集成不扫描全
 
 ## 安装边界
 
-`scripts/install.sh` 是 POSIX 下载器，只依赖 curl、tar 和 SHA-256 工具。它接受 `--version`、`--root`、`--yes` 与 `--dry-run`，软件目录默认为 `~/.nido`，可通过 `NIDO_HOME` 指定。旧的 `--prefix`、`--store` 和迁移参数不再支持。
+下述 GitHub 策略与自身更新为当前源码实现，尚未发行；公开 v0.6.0 安装器不接受新增的 `--github-proxy` 参数。
 
-下载器通过 HTTPS 上的 HTTP/1.1 获取当前平台 Nido 包与摘要，核对摘要、单成员归档和程序报告的版本，再由临时 Nido 执行：
+`scripts/install.sh` 是 POSIX 下载器，依赖 curl、tar、SHA-256 及系统自带文本工具。它接受 `--version`、`--root`、`--github-proxy`、`--yes` 与 `--dry-run`，软件目录默认为 `~/.nido`，可通过 `NIDO_HOME` 指定。旧的 `--prefix`、`--store` 和迁移参数不再支持。
+
+下载器通过 HTTPS 上的 HTTP/1.1 获取当前平台 Nido 包与摘要。`--github-proxy` 或 `NIDO_GITHUB_PROXY` 支持 `direct`、`auto` 和无认证信息的 HTTPS 前缀；没有显式配置时默认 `auto`。安装脚本的 `auto` 对官方地址的连接/总超时为 4/180 秒，之后依次尝试 `gh-proxy.org` 和 `ghfast.top`，每项为 5/90 秒，不额外 retry；直连或明确前缀为 10/180 秒。可达的慢速官方包不会被原来的 15 秒总期限提前中断。curl 禁止 URL globbing，前缀中的括号和花括号保持字面含义。只重写 GitHub 包与摘要地址，不注入通用网络代理，也不影响 Codex 官方脚本。
+
+安装脚本独立检查归档列表命令的退出状态与大小，版本必须为单行稳定版本；临时目录创建后立即注册清理。重复安装在已有程序目录不可写或经过链接时停止，不先修改下载偏好。Go 下载层的官方连接与响应头期限为 8 秒，收到响应后可在两分钟总预算内继续传输；API 只使用支持 API 的预设。每次重定向重新检查 HTTPS、认证参数和目标域名，仅允许官方 GitHub/CDN、所选加速入口及已知预设地域域名。
+
+核对摘要、单成员归档和程序报告的版本，再由临时 Nido 执行：
 
 ```sh
 nido --root /absolute/software/path init --yes
 ```
+
+压缩包下载上限为 256 MiB；解包输出另在子 Shell 中施加 `ulimit -f 524288` 文件大小限制，避免小压缩包无限展开到临时盘。按 Shell 的 512/1024 字节块单位，该输出上限为 256/512 MiB。超限或解包失败时不执行候选程序，限制不传给后续初始化。该局部边界不替代完整归档验证，也不限制归档列表检查的 CPU 时间。
+
+只有用户显式提供下载 flag 或环境变量时，再传入 `--github-proxy VALUE` 保存；普通重复安装不重置已有策略。Shell 不读取主配置。更新已安装 Nido 推荐 `nido update --check` 和 `nido update`，可加本次 `--version X.Y.Z`、`--github-proxy VALUE` 与独立 `--proxy URL`；持久偏好由 `nido download show/set` 管理。自身更新只允许当前运行的受管 `bin/nido`，只更新到稳定新版，同版不下载，拒绝降级；`dev` 构建需要源码更新。Go 下载器的自动 API 回退仅使用 `gh-proxy.org`，`ghfast.top` 仅用于资产。
+
+自身更新在版本查询前捕获程序目录和入口身份，并与命令启动时的入口身份核对；确认后再次复核，不接受同内容但不同文件对象的替换。候选执行前后复核目录、文件身份和字节，失败时保留旧程序与用户替换内容。清理仅删除本次创建且身份仍一致的临时文件。发布准备还检查实际 ELF/Mach-O 架构，归档尾部一旦出现额外字节即拒绝，避免为垃圾尾部额外分配大块内存。
+
+首次脚本尚未运行时不能使用内部回退，README 因此明确提供两条命令：官方脚本配 `--github-proxy direct`，或经 `https://gh-proxy.org/完整GitHub脚本URL` 下载并配同一加速前缀。后者执行第三方返回的脚本，需要信任该服务。客户端当前不验证 Sigstore，第三方可同时更换包与摘要；不能将 HTTPS 或摘要校验描述为官方真实性验证。下面的 Sigstore 验签指发行工作流和显式验收，不代表普通安装客户端已经验签。
 
 初始化只把 Nido 放入 `<root>/bin/nido`，写入自己的配置与 `env.sh` 并输出 Shell 接入说明。它不会下载内置组件、发现或关联 Codex、启动服务、覆盖其他入口或编辑用户 Shell 文件。已有无归属的文件与链接必须拒绝覆盖。
 

@@ -20,6 +20,9 @@ type Service struct {
 	Env    []string
 	HTTP   *http.Client
 	Runner Runner
+	// GitHubProxy routes public release downloads only. Empty preserves direct
+	// operation for independently constructed components.
+	GitHubProxy string
 	// API and Platform support isolated release and architecture tests.
 	API          string
 	Platform     string

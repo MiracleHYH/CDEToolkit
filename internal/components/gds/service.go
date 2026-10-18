@@ -26,6 +26,9 @@ type Service struct {
 	StartTimeout time.Duration
 	// HTTP permits a per-operation explicit proxy and isolated test transport.
 	HTTP *http.Client
+	// GitHubProxy affects only this component's public GitHub release requests.
+	// Empty keeps independent Service instances on the direct route.
+	GitHubProxy string
 	// API is only a constructor seam for isolated tests. Production leaves it
 	// empty; no environment variable or saved configuration overrides the API.
 	API string

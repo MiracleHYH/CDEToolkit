@@ -70,6 +70,16 @@ func (c *CLI) gds(m *Manager, o cliOptions, args []string) int {
 	if o.check && (len(args) != 0 || o.artifact != "" || o.checksum != "") {
 		return fail(fmt.Errorf("版本查询不接受指定版本或程序包选项"))
 	}
+	if o.githubProxy != "" && (action != "install" && action != "update" || o.artifact != "") {
+		return fail(fmt.Errorf("--github-proxy 仅用于在线安装、更新或版本查询"))
+	}
+	if (action == "install" || action == "update") && o.artifact == "" {
+		policy, err := m.githubPolicy(o.githubProxy)
+		if err != nil {
+			return fail(err)
+		}
+		m.GDS.GitHubProxy = policy
+	}
 	if o.proxy != "" {
 		if action != "install" && action != "update" {
 			return fail(fmt.Errorf("--proxy 仅用于程序下载和版本查询"))

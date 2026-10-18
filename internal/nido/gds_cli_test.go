@@ -123,7 +123,9 @@ func TestGDSCLIInstallSelectsOfficialVersion(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			code, out, stderr := directGDSCLI(t, m, cliOptions{yes: true, json: true}, test.args...)
+			// This test isolates release selection from the separately tested
+			// automatic mirror retry policy.
+			code, out, stderr := directGDSCLI(t, m, cliOptions{yes: true, json: true, githubProxy: "direct"}, test.args...)
 			if code == 0 || out != "" || !json.Valid([]byte(stderr)) || !reflect.DeepEqual(requests, []string{test.path}) {
 				t.Fatalf("code=%d out=%s err=%s requests=%v", code, out, stderr, requests)
 			}

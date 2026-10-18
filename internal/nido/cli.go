@@ -19,6 +19,8 @@ const help = `Nido: Lightweight Development Environment Manager
 
 nido [--root DIR] COMMAND
   init                         初始化单目录工具，不安装或启动组件
+  update [--check]             更新 Nido 自身，仅替换受管程序
+  download show / set VALUE    查看或设置 GitHub 下载加速策略
   status / doctor              只读检查外部集成与内置组件
   env [bash|zsh]               输出 PATH 和已关联的 CODEX_HOME
   codex setup [--home DIR]      发现并关联已有外部目录，不移动数据
@@ -53,6 +55,8 @@ nido [--root DIR] COMMAND
   --root DIR                   Nido 软件目录（NIDO_HOME，默认 ~/.nido）
   --home DIR                   外部 CODEX_HOME，不得位于 Nido 目录内
   --proxy URL                  仅为本次官方安装、更新或版本查询指定代理
+  --github-proxy VALUE         auto、direct 或 HTTPS 加速前缀；不用于 Codex
+  --version X.Y.Z              Nido 自身更新到指定稳定版本
   --artifact FILE --sha256 HASH 内置组件程序来源与校验
   --gpu UUID                   GDS 首次配置的完整 GPU UUID
   --tool NAME --endpoint NAME   快捷代理工具 / bind 或 probe 的端点名称
@@ -78,12 +82,15 @@ type CLI struct {
 	GDSRunner   gds.Runner
 	// GDSHTTP is injected only by Go isolation tests, never a CLI flag.
 	GDSHTTP *http.Client
+	// UpdateHTTP is an isolated-test seam, not a configurable API endpoint.
+	UpdateHTTP *http.Client
 }
 
 type cliOptions struct {
 	root, home, proxy, artifact, checksum string
 	file, url, tail, gpu                  string
 	tool, endpoint                        string
+	githubProxy, version                  string
 	yes, dry, json, check                 bool
 }
 
@@ -102,7 +109,7 @@ func parse(args []string) (cliOptions, []string, error) {
 			o.json = true
 		case "--check":
 			o.check = true
-		case "--root", "--home", "--proxy", "--artifact", "--sha256", "--file", "--url", "--tail", "--gpu", "--tool", "--endpoint":
+		case "--root", "--home", "--proxy", "--artifact", "--sha256", "--file", "--url", "--tail", "--gpu", "--tool", "--endpoint", "--github-proxy", "--version":
 			if seen[a] {
 				return o, nil, fmt.Errorf("重复选项: %s", a)
 			}
@@ -138,6 +145,10 @@ func parse(args []string) (cliOptions, []string, error) {
 				o.tool = v
 			case "--endpoint":
 				o.endpoint = v
+			case "--github-proxy":
+				o.githubProxy = v
+			case "--version":
+				o.version = v
 			}
 		default:
 			if strings.HasPrefix(a, "-") {
@@ -210,7 +221,7 @@ func (c CLI) Run(args []string) int {
 	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if a == "--root" || a == "--home" || a == "--proxy" || a == "--artifact" || a == "--sha256" || a == "--file" || a == "--url" || a == "--tail" || a == "--gpu" || a == "--tool" || a == "--endpoint" {
+		if a == "--root" || a == "--home" || a == "--proxy" || a == "--artifact" || a == "--sha256" || a == "--file" || a == "--url" || a == "--tail" || a == "--gpu" || a == "--tool" || a == "--endpoint" || a == "--github-proxy" || a == "--version" {
 			i++
 			continue
 		}
@@ -233,6 +244,12 @@ func (c CLI) Run(args []string) int {
 	command := words[0]
 	words = words[1:]
 	component := command == "codex" || command == "proxy" || command == "gds"
+	if o.githubProxy != "" && command != "init" && command != "update" && command != "proxy" && command != "gds" {
+		return c.fail(fmt.Errorf("--github-proxy 仅用于 Nido 或内置组件下载，不用于 Codex"))
+	}
+	if o.version != "" && command != "update" {
+		return c.fail(fmt.Errorf("--version X.Y.Z 仅用于 Nido 自身更新"))
+	}
 	if command != "proxy" && (o.tool != "" || o.endpoint != "") {
 		return c.fail(fmt.Errorf("--tool 和 --endpoint 仅用于 proxy bind"))
 	}
@@ -242,7 +259,7 @@ func (c CLI) Run(args []string) int {
 	if o.gpu != "" && command != "gds" {
 		return c.fail(fmt.Errorf("--gpu 仅用于 GDS 配置"))
 	}
-	if !component && (o.home != "" || o.proxy != "" || o.artifact != "" || o.checksum != "" || o.check) {
+	if !component && (o.home != "" || o.artifact != "" || o.checksum != "" || command != "update" && (o.proxy != "" || o.check)) {
 		return c.fail(fmt.Errorf("组件选项不能用于 %s", command))
 	}
 	if command == "version" {
@@ -272,6 +289,10 @@ func (c CLI) Run(args []string) int {
 		m.GDS.HTTP = c.GDSHTTP
 	}
 	switch command {
+	case "update":
+		return c.update(m, o, words)
+	case "download":
+		return c.download(m, o, words)
 	case "path":
 		if len(words) != 0 {
 			return c.fail(fmt.Errorf("path 不接受参数"))
@@ -281,10 +302,13 @@ func (c CLI) Run(args []string) int {
 		if len(words) != 0 {
 			return c.fail(fmt.Errorf("init 不接受组件参数"))
 		}
+		if _, err := m.githubPolicy(o.githubProxy); err != nil {
+			return c.fail(err)
+		}
 		if o.dry {
 			return c.output(o, map[string]string{"operation": "init", "root": m.Root})
 		}
-		if e = m.Init(); e != nil {
+		if e = m.InitWithDownload(o.githubProxy); e != nil {
 			return c.fail(e)
 		}
 		return c.output(o, map[string]string{"root": m.Root, "environment": filepath.Join(m.Root, "env.sh"), "detail": "已初始化；未安装或启动组件。重新加载环境：. " + shellQuote(filepath.Join(m.Root, "env.sh"))})
@@ -311,6 +335,9 @@ func (c CLI) Run(args []string) int {
 			}
 			if err := m.checkEnv(); err != nil {
 				issues = append(issues, err.Error())
+			}
+			if _, err := m.githubPolicy(""); err != nil {
+				issues = append(issues, "GitHub 下载配置无效；使用 download set 修正或 --github-proxy 覆盖")
 			}
 			if h := os.Getenv("CODEX_HOME"); m.Config.Codex.Home != "" && h != m.Config.Codex.Home {
 				issues = append(issues, "当前终端 CODEX_HOME 与关联目录不一致；请重新加载 Nido 环境")
@@ -624,7 +651,7 @@ func (c *CLI) output(o cliOptions, value any) int {
 	}
 	if values, ok := value.(map[string]string); ok {
 		// Stable order makes terminal output and scripts predictable.
-		for _, k := range []string{"component", "operation", "root", "home", "environment", "installer", "version", "current", "latest", "detail"} {
+		for _, k := range []string{"component", "operation", "root", "home", "environment", "installer", "version", "current", "latest", "saved", "effective", "github_proxy", "detail"} {
 			if v := values[k]; v != "" {
 				fmt.Fprintf(c.Out, "%s: %s\n", k, v)
 			}

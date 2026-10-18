@@ -10,12 +10,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
+
+	"github.com/MiracleHYH/CDEToolkit/internal/githubdownload"
 )
 
 const maxProgram = 256 << 20
@@ -206,46 +205,7 @@ func (m *Service) downloadProxy(supplied string) (preparedArtifact, error) {
 }
 
 func (m *Service) get(source string, max int64) ([]byte, error) {
-	if err := httpsURL(source); err != nil {
-		return nil, err
-	}
-	base := m.HTTP
-	if base == nil {
-		base = &http.Client{}
-	}
-	client := *base
-	if client.Timeout == 0 || client.Timeout > 2*time.Minute {
-		client.Timeout = 2 * time.Minute
-	}
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if len(via) > 5 {
-			return fmt.Errorf("重定向过多")
-		}
-		return httpsURL(req.URL.String())
-	}
-	req, _ := http.NewRequest(http.MethodGet, source, nil)
-	req.Header.Set("User-Agent", "Nido")
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("官方发布下载失败；地址未输出")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || resp.ContentLength > max {
-		return nil, fmt.Errorf("官方发布下载返回 HTTP %d 或大小越界", resp.StatusCode)
-	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
-	if err != nil || int64(len(b)) > max {
-		return nil, fmt.Errorf("官方发布下载不完整或大小越界")
-	}
-	return b, nil
-}
-
-func httpsURL(source string) error {
-	u, err := url.Parse(source)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" {
-		return fmt.Errorf("下载地址必须是无认证信息的 HTTPS URL")
-	}
-	return nil
+	return githubdownload.Get(m.HTTP, source, max, m.GitHubProxy)
 }
 
 func nativeProgram(data []byte, platform string) error {

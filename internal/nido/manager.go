@@ -16,6 +16,7 @@ import (
 
 	"github.com/MiracleHYH/CDEToolkit/internal/components/gds"
 	"github.com/MiracleHYH/CDEToolkit/internal/components/proxy"
+	"github.com/MiracleHYH/CDEToolkit/internal/githubdownload"
 	"github.com/MiracleHYH/CDEToolkit/internal/integrations/codex"
 	"github.com/MiracleHYH/CDEToolkit/internal/integrations/gitproxy"
 	"github.com/pelletier/go-toml/v2"
@@ -34,6 +35,11 @@ type Config struct {
 	EnvDigest string          `toml:"env_digest,omitempty"`
 	Codex     codex.Config    `toml:"codex"`
 	Git       gitproxy.Config `toml:"git"`
+	Download  DownloadConfig  `toml:"download"`
+}
+
+type DownloadConfig struct {
+	GitHubProxy string `toml:"github_proxy,omitempty"`
 }
 
 type Manager struct {
@@ -46,6 +52,8 @@ type Manager struct {
 	Proxy                      proxy.Service
 	configBytes                []byte
 	rootInfo                   os.FileInfo
+	executableInfo             os.FileInfo
+	self                       *selfIdentity
 }
 
 func New(root string) (*Manager, error) {
@@ -60,6 +68,7 @@ func New(root string) (*Manager, error) {
 	if real, e := filepath.EvalSymlinks(exe); e == nil {
 		exe = real
 	}
+	executableInfo, _ := os.Stat(exe)
 	if root == "" && filepath.Base(filepath.Dir(exe)) == "bin" {
 		candidate := filepath.Dir(filepath.Dir(exe))
 		if _, e := os.Lstat(filepath.Join(candidate, "config.toml")); e == nil {
@@ -92,7 +101,7 @@ func New(root string) (*Manager, error) {
 	if root == actualHome {
 		return nil, fmt.Errorf("不能将用户主目录本身作为 Nido 软件目录")
 	}
-	m := &Manager{Root: root, UserHome: home, Executable: exe, Env: os.Environ(), Config: Config{Schema: schema, Product: "nido"}}
+	m := &Manager{Root: root, UserHome: home, Executable: exe, executableInfo: executableInfo, Env: os.Environ(), Config: Config{Schema: schema, Product: "nido"}}
 	if info, e := os.Lstat(root); e == nil {
 		if !info.IsDir() {
 			return nil, fmt.Errorf("Nido 软件目录必须是目录")
@@ -123,6 +132,8 @@ func New(root string) (*Manager, error) {
 		if e := m.Git.ValidateConfig(config.Git); e != nil {
 			return nil, fmt.Errorf("Git 代理归属配置无效: %w", e)
 		}
+		// Validate download policy when it is used. A malformed preference
+		// must not prevent offline operations, Codex, or correcting that field.
 		m.Config = config
 		m.configBytes = b
 	} else if !os.IsNotExist(err) {
@@ -201,11 +212,26 @@ func replaceFile(path string, b []byte, mode os.FileMode, check func() error) er
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
+	parent, err := os.Lstat(filepath.Dir(path))
+	if err != nil || !parent.IsDir() {
+		return fmt.Errorf("写入目录无效")
+	}
 	f, err := os.CreateTemp(filepath.Dir(path), ".nido-write-*")
 	if err != nil {
 		return err
 	}
-	defer os.Remove(f.Name())
+	created, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return err
+	}
+	defer func() {
+		currentParent, e := os.Lstat(filepath.Dir(path))
+		current, e2 := os.Lstat(f.Name())
+		if e == nil && e2 == nil && safeParents(filepath.Dir(path)) == nil && os.SameFile(parent, currentParent) && os.SameFile(created, current) {
+			_ = os.Remove(f.Name())
+		}
+	}()
 	if err = f.Chmod(mode); err == nil {
 		_, err = f.Write(b)
 	}
@@ -221,7 +247,17 @@ func replaceFile(path string, b []byte, mode os.FileMode, check func() error) er
 		}
 	}
 	if err == nil {
-		err = os.Rename(f.Name(), path)
+		if err = safeParents(filepath.Dir(path)); err != nil {
+			return err
+		}
+		currentParent, parentErr := os.Lstat(filepath.Dir(path))
+		current, candidateErr := os.Lstat(f.Name())
+		if parentErr != nil || candidateErr != nil || !os.SameFile(parent, currentParent) || parent.Mode() != currentParent.Mode() || !os.SameFile(created, current) || current.Mode().Perm() != mode.Perm() {
+			return fmt.Errorf("写入目录或临时文件在操作期间发生变化")
+		}
+		if err = unchangedFile(f.Name(), b, int64(len(b))); err == nil {
+			err = os.Rename(f.Name(), path)
+		}
 	}
 	return err
 }
@@ -450,6 +486,15 @@ func (m *Manager) emptyRoot() error {
 }
 
 func (m *Manager) Init() error {
+	return m.InitWithDownload("")
+}
+
+// InitWithDownload persists only an explicitly supplied download preference.
+// Re-running the installer without one preserves the existing configuration.
+func (m *Manager) InitWithDownload(policy string) error {
+	if err := githubdownload.Validate(policy); err != nil {
+		return err
+	}
 	if m.configBytes == nil {
 		if err := m.emptyRoot(); err != nil {
 			return err
@@ -461,6 +506,9 @@ func (m *Manager) Init() error {
 			return err
 		}
 		target := filepath.Join(m.Root, "bin", "nido")
+		if err := safeParents(filepath.Dir(target)); err != nil {
+			return err
+		}
 		old, e := readFile(target, 512<<20)
 		if e == nil && !bytes.Equal(old, data) {
 			info, e := buildinfo.Read(bytes.NewReader(old))
@@ -473,18 +521,54 @@ func (m *Manager) Init() error {
 		// A CLI replacement does not change user intent. Preserve TOML comments
 		// when the owned environment is already current; interrupted environment
 		// refreshes still use the existing repair path.
+		previous := m.Config
+		before := append([]byte(nil), m.configBytes...)
+		changed := policy != "" && policy != m.Config.Download.GitHubProxy
+		if changed {
+			m.Config.Download.GitHubProxy = policy
+		}
 		env, envErr := readFile(filepath.Join(m.Root, "env.sh"), 1<<20)
-		if m.configBytes == nil || envErr != nil || !bytes.Equal(env, []byte(m.Environment())) || m.Config.EnvDigest != digest(env) {
-			if err = m.save(); err != nil {
+		needsSave := changed || m.configBytes == nil || envErr != nil || !bytes.Equal(env, []byte(m.Environment())) || m.Config.EnvDigest != digest(env)
+		saveConfig := func() error {
+			if !needsSave {
+				return nil
+			}
+			if err := m.save(); err != nil {
+				if bytes.Equal(before, m.configBytes) {
+					m.Config = previous
+				}
+				return err
+			}
+			needsSave = false
+			return nil
+		}
+		if m.configBytes == nil {
+			// A fresh root needs its ownership configuration before creating bin.
+			if err = saveConfig(); err != nil {
 				return err
 			}
 		}
-		return replaceFile(target, data, 0755, func() error {
+		err = replaceFile(target, data, 0755, func() error {
+			if err := m.checkRoot(); err != nil {
+				return err
+			}
+			if err := unchangedFile(target, old, 512<<20); err != nil {
+				return err
+			}
+			// For an existing installation, stage the executable before saving a
+			// preference. A non-writable bin must not change configuration first.
+			if err := saveConfig(); err != nil {
+				return err
+			}
 			if err := m.checkRoot(); err != nil {
 				return err
 			}
 			return unchangedFile(target, old, 512<<20)
 		})
+		if err != nil && bytes.Equal(before, m.configBytes) {
+			m.Config = previous
+		}
+		return err
 	})
 }
 

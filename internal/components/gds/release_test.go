@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,6 +95,109 @@ func TestOfficialReleaseInstallAndUpdateKeepConfiguration(t *testing.T) {
 	got, _ := os.ReadFile(program)
 	if !bytes.Equal(got, newData) {
 		t.Fatal("official update did not commit verified binary")
+	}
+}
+
+func TestOfficialGDSGitHubProxyRetainsCanonicalMetadataAndDigestValidation(t *testing.T) {
+	for _, corrupt := range []bool{false, true} {
+		t.Run(fmt.Sprint(corrupt), func(t *testing.T) {
+			s, runner, _ := serviceFixture(t)
+			release := releaseFixture("gds-v0.1.0", elfFixture())
+			client, canonicalRequests := releaseClient(t, []releaseInfo{release}, elfFixture(), func(req *http.Request, b []byte) []byte {
+				if corrupt && strings.HasSuffix(req.URL.Path, "/"+releaseAsset) {
+					return bytes.Repeat([]byte("x"), len(b))
+				}
+				return b
+			})
+			base := client.Transport
+			prefix := "https://accelerator.invalid/public"
+			var effective []string
+			client.Transport = releaseTransport(func(req *http.Request) (*http.Response, error) {
+				effective = append(effective, req.URL.String())
+				original := strings.TrimPrefix(req.URL.String(), prefix+"/")
+				if original == req.URL.String() {
+					t.Fatal("GDS bypassed configured GitHub prefix")
+				}
+				copy := req.Clone(req.Context())
+				copy.URL, _ = url.Parse(original)
+				return base.RoundTrip(copy)
+			})
+			s.HTTP, s.GitHubProxy = client, prefix
+			err := s.Install("gds-v0.1.0", "")
+			if (err == nil) == corrupt || len(effective) != 3 || len(*canonicalRequests) != 3 {
+				t.Fatalf("effective=%v canonical=%v err=%v", effective, *canonicalRequests, err)
+			}
+			if corrupt {
+				_, program, _ := s.paths()
+				if _, err := os.Lstat(program); !os.IsNotExist(err) {
+					t.Fatal("corrupt program was committed")
+				}
+			}
+			if len(runner.stopped) != 0 {
+				t.Fatal("download operation stopped a process")
+			}
+		})
+	}
+}
+
+func TestGDSGitHubDownloadFailurePreservesExistingProgramReceiptConfigAndData(t *testing.T) {
+	s, runner, _ := installedFixture(t)
+	dir, program, _ := s.paths()
+	unknown := filepath.Join(dir, "unknown-cache")
+	if err := os.WriteFile(unknown, []byte("existing component data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]byte{}
+	for _, path := range []string{program, filepath.Join(dir, "installed.json"), filepath.Join(dir, "config.toml"), unknown} {
+		want[path], _ = os.ReadFile(path)
+	}
+	commands := len(runner.commands)
+	requests := 0
+	s.GitHubProxy = "https://accelerator.invalid"
+	s.HTTP = &http.Client{Transport: releaseTransport(func(req *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{StatusCode: 302, Header: http.Header{"Location": []string{"https://api.github.com/user?access_token=secret"}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+	})}
+	if err := s.Update("gds-v0.2.0", ""); err == nil || strings.Contains(err.Error(), "secret") || requests != 1 {
+		t.Fatalf("unsafe update result: requests=%d err=%v", requests, err)
+	}
+	for path, before := range want {
+		after, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(after, before) {
+			t.Fatalf("download failure changed existing data at %s: %v", path, err)
+		}
+	}
+	if len(runner.commands) != commands || len(runner.stopped) != 0 {
+		t.Fatal("failed download executed or controlled a component")
+	}
+}
+
+func TestGDSGitHubRoutingDoesNotAffectLocalArtifactsOrDryRun(t *testing.T) {
+	s, runner, artifact := serviceFixture(t)
+	s.GitHubProxy = "auto"
+	s.HTTP = &http.Client{Transport: releaseTransport(func(*http.Request) (*http.Response, error) {
+		t.Fatal("local artifact or preview connected to a download service")
+		return nil, nil
+	})}
+	for _, source := range []string{"latest", artifact} {
+		if err := s.Preflight("install", source, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(runner.commands) != 0 {
+		t.Fatal("preview executed a candidate")
+	}
+	if err := s.Install(artifact, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Preflight("update", "latest", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(artifact, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.stopped) != 0 {
+		t.Fatal("local management controlled a process")
 	}
 }
 

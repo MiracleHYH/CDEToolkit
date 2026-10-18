@@ -6,6 +6,7 @@ import (
 	"debug/elf"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -71,7 +72,7 @@ func coreReleaseFixture(t *testing.T, problem string) (*http.Client, string, *in
 		copy.Host = u.Host
 		return base.RoundTrip(copy)
 	})
-	return client, server.URL, count
+	return client, "https://api.github.com", count
 }
 
 func TestCoreOfficialArtifactAndVersionChecksUseIsolatedRelease(t *testing.T) {
@@ -105,6 +106,133 @@ func TestCoreOfficialArtifactAndVersionChecksUseIsolatedRelease(t *testing.T) {
 				t.Fatalf("check downloaded an asset: %d", *count)
 			}
 		})
+	}
+}
+
+func TestCoreGitHubProxyRoutesAPIAndAssetWithoutRelaxingMetadata(t *testing.T) {
+	for _, problem := range []string{"", "digest", "source"} {
+		t.Run(problem, func(t *testing.T) {
+			client, api, _ := coreReleaseFixture(t, problem)
+			base := client.Transport
+			var routes []string
+			client.Transport = coreRoundTripper(func(r *http.Request) (*http.Response, error) {
+				routes = append(routes, r.URL.String())
+				return base.RoundTrip(r)
+			})
+			s, runner, _ := coreService(t)
+			s.Platform, s.HTTP, s.API, s.GitHubProxy = "linux/amd64", client, api, "https://accelerator.invalid/prefix"
+			runner.run = func(Command) ([]byte, error) { return []byte("Mihomo Meta v1.2.4"), nil }
+			err := s.Install("latest", "")
+			if (err == nil) != (problem == "") {
+				t.Fatalf("installation result: %v", err)
+			}
+			for _, route := range routes {
+				if !strings.HasPrefix(route, s.GitHubProxy+"/https://") {
+					t.Fatalf("bypassed configured GitHub route: %s", route)
+				}
+			}
+			if problem != "" && len(runner.commands) != 0 {
+				t.Fatal("invalid release reached candidate execution")
+			}
+			if runner.starts != 0 || runner.stops != 0 {
+				t.Fatal("download changed runtime")
+			}
+		})
+	}
+}
+
+func TestCoreAutoGitHubProxyFallsBackOnlyForTransportNotDigest(t *testing.T) {
+	for _, badDigest := range []bool{false, true} {
+		client, api, _ := coreReleaseFixture(t, map[bool]string{false: "", true: "digest"}[badDigest])
+		base := client.Transport
+		var routes []string
+		client.Transport = coreRoundTripper(func(r *http.Request) (*http.Response, error) {
+			routes = append(routes, r.URL.String())
+			if !badDigest && (r.URL.Host == "api.github.com" || r.URL.Host == "github.com") {
+				return nil, errors.New("isolated direct route unavailable")
+			}
+			return base.RoundTrip(r)
+		})
+		s, runner, _ := coreService(t)
+		s.Platform, s.HTTP, s.API, s.GitHubProxy = "linux/amd64", client, api, "auto"
+		runner.run = func(Command) ([]byte, error) { return []byte("Mihomo Meta v1.2.4"), nil }
+		err := s.Install("latest", "")
+		if badDigest {
+			if err == nil || len(routes) != 2 || len(runner.commands) != 0 {
+				t.Fatalf("digest failure was retried or executed: %v %v", routes, err)
+			}
+		} else if err != nil || len(routes) != 4 || !strings.HasPrefix(routes[1], "https://gh-proxy.org/https://api.github.com/") || !strings.HasPrefix(routes[3], "https://gh-proxy.org/https://github.com/") {
+			t.Fatalf("auto route failed: %v %v", routes, err)
+		}
+	}
+}
+
+func TestCoreGitHubDownloadFailurePreservesInstalledProgramConfigAndUnknownData(t *testing.T) {
+	s, runner, artifact := coreService(t)
+	s.Platform = "linux/amd64"
+	if err := os.WriteFile(artifact, coreNativeFixture("linux", "amd64"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Install(artifact, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ConfigureBytes([]byte(coreConfig)); err != nil {
+		t.Fatal(err)
+	}
+	dir, program, _ := s.paths()
+	unknown := filepath.Join(dir, "unknown-cache")
+	coreWrite(t, unknown, []byte("existing component data"))
+	want := map[string][]byte{}
+	for _, path := range []string{program, filepath.Join(dir, "config.yaml"), unknown} {
+		want[path], _ = os.ReadFile(path)
+	}
+	commands := len(runner.commands)
+	requests := 0
+	s.GitHubProxy = "https://accelerator.invalid"
+	s.HTTP = &http.Client{Transport: coreRoundTripper(func(req *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{StatusCode: 302, Header: http.Header{"Location": []string{"https://api.github.com/user?access_token=secret"}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+	})}
+	if err := s.Update("latest", ""); err == nil || strings.Contains(err.Error(), "secret") || requests != 1 {
+		t.Fatalf("unsafe update result: requests=%d err=%v", requests, err)
+	}
+	for path, before := range want {
+		after, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(after, before) {
+			t.Fatalf("download failure changed existing data at %s: %v", path, err)
+		}
+	}
+	if len(runner.commands) != commands || runner.starts != 0 || runner.stops != 0 {
+		t.Fatal("failed download executed or controlled a component")
+	}
+}
+
+func TestCoreGitHubRoutingDoesNotAffectLocalArtifactsOrDryRun(t *testing.T) {
+	s, runner, artifact := coreService(t)
+	s.GitHubProxy = "auto"
+	s.HTTP = &http.Client{Transport: coreRoundTripper(func(*http.Request) (*http.Response, error) {
+		t.Fatal("local artifact or preview connected to a download service")
+		return nil, nil
+	})}
+	for _, source := range []string{"latest", artifact} {
+		if err := s.Preflight("install", source, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(runner.commands) != 0 {
+		t.Fatal("preview executed a candidate")
+	}
+	if err := s.Install(artifact, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Preflight("update", "latest", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(artifact, ""); err != nil {
+		t.Fatal(err)
+	}
+	if runner.starts != 0 || runner.stops != 0 {
+		t.Fatal("local management controlled a process")
 	}
 }
 

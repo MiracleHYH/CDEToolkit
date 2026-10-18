@@ -8,14 +8,30 @@ GDS 保持可选。Nido v0.5.0 起支持独立 Linux amd64 组件的官方下载
 
 ## 初始化与 Shell 环境
 
-选择一个独立软件目录，默认 `~/.nido`。安装最新发行版并在当前终端启用命令：
+下面的 GitHub 下载策略、自身更新及安装脚本新参数已在源码实现，等待下一版发布；公开 v0.6.0 尚不支持。当前发布版仍使用不带 `--github-proxy` 的原直链安装命令，见 [README](../README.md#快速开始)。
+
+选择一个独立软件目录，默认 `~/.nido`。首次安装选择官方直链或第三方加速链，不能指望脚本内的回退修复外层脚本下载失败。
+
+官方直链：
 
 ```sh
-curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
+curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy direct
+```
+
+第三方加速链：
+
+```sh
+curl --http1.1 -fsSL https://gh-proxy.org/https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy https://gh-proxy.org
+```
+
+选择后加载当前终端环境：
+
+```sh
+. "${NIDO_HOME:-$HOME/.nido}/env.sh"
 nido version
 ```
 
-需要固定版本或自定义目录时，可使用 `curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/download/v0.6.0/install.sh | sh -s -- --version 0.6.0 --root /absolute/path/to/nido`，再加载该目录下的 `env.sh`。源码构建方式见 [README](../README.md#开发)。
+需要固定版本或自定义目录时，在右侧 `sh -s --` 后补充 `--version X.Y.Z --root /absolute/path/to/nido`；脚本也可从对应 `releases/download/vX.Y.Z/install.sh` 获取。再加载目标目录下的 `env.sh`。源码构建方式见 [README](../README.md#开发)。
 
 也可以通过 `NIDO_HOME` 指定目录；显式 `--root` 优先。首次初始化只接受不存在或空目录，不把普通数据目录或旧 toolkit 目录变成 Nido。重复初始化保留配置，并刷新自己的程序和环境文件；用户修改过的 `env.sh` 不被静默覆盖。
 
@@ -28,6 +44,32 @@ nido version
 自定义目录请替换路径。配置 Codex 后重新加载同一文件，才能更新当前终端的环境；CLI 无法直接修改父 Shell。
 
 `nido env bash` / `nido env zsh` 输出同样的环境片段。未关联 Codex 时，只配置 Nido 自身路径；关联后增加 `CODEX_HOME` 和已识别的 Codex 命令目录，不生成 Codex 包装入口。重复加载不会不断增加 PATH。
+
+## GitHub 下载与 Nido 自身更新
+
+```sh
+nido download show
+nido download set auto
+nido download set direct
+nido download set https://gh-proxy.org
+nido update --check
+nido update
+nido update --version X.Y.Z --github-proxy direct
+```
+
+将 `X.Y.Z` 替换为要更新到的稳定新版。自身更新只允许当前运行的受管 `<Nido>/bin/nido`，相同版本不下载，不支持降级；`dev` 源码构建请通过源码更新。
+
+`direct` 只访问官方 GitHub；`auto` 先短时尝试官方地址，API 请求失败后只尝试 `https://gh-proxy.org`，发行包、摘要等资产请求才会继续尝试 `https://ghfast.top`，不会无限重试。自定义 HTTPS 前缀只通过该服务转发完整的公开 GitHub URL，例如 `https://gh-proxy.org/https://github.com/...`。前缀可以含路径，但不能带账号、密码、查询参数或片段，也不接受 HTTP/SOCKS 代理地址。
+
+优先级为本次 `--github-proxy`、`NIDO_GITHUB_PROXY` 环境变量、已保存配置、默认 `auto`。显式设置空的 `NIDO_GITHUB_PROXY` 表示直连。`nido download set VALUE` 保存后续下载策略；更新命令上的选项只影响本次请求。已有 Nido 重跑安装脚本但未显式指定策略时，脚本本次使用 `auto` 下载，保留软件中的既有策略；显式 flag 或环境变量则传给 `init` 保存。安装脚本本身不会解析 TOML。自动回退只在已经执行的安装脚本内部生效，外层 `curl` 需由用户选择能访问的来源。
+
+`download show` 同时显示保存值和本次实际值。错误的下载偏好只阻止使用它的联网操作，不阻止 Codex 或离线状态查看；可通过 `download set` 修正，`doctor` 会报告无效的实际策略。Go 下载不会在收到响应头后仅因传输超过 8 秒而切换到第三方；连接和响应头有短期限，整个请求仍有大小与时间上限。加速服务返回的跳转也会检查认证参数和目标域名，自定义入口不能将下载跳转到任意外部站点。
+
+加速前缀只作用于支持的 GitHub API 与发行包请求，不生成全局代理环境、不改写任意 URL，也不替换 Codex 的官方安装地址。HTTP/SOCKS 网络代理仍是独立概念；需要时可为单次自身更新使用 `nido update --proxy http://127.0.0.1:7890`。
+
+Nido 自身更新只替换自己的程序，保留管理配置、生成环境、内置组件和外部数据。安装脚本与自身更新均核对下载包和摘要；当前客户端**不验证 Sigstore 签名**。通过第三方前缀时，该服务可接触并替换所转发的内容；尤其加速首装会直接执行第三方返回的脚本。HTTPS 和 SHA-256 检查不消除这项信任边界，请仅使用自己信任的服务。发布工作流的签名不等于安装客户端已经验签。
+
+更新期间若入口、程序目录或候选文件被替换，操作停止；不会覆盖该替换，也不会在失败清理时删除未知文件。版本查询和确认使用同一次入口身份快照；下载固定为已确认的版本，不在最后一步重新选择另一个 latest。
 
 ## 目录与所有权
 
