@@ -4,11 +4,28 @@
 
 ## v0.6.0 发行验收（2026-10-18）
 
-本次按明确发布授权，将 quick start、节点链接解析与类别/单工具代理配置纳入 Nido **v0.6.0**，以 Linux amd64 为验收目标。发布前先提交版本、文档和独立公网隔离入口，复核源码检查与现有签名工作流；公开资产、签名及安装实测结果将在发布后记录。本节描述本次发行，后文各轮“未发布”说明保留其发生时的边界。
+本次按明确发布授权，将 quick start、节点链接解析与类别/单工具代理配置纳入 Nido **v0.6.0**，以 Linux amd64 为验收目标。[正式 Release](https://github.com/MiracleHYH/CDEToolkit/releases/tag/v0.6.0) 于 2026-10-18 03:20:25 UTC 发布，精确标签指向 `dd2d1354116e37c227e43faff8c669858751289b`，latest 已指向该版本。本节记录本次发行，后文各轮“未发布”说明保留其发生时的边界。
 
 公网验证只使用临时 HOME 和软件根，不切换实际入口，不安装系统服务。发行包 CLI 的新流程使用拒绝启动的惰性核心，真实 Mihomo 转发证据沿用下方冻结的 Linux amd64 217.49 秒记录，二者分开判断；本次版本准备没有修改生产逻辑。
 
 新增 `tests/proxy-public-release-isolation.sh` 与显式 `make check-proxy-public-release`，普通离线 CI 不联网运行此入口。33 个外层契约及 13 个 curl 桥契约拒绝平台/UID 错误、无效或缺失输入、已有输出、namespace 失败、假 PASS、错误结果/下载次数/URL/摘要、同版冒充升级、不完整 HTTPS 参数及响应字节不一致。首次安装实际使用 latest；固定版本重复安装、含空格根、可选 v0.5.0 升级分别核验程序字节与原配置/环境/未知文件。临时 HOME 中的 Go 1.27.2 完整 `make check smoke release verify-release`、Go 1.23.12 race 定向回归与模块校验通过；公开源码与历史凭据扫描通过（227 项候选文件）。这些本地打包结果不替代后续公开资产验收。
+
+| 发行验收项目 | 实际结果 |
+| --- | --- |
+| 自动检查 | [版本提交 CI](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39092652419)、[精确标签 CI](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39093017576) 和[签名发布工作流](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39093017579) 全部成功；条件式 GDS legacy 按既有规则跳过，没有改 GDS 版本或发行流程 |
+| 公开资产 | 精确 18 项白名单，逐份真实 HTTPS 下载，并匹配官方 API 的名称、URL、大小与 SHA-256；四平台包、四份校验文件及安装器与本地固定 Go 1.27.2 构建全部逐字一致 |
+| 独立验签 | 官方 Cosign v3.0.6 先核对大小与官方摘要，再在临时 HOME 中验证九份新资产的 Sigstore bundle；identity 精确为 `https://github.com/MiracleHYH/CDEToolkit/.github/workflows/release.yml@refs/tags/v0.6.0`，issuer 为 `https://token.actions.githubusercontent.com`。旧 v0.5.0 Linux amd64 包与摘要另以旧标签 identity 完成两次验签 |
+| 包结构与来源 | 四平台全部通过单普通成员、权限、归档尾部、Go 主程序身份、GOOS/GOARCH 和 CGO=0 检查；固定版本与 latest 安装器都与标签源码逐字一致。客户端安装器自动检查 SHA-256，本轮额外独立验签，不宣称客户端自动执行 Sigstore |
+| Linux amd64 公网安装 | J66 普通用户 UID 1001、Linux `6.8.0-124-generic` x86_64、已有 bubblewrap 0.9.0。私有 HOME/文件系统/PID/user namespace 中完成 latest 首装、固定版本重复安装、latest 重复安装、含空格自定义根和 v0.5.0 → v0.6.0 升级；合计 **10 次真实包/摘要下载**，全部与已验签输入逐字一致 |
+| 命令注册与保留 | 五次安装均实际 source 各自的 `env.sh` 并核对 `command -v nido` 精确指向临时根内程序。既有 TOML 注释、环境文件、未知用户文件与模拟外部 Codex 配置、认证、会话、数据库、Git、Shell 和 Mihomo 文件逐字保留 |
+| 公开包的新流程 | 使用公开包中的 CLI 和拒绝启动的惰性核心，完成交互 quick start、SS `%2D` 解码、url-test/ISP relay 配置、可编辑 listener、类别/单工具/custom/no-listener/off 配置及数据保留；全部 PASS。配置中出现 `dialer-proxy` 不计作本轮真实链路转发 |
+| 清理 | 测试 CLI 均退出，namespace 与所有本轮远端临时目录已删除；专用 SSH 回环传输监听已关闭，本地私有控制目录已删除。未切换实际入口、安装系统服务或修改现有配置、认证、会话和数据 |
+
+Linux amd64 包为 **3,938,351 字节**，SHA-256 `13ef5e093a4f3d430b07b1915b703b89bb3907a6a149f35d367ae103ee91f758`；包内 CLI SHA-256 `0153d4b6c53a960bfa51eb62e856da3ba3792375a3781629a825a7deb8d24bd4`。验签输入、API 元数据、复现比较、namespace 日志、10 次下载及清理证据保留在本地 `build/proxy-release-v0.6.0-20261018/`，不作为发行资产上传。
+
+验收保留了两次失败，未将其计为通过：首次直连 GitHub 遇到 TLS 连接错误，随后仅为本轮创建 `127.0.0.1` 动态端口的 SSH SOCKS 通道，仍使用真实 HTTPS、证书校验和响应字节比较；第二次真实首装成功，但新夹具误用了其他组件的 `installed:false` 字段，未接受 Proxy 实际的 `program/config=missing` 状态。本轮修正了测试断言，新增生产 CLI 实际 JSON 的 6 个通过/拒绝子项及真实环境生成逻辑的 2 个子项；Go 1.27.2 / 1.23.12 定向 race 回归与最终完整公网验收均通过。该修复仅涉及验收源码，已发布程序字节未变，未移动标签或重传资产。
+
+没有保留已确认的 Linux amd64 发布阻塞项。本轮没有重新运行真实 Mihomo；真实 provider、url-test、SS ISP 前置链和 HTTP/SOCKS/HTTPS 转发仍对应下方 217.49 秒冻结证据，有效生产路径未改。17 类节点仅证明指定核心的配置接受，不扩称全部协议实连、任意核心版本或状态迁移。其他平台的新流程真实核心验证不在本次服务器验收范围内。
 
 ## Quick start 最终提交审计（2026-10-18）
 

@@ -137,6 +137,17 @@ file /work/package/nido | tee /work/evidence/package-type.txt | grep -Eq 'ELF 64
 [[ "$(/work/package/nido version)" == "nido $NIDO_TEST_PROXY_RELEASE_VERSION" ]] || exit 1
 file /inputs/fake-mihomo | grep -Eq 'ELF 64-bit.*x86-64'
 sha256sum /work/package/nido > /work/evidence/package-cli.sha256
+assert_proxy_missing() {
+  local status_file="$1"
+  grep -Fq '"program":"missing"' "$status_file"
+  grep -Fq '"config":"missing"' "$status_file"
+  grep -Fq '"runtime":{"state":"stopped","config_changed":false,"listeners":false,' "$status_file"
+}
+assert_environment() {
+  local root="$1" label="$2"
+  env -i HOME="$HOME" PATH=/usr/bin:/bin /bin/sh -c '. "$1"; command -v nido' fixture "$root/env.sh" > "/work/evidence/$label-environment.txt"
+  [[ "$(cat "/work/evidence/$label-environment.txt")" == "$root/bin/nido" ]] || exit 1
+}
 check_install() {
   local root="$1" label="$2"
   [[ "$("$root/bin/nido" version)" == "nido $NIDO_TEST_PROXY_RELEASE_VERSION" ]] || exit 1
@@ -144,7 +155,8 @@ check_install() {
   "$root/bin/nido" --root "$root" --help > "/work/evidence/$label-help.txt"
   grep -Fq 'proxy bind --tool codex|git' "/work/evidence/$label-help.txt"
   "$root/bin/nido" --root "$root" proxy status --json > "/work/evidence/$label-status.json"
-  grep -Fq '"installed":false' "/work/evidence/$label-status.json"
+  assert_proxy_missing "/work/evidence/$label-status.json"
+  assert_environment "$root" "$label"
   "$root/bin/nido" --root "$root" proxy endpoints --json > "/work/evidence/$label-endpoints.json"
   grep -Fxq '[]' "/work/evidence/$label-endpoints.json"
   "$root/bin/nido" --root "$root" proxy install --dry-run --json > "/work/evidence/$label-preview.json"
