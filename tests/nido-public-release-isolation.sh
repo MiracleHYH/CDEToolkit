@@ -77,7 +77,7 @@ for kind in new old; do
     --connect-timeout 15 --max-time 120 --max-filesize 4194304)
   [[ -z ${NIDO_ACCEPT_GENERAL_PROXY:-} ]] || curl_args+=(--proxy "$NIDO_ACCEPT_GENERAL_PROXY")
   if [[ $metadata_auth = gh ]]; then
-    gh api "repos/MiracleHYH/CDEToolkit/releases/tags/v$selected_version" > "$metadata"
+    gh api --hostname github.com "repos/MiracleHYH/CDEToolkit/releases/tags/v$selected_version" > "$metadata"
   else
     curl "${curl_args[@]}" --output "$metadata" "https://api.github.com/repos/MiracleHYH/CDEToolkit/releases/tags/v$selected_version"
   fi

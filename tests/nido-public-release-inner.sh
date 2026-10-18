@@ -142,6 +142,19 @@ assert_shell_activation() {
       ' public-accept "$NIDO_HOME" "$version" "${shell##*/}" > "$output/$label-${shell##*/}-activation.log"
   done
 }
+assert_transport_requests() {
+  local transport=$1 prefix expected_prefix name
+  prefix=https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/
+  if [[ $transport = accelerated ]]; then prefix=$accelerator/$prefix; fi
+  for name in install.sh "$asset" "$asset.sha256"; do
+    expected_prefix=$prefix
+    if [[ $install_version_mode = tagged && $name != install.sh ]]; then
+      expected_prefix="https://github.com/MiracleHYH/CDEToolkit/releases/download/v$version/"
+      if [[ $transport = accelerated ]]; then expected_prefix=$accelerator/$expected_prefix; fi
+    fi
+    grep -Fq $'VERIFIED-BEFORE-EXEC\t'"$expected_prefix$name"$'\t' "$NIDO_ACCEPT_HTTP_LOG"
+  done
+}
 for transport in "${transports[@]}"; do
   export HOME="$case_root/$transport-user" TMPDIR="$case_root/$transport-tmp"
   export NIDO_HOME="$HOME/.nido" CODEX_HOME="$HOME/.codex" CURL_HOME="$HOME" ZDOTDIR="$HOME"
@@ -169,6 +182,8 @@ for transport in "${transports[@]}"; do
   cmp "$NIDO_HOME/config.toml" "$case_root/$transport-config-before"
   cmp "$NIDO_HOME/env.sh" "$case_root/$transport-env-before"
   unchanged "$transport"
+  [[ ! -e $NIDO_ACCEPT_FORBIDDEN_LOG ]]
+  assert_transport_requests "$transport"
   printf 'PASS %s %s installation, shell activation, repeat install and protected native data\n' "$transport" "$install_version_mode"
 
   export NIDO_HOME="$HOME/upgrade-from-public-$old_version"
@@ -218,23 +233,13 @@ for transport in "${transports[@]}"; do
   # upstreams; real Conda/Python/components remain forbidden in this harness.
   bash "$input/harness/conda-cli-isolation.sh" "$NIDO_HOME/bin/nido" > "$output/$transport-conda-cli.log" 2>&1
   unchanged "$transport"
+  [[ ! -e $NIDO_ACCEPT_FORBIDDEN_LOG ]]
+  assert_transport_requests "$transport"
   printf '{"version":"%s","old_version":"%s","platform":"%s","transport":"%s","accelerator":"%s","install_version_mode":"%s","install":true,"repeat_install":true,"shell_activation":true,"real_old_self_update":true,"offline_same_version_noop":true,"downgrade_rejected":true,"failed_update_preserved":true,"conda_fake_upstream_suite":true,"protected_data_unchanged":true}\n' \
     "$version" "$old_version" "$platform" "$transport" "$accelerator" "$install_version_mode" > "$output/$transport-result.json"
   printf 'PASS %s real signed public upgrade %s -> %s, failure preservation, offline noop and Conda isolation\n' "$transport" "$old_version" "$version"
 done
 [[ ! -e $NIDO_ACCEPT_FORBIDDEN_LOG ]]
-for transport in "${transports[@]}"; do
-  prefix=https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/
-  if [[ $transport = accelerated ]]; then prefix=$accelerator/$prefix; fi
-  for name in install.sh "$asset" "$asset.sha256"; do
-    expected_prefix=$prefix
-    if [[ $install_version_mode = tagged && $name != install.sh ]]; then
-      expected_prefix="https://github.com/MiracleHYH/CDEToolkit/releases/download/v$version/"
-      if [[ $transport = accelerated ]]; then expected_prefix=$accelerator/$expected_prefix; fi
-    fi
-    grep -Fq $'VERIFIED-BEFORE-EXEC\t'"$expected_prefix$name"$'\t' "$NIDO_ACCEPT_HTTP_LOG"
-  done
-done
 case $selected_transport in
   both) transports_json='["direct","accelerated"]'; direct_pass=true; accelerated_pass=true ;;
   direct) transports_json='["direct"]'; direct_pass=true; accelerated_pass=null ;;
