@@ -86,7 +86,7 @@ HTTP/file provider 必须显式设置组件根内的相对 `path`，inline provi
 
 核心验证结果不持久化成容易失真的健康布尔值。`probe --endpoint NAME --url URL` 才显式通过已就绪端点测试指定 HTTP/HTTPS 目标，无名称时要求唯一，不跟随重定向。探测绑定同一进程记录快照，响应后复核配置、程序、内核身份和全部代理监听，变化时拒绝报告成功。检查与连接之间没有 OS socket 租约，不能保证已发送的请求绝不遇到替换监听；结果也不能证明所有远端可用。
 
-`proxy bind` 在 Nido 组合层逐类独立选择，`bind ai|daily|download` 只配置一类，`bind --tool codex|git|nido` 只配置单工具。AI 当前包括 Codex，日常包括 Git。**尚未发布的源码**将下载类别用于 Nido 内部 GitHub API，`--tool nido` 等同；v0.8.1 及此前版本的该类别仍返回 `no_targets`。Codex/Git 类别选择应用到类别内工具，后续显式操作生效；没有后台改写工具配置。Proxy 组件不依赖工具集成，API 绑定由 Nido 组合层负责。
+`proxy bind` 在 Nido 组合层逐类独立选择，`bind ai|daily|download` 只配置一类，`bind --tool codex|git|nido` 只配置单工具。AI 当前包括 Codex，日常包括 Git。v0.8.2 将下载类别用于 Nido 内部 GitHub API，`--tool nido` 等同，发行状态见[版本记录](nido-v0.8.2-release.md)；v0.8.1 及此前版本的该类别仍返回 `no_targets`。Codex/Git 类别选择应用到类别内工具，后续显式操作生效；没有后台改写工具配置。Proxy 组件不依赖工具集成，API 绑定由 Nido 组合层负责。
 
 Codex/Git 菜单列出可用 listener，始终提供自定义、保持现状和移除受管配置。无核心、配置不可读或没有 listener 时仍可使用自定义 `protocol://[username:password@]host:port`，支持 HTTP/HTTPS/SOCKS5/SOCKS5H。显式 `--endpoint NAME` 或 `--proxy URL|off` 可与 `--yes` 做非交互配置，互斥且必须指定类别或工具；`--dry-run` 只预检。自定义及输出不做脱敏，不自动启动 Proxy。
 
@@ -96,7 +96,7 @@ Nido API 菜单仅接受具名、无认证 listener，支持保持现状和移�
 
 使用持久绑定时，每次内部 GitHub API 联网操作重新解析名称、端口及当前配置，并核验受管进程和 listener 就绪；保存的名称不会变成过时的固定 URL。API 使用官方 URL 经该 listener 传输，绕过文件加速前缀；checksum、archive 等资产继续采用原 GitHub 下载策略。listener 被删除、改为认证、服务停止或配置修改后未重启时明确失败，不直连、不套用文件前缀、不隐式启停服务。本地 artifact、dry-run、普通只读和无需 API 的同版本操作不受 API 禁用或坏绑定阻断。
 
-此绑定只作用于 Nido 发起的上述 API，不导出代理环境，不改变 Codex 官方安装/更新脚本的独立代理及程序运行网络、Git、Conda/pip 或用户自行发起的 curl 等请求。`codex update --check` 未绑定时明确失败；普通 `codex update` 未绑定时跳过可选 API 预查询，官方脚本仍按原有代理和确认流程执行。用户显式 `proxy probe --url` 属独立诊断，不纳入 API 开关。文件自举 `install.sh` 不依赖 API，不受未绑定限制。`download show --json` 提供 `api_state`、`api_listener`、`api_proxy` 供静态查看；`api_state` 为 `disabled` 或 `configured`，未绑定时名称和地址为空，`configured` 不表示运行或网络就绪。普通 status/doctor 不联网，未绑定不计作 doctor 故障。最新禁用规则属于未发布源码，已通过包括 224 个禁用场景的 Linux amd64 隔离验收；验收范围、首次安装 Proxy 的 API 依赖及更新自身的停机边界见[自举方案](nido-proxy-bootstrap.md)。
+此绑定只作用于 Nido 发起的上述 API，不导出代理环境，不改变 Codex 官方安装/更新脚本的独立代理及程序运行网络、Git、Conda/pip 或用户自行发起的 curl 等请求。`codex update --check` 未绑定时明确失败；普通 `codex update` 未绑定时跳过可选 API 预查询，官方脚本仍按原有代理和确认流程执行。用户显式 `proxy probe --url` 属独立诊断，不纳入 API 开关。文件自举 `install.sh` 不依赖 API，不受未绑定限制。`download show --json` 提供 `api_state`、`api_listener`、`api_proxy` 供静态查看；`api_state` 为 `disabled` 或 `configured`，未绑定时名称和地址为空，`configured` 不表示运行或网络就绪。普通 status/doctor 不联网，未绑定不计作 doctor 故障。v0.8.2 禁用规则已通过包括 224 个禁用场景的源码 Linux amd64 隔离验收；验收范围、首次安装 Proxy 的 API 依赖及更新自身的停机边界见[自举方案](nido-proxy-bootstrap.md)。
 
 Codex 写入已关联 HOME 的受管 `.env` 块，旧 `nido codex proxy builtin` 同样只从 listeners 选择并始终支持自定义；唯一无认证 listener 可在 `--yes` 下直接采用，多候选需交互或改用明确的绑定命令。确认后写入前及写入后复核所选端点与配置摘要；变化时拒绝提交归属记录，并只撤销本次可证明未被并发修改的代理块。
 

@@ -2,7 +2,7 @@
 
 适用目标为 Linux amd64：先通过可信文件加速入口安装 Nido，用固定版本的本地 Mihomo 包安装 Proxy，再显式配置、启动 Proxy，选择一次 listener，供后续 Nido 内部 GitHub API 自动使用；发行包和摘要继续走文件加速入口。不会将用户自行发起的请求纳入该代理。
 
-**版本边界：本流程对应正在准备发布的 v0.8.2，仅面向 Linux amd64；v0.8.1 没有 listener 持久绑定和未绑定禁用规则。**当前源码审计和隔离回归已通过，发行、签名及公网验收状态见 [v0.8.2 发行记录](nido-v0.8.2-release.md)。下面的 v0.8.2 下载命令供正式资产可用并完成来源核验后执行，准备状态不表示 URL 已可用。文件加速服务只需支持 GitHub 文件路径，不要求转发 `api.github.com`。主 `config.toml` schema 保持不变，新绑定使用独立私有文件，升级不会自动选择 listener。本文是后续操作方案，未在真实机器部署。
+**版本边界：本流程对应已发布的 v0.8.2，仅面向 Linux amd64；v0.8.1 没有 listener 持久绑定和未绑定禁用规则。**源码审计、原生 CI、发布工作流、独立验签、正式包 API 隔离及公网直链、gh-proxy.org 加速安装自更新均已通过，分项和历史失败见 [v0.8.2 发行记录](nido-v0.8.2-release.md)。下面的下载命令仍应在完成来源核验后执行。文件加速服务只需支持 GitHub 文件路径，不要求转发 `api.github.com`。主 `config.toml` schema 保持不变，新绑定使用独立私有文件，升级不会自动选择 listener。本文是后续操作方案，未在真实机器部署。
 
 ## 1. 通过文件入口安装 Nido
 
@@ -32,7 +32,7 @@ nido download show
 
 ## 2. 准备固定、可信的本地 Mihomo 包
 
-默认 `nido proxy install` 需要查询 Mihomo 发布 API。新源码未绑定时 API 功能禁用，会在联网、候选执行、确认或写入前提示未启用；显式 `--proxy`、`--github-proxy` 或终端代理变量也不能在无绑定时启用它。因此首次自举使用本地包。前一步的 `install.sh` 直接获取固定文件，不依赖 API，仍可使用。
+默认 `nido proxy install` 需要查询 Mihomo 发布 API。v0.8.2 未绑定时 API 功能禁用，会在联网、候选执行、确认或写入前提示未启用；显式 `--proxy`、`--github-proxy` 或终端代理变量也不能在无绑定时启用它。因此首次自举使用本地包。前一步的 `install.sh` 直接获取固定文件，不依赖 API，仍可使用。
 
 从可信来源先选定具体稳定版本，独立核对版本、文件名、Linux amd64 兼容性和 SHA-256。优先选择该发行实际提供的 `amd64-v1` 或 `amd64-compatible` 包；不要假定无后缀 amd64 包适合所有 CPU。ELF 架构检查不能证明 v1/v3 指令集兼容。若来源提供签名，按其可信发布流程另行验签；Nido 本地 artifact 安装不会代做这一步。
 
@@ -130,7 +130,7 @@ nido proxy bind download --proxy off --yes
 
 此配置只用于 Nido 发起的上述 GitHub API 请求，不设置系统代理或 HTTP(S)/ALL_PROXY，不修改用户的 curl、Git、Conda/pip，也不改变 Codex 官方安装/更新脚本的独立代理及程序运行网络。`nido codex update --check` 未绑定时明确失败；普通 `nido codex update` 未绑定时跳过 Nido 的可选版本 API 预查询，官方脚本仍按原有独立代理和确认流程执行，其内部请求不纳入本开关。用户显式 `proxy probe --url` 也保留为独立诊断。Codex/Git 的工具级持久代理仍需独立操作。已有有效非空绑定后，原有单次 `--proxy URL` 才可用作 API 高级临时覆盖，不写入该文件，也不能在未绑定时启用 API。
 
-从 v0.8.1 升级时，旧客户端尚无自动绑定和禁用开关。若已有可用网络代理，可在 v0.8.2 正式发布后使用 `nido update --version 0.8.2 --github-proxy direct --proxy http://127.0.0.1:PORT`；这里 `direct` 只保持官方 URL，请求仍走显式通用代理，API 与资产一起走它。也可使用第 1 节固定版本的文件安装器重新安装到同一软件根。升级保留配置和 sidecar，但不会自动绑定；进入 v0.8.2 后应按本节选择 listener，否则 API 功能保持禁用。没有 Proxy 时先按第 2、3 节从可信本地 artifact 安装、配置、启动，再绑定；不能用新版 `--proxy` 绕过启用步骤。
+从 v0.8.1 升级时，旧客户端尚无自动绑定和禁用开关。若已有可用网络代理，可使用 `nido update --version 0.8.2 --github-proxy direct --proxy http://127.0.0.1:PORT`；这里 `direct` 只保持官方 URL，请求仍走显式通用代理，API 与资产一起走它。也可使用第 1 节固定版本的文件安装器重新安装到同一软件根。升级保留配置和 sidecar，但不会自动绑定；进入 v0.8.2 后应按本节选择 listener，否则 API 功能保持禁用。没有 Proxy 时先按第 2、3 节从可信本地 artifact 安装、配置、启动，再绑定；不能用新版 `--proxy` 绕过启用步骤。
 
 ## 5. 更新 Proxy 自身时先准备本地包
 

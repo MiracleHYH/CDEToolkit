@@ -4,9 +4,9 @@
 
 Nido 为 Codex 提供目录关联、环境与代理配置，以及官方安装更新入口；Proxy（Mihomo）和可选 GDS 则由 Nido 安装和管理。自 v0.8.0 起提供 Conda / pip 镜像、缓存与环境目录配置。外部工具保留原有数据和命令入口。
 
-**v0.8.2 正在准备发布，仅面向 Linux amd64。**本版增加内部 API listener 绑定与未启用门控；源码审计和隔离回归已通过，发行、签名及公网验收状态另见 [v0.8.2 发行记录](docs/nido-v0.8.2-release.md)。准备状态不表示该版本已经可下载。
+**[v0.8.2 已发布](https://github.com/MiracleHYH/CDEToolkit/releases/tag/v0.8.2)，仅面向 Linux amd64。**本版增加内部 API listener 绑定与未启用门控；源码审计、原生 CI、发布工作流、独立验签和正式包 API 隔离验收已通过。公网直链与 gh-proxy.org 加速安装、自更新均通过；首次加速配额失败和复验过程保留在 [发行记录](docs/nido-v0.8.2-release.md)。
 
-支持 Linux / macOS 的 amd64、arm64。Nido 本身是一个 Go 可执行文件。
+v0.8.2 仅支持 Linux amd64，Nido 本身是一个 Go 可执行文件。其他平台的旧发行包保留其历史版本边界。
 
 从 **v0.3.0** 起，项目使用 Nido 名称和 `nido` 命令；仓库和 Go module 暂时保留 CDEToolkit 名称。旧 `cdet` 安装不会被自动迁移或替换。
 
@@ -16,7 +16,7 @@ Nido 为 Codex 提供目录关联、环境与代理配置，以及官方安装�
 
 **v0.7.0 起支持 GitHub 加速下载和 Nido 自身更新。** 以下命令安装最新版，并在当前 Bash / Zsh 中启用 `nido`。
 
-需要 curl、tar 和 SHA-256 工具（Linux 通常自带 `sha256sum`，macOS 自带 `shasum`），无需 Go。首次安装请选择一种下载方式，安装最新 Go 版到 `~/.nido`。
+需要 Linux amd64、curl、tar 和 SHA-256 工具（通常为 `sha256sum`），无需 Go。首次安装请选择一种下载方式，安装最新 Go 版到 `~/.nido`。
 
 **能直接访问 GitHub：** 脚本和安装包都从 GitHub 下载。
 
@@ -162,7 +162,7 @@ nido proxy update
 nido proxy start
 ```
 
-更新不调用 controller 热更新，不清理已有未知数据。新源码的内部 API 必须先绑定 listener 才启用，资产继续原文件策略；已保存有效非空绑定后可用本次 `--proxy URL` 临时覆盖，未绑定时不会因该参数启用 API。需要借用旧代理下载时，先另行准备本地包，再停止并通过 `--artifact /absolute/path/to/mihomo.gz` 更新。详见 [Proxy 使用说明](docs/usage.md#内置-proxy)及[组件设计](docs/proxy-design.md)。
+更新不调用 controller 热更新，不清理已有未知数据。v0.8.2 的内部 API 必须先绑定 listener 才启用，资产继续原文件策略；已保存有效非空绑定后可用本次 `--proxy URL` 临时覆盖，未绑定时不会因该参数启用 API。需要借用旧代理下载时，先另行准备本地包，再停止并通过 `--artifact /absolute/path/to/mihomo.gz` 更新。详见 [Proxy 使用说明](docs/usage.md#内置-proxy)及[组件设计](docs/proxy-design.md)。
 
 ## 常用命令
 

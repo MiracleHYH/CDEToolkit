@@ -4,7 +4,7 @@ Nido: Lightweight Development Environment Manager。开发中的命令为 `nido`
 
 从 v0.3.0 起发布 Nido Go 版。历史 cdet Release 保留原状，新版使用下述包名和安装行为，不自动迁移旧版安装。
 
-v0.8.2 正在准备发布，新增内部 GitHub API listener 绑定及未绑定禁用逻辑，**本版发行和执行验收仅面向 Linux amd64**。发布、签名和公网验收状态见 [v0.8.2 发行记录](nido-v0.8.2-release.md)，下述流程不是已发布声明。
+v0.8.2 已发布，新增内部 GitHub API listener 绑定及未绑定禁用逻辑，**本版发行和执行验收仅面向 Linux amd64**。原生 CI、发布工作流、独立验签、正式包 API 隔离，以及公网直链和 gh-proxy.org 加速安装自更新验收均已通过；首次加速配额失败和复验过程见 [v0.8.2 发行记录](nido-v0.8.2-release.md)。
 
 v0.8.0 增加 Conda / pip 外部配置集成，当时随四平台 Nido 包提供，不增加 Conda 安装包或独立组件资产；v0.8.1 纳入完整镜像同步及按项查询修复。其[发行记录](conda-v0.8.1-release.md)与 [v0.8.0 历史记录](conda-release.md)保留，不把历史资产范围套用到 v0.8.2。
 
@@ -79,7 +79,7 @@ v0.8.2 的 Nido 与 Proxy 执行目标均限定为 Linux amd64；历史四平台
 
 `release.yml` 只响应 `v*` 标签。在上传前，它检查精确标签、源码、测试、包与本机只读冒烟，再使用 Sigstore 签名并逐项验证发布白名单。普通检查仅有 `contents: read`；只有发布 job 才拥有上传和 OIDC 权限。Action 固定完整 SHA，checkout 不保留凭据。
 
-v0.8.2 的 Nido 发行白名单计划仅包含：
+v0.8.2 的 Nido 发行白名单仅包含：
 
 - `nido-linux-amd64.tar.gz`，只含一个普通可执行文件 `nido`。
 - 对应的 `nido-linux-amd64.tar.gz.sha256`。

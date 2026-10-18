@@ -4,6 +4,8 @@
 
 本轮只做 HTTP 下载诊断，不执行下载内容或安装 Nido。宿主 curl 用于与 Linux amd64 仿真容器作网络对照，不扩展产品安装目标。私人地址仅保存在 Git 忽略的本地证据中，产品预设和公开文档不硬编码该地址。
 
+后续状态：相关诊断保护与 API 分路由修复已纳入 [v0.8.2](nido-v0.8.2-release.md)，该版已发布，正式包独立验签、API 隔离和公网直链、gh-proxy.org 加速安装自更新均通过。首次 gh-proxy.org 403 的上游账户配额诊断和重置后复验保留于该版发行记录；私人文件前缀的额外 12 次 GET 安装专项也通过，但不计 API 或自更新。以下 v0.8.1 下载、API 404 和历史超时证据保留各自当时的范围。
+
 ## 完整文件对照
 
 | 客户端与路径 | 结果 | 完整正文 | 总耗时 |
@@ -42,9 +44,9 @@
 
 v0.8.1 可用 `nido update --check --github-proxy direct --proxy <Proxy端点>` 临时绕开这一限制：`direct` 保留官方 URL，通用代理同时承载 API 和发行文件；仅添加 `--proxy` 不会取消已保存的文件前缀。此历史验证仍只说明当时的显式客户端契约。
 
-后续按用户要求增加的**未发布源码功能**改为：先用文件入口安装 Nido，再用可信本地 Mihomo 包安装、配置并显式启动 Proxy，运行 `nido proxy bind download` 选择一次 listener。后续 Nido 自身、Proxy、GDS 的内部 GitHub API 自动经该入口访问官方 URL，文件资产仍用原有加速前缀，不要求用户每次指定地址。绑定保存在独立私有文件，不改主配置 schema 或全局代理，也不影响用户自己运行的 curl、Git、Conda/pip；失效时明确失败，不静默回退或自动启动。具体步骤、版本和验证边界见 [自举方案](nido-proxy-bootstrap.md)。未发布、部署或修改真实服务配置。
+后续按用户要求实现并纳入 **v0.8.2 的流程**为：先用文件入口安装 Nido，再用可信本地 Mihomo 包安装、配置并显式启动 Proxy，运行 `nido proxy bind download` 选择一次 listener。后续 Nido 自身、Proxy、GDS 的内部 GitHub API 自动经该入口访问官方 URL，文件资产仍用原有加速前缀，不要求用户每次指定地址。绑定保存在独立私有文件，不改主配置 schema 或全局代理，也不影响用户自己运行的 curl、Git、Conda/pip；失效时明确失败，不静默回退或自动启动。具体步骤、版本和验证边界见 [自举方案](nido-proxy-bootstrap.md)。当时的源码诊断阶段未发布、部署或修改真实服务配置，后续发行状态见本页前述链接。
 
-该未发布源码随后收紧为“未绑定即禁用 API”：没有 sidecar 或 listener 为空时，`api_state = disabled`，依赖 API 的版本查询、在线安装和更新在网络、候选执行、确认或写入前提示未启用，不能用 `--proxy`、`--github-proxy`、环境代理或文件前缀绕过；已有有效非空绑定后才可临时 `--proxy` 覆盖。Nido 主动查询 Codex 版本的 GitHub API 同样受该开关约束：`codex update --check` 未绑定时失败，普通 `codex update` 未绑定时跳过可选 API 预查询；官方安装/更新脚本仍保留独立代理与确认，脚本内部及 Codex 程序运行网络不变。用户显式 probe 属独立诊断。`configured` 仅为静态状态，不等于就绪；普通 status/doctor 不联网，未绑定不算 doctor 故障。本地 artifact、dry-run、无需 API 的同版本操作和不依赖 API 的文件自举脚本仍可使用。禁用规则已通过独立的 Linux amd64 隔离验收，详见[自举方案](nido-proxy-bootstrap.md#验证状态与范围)，不改写上述 v0.8.1 的历史行为和结果。
+该实现随后收紧为“未绑定即禁用 API”：没有 sidecar 或 listener 为空时，`api_state = disabled`，依赖 API 的版本查询、在线安装和更新在网络、候选执行、确认或写入前提示未启用，不能用 `--proxy`、`--github-proxy`、环境代理或文件前缀绕过；已有有效非空绑定后才可临时 `--proxy` 覆盖。Nido 主动查询 Codex 版本的 GitHub API 同样受该开关约束：`codex update --check` 未绑定时失败，普通 `codex update` 未绑定时跳过可选 API 预查询；官方安装/更新脚本仍保留独立代理与确认，脚本内部及 Codex 程序运行网络不变。用户显式 probe 属独立诊断。`configured` 仅为静态状态，不等于就绪；普通 status/doctor 不联网，未绑定不算 doctor 故障。本地 artifact、dry-run、无需 API 的同版本操作和不依赖 API 的文件自举脚本仍可使用。禁用规则已通过独立的 Linux amd64 隔离验收，详见[自举方案](nido-proxy-bootstrap.md#验证状态与范围)，不改写上述 v0.8.1 的历史行为和结果。
 
 ## 验收工具修复与边界
 

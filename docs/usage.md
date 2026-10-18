@@ -6,7 +6,7 @@ GDS 保持可选。Nido v0.5.0 起支持独立 Linux amd64 组件的官方下载
 
 独立 Proxy 组件自 v0.4.0 提供；本指南中的 quick start、节点链接解析和类别/单工具绑定自 **v0.6.0** 提供。安装 Nido 不会自动安装或启动 Mihomo，也不会切换已有组件入口。
 
-本文的 **Nido 内部 GitHub API listener 绑定及未绑定时禁用 API**随 v0.8.2 准备发布，仅面向 Linux amd64，v0.8.1 尚不具备；其他已发行功能沿用各自版本说明。源码审计及隔离验收已通过；发行和公网验收状态见 [v0.8.2 记录](nido-v0.8.2-release.md)，准备状态不表示已经发布。
+本文的 **Nido 内部 GitHub API listener 绑定及未绑定时禁用 API**已随 v0.8.2 发布，仅面向 Linux amd64，v0.8.1 尚不具备；其他已发行功能沿用各自版本说明。源码审计、原生 CI、发布工作流、独立验签、正式包 API 隔离，以及公网直链和 gh-proxy.org 加速安装自更新验收均已通过；首次加速配额失败和复验记录见 [v0.8.2 记录](nido-v0.8.2-release.md)。
 
 ## 初始化与 Shell 环境
 
@@ -64,7 +64,7 @@ nido update --version X.Y.Z --github-proxy direct
 
 优先级为本次 `--github-proxy`、`NIDO_GITHUB_PROXY` 环境变量、已保存配置、默认 `auto`。显式设置空的 `NIDO_GITHUB_PROXY` 表示直连。`nido download set VALUE` 保存后续下载策略；更新命令上的选项只影响本次请求。已有 Nido 重跑安装脚本但未显式指定策略时，脚本本次使用 `auto` 下载，保留软件中的既有策略；显式 flag 或环境变量则传给 `init` 保存。安装脚本本身不会解析 TOML。自动回退只在已经执行的安装脚本内部生效，外层 `curl` 需由用户选择能访问的来源。
 
-`download show` 同时显示保存值和本次实际值；新源码另显示 `api_state`、`api_listener`、`api_proxy`。没有 sidecar 或 listener 为空时为 `disabled`，名称和地址为空；已配置非空绑定时为 `configured`。这是静态配置状态，不证明 listener 正在运行或网络可达。普通 status/doctor 不联网，未绑定是正常禁用状态，不计作 doctor 故障。错误的下载偏好只阻止使用它的联网操作，不阻止 Codex 或离线状态查看；可通过 `download set` 修正，`doctor` 会报告无效的实际策略。Go 下载不会在收到响应头后仅因传输超过 8 秒而切换到第三方；连接和响应头有短期限，整个请求仍有大小与时间上限。加速服务返回的跳转也会检查认证参数和目标域名，自定义入口不能将下载跳转到任意外部站点。
+`download show` 同时显示保存值和本次实际值；v0.8.2 另显示 `api_state`、`api_listener`、`api_proxy`。没有 sidecar 或 listener 为空时为 `disabled`，名称和地址为空；已配置非空绑定时为 `configured`。这是静态配置状态，不证明 listener 正在运行或网络可达。普通 status/doctor 不联网，未绑定是正常禁用状态，不计作 doctor 故障。错误的下载偏好只阻止使用它的联网操作，不阻止 Codex 或离线状态查看；可通过 `download set` 修正，`doctor` 会报告无效的实际策略。Go 下载不会在收到响应头后仅因传输超过 8 秒而切换到第三方；连接和响应头有短期限，整个请求仍有大小与时间上限。加速服务返回的跳转也会检查认证参数和目标域名，自定义入口不能将下载跳转到任意外部站点。
 
 在 v0.8.2 中，先运行 `nido proxy bind download`，从 listeners 选择一次入口，启用 Nido 自身、Proxy、GDS 以及 Nido 主动查询 Codex 版本的内部 GitHub API；后续正常运行 `nido update --check`、`nido update` 即可，无需重复指定地址。checksum、发行包等资产继续使用保存的文件加速策略。升级保留旧配置，但不会猜测 listener 或自动生成绑定；未绑定时 API 功能禁用，依赖 API 的操作在网络请求、候选执行、确认或写入前明确提示未启用。`--proxy`、`--github-proxy`、HTTP(S)_PROXY 等代理变量和文件前缀均不能在无绑定时启用 API；已有有效非空绑定记录后，`--proxy URL` 才可临时覆盖本次请求，且不会保存或移除绑定，也不核验所保存 listener 是否运行。
 
@@ -80,7 +80,7 @@ Nido 自身更新只替换自己的程序，保留管理配置、生成环境、
 <Nido 软件目录>/
   bin/nido
   config.toml
-  download-proxy.toml # 新源码：显式绑定的内部 GitHub API listener，私有独立文件
+  download-proxy.toml # v0.8.2：显式绑定的内部 GitHub API listener，私有独立文件
   env.sh
   conda/              # v0.8.0 起，显式选择 Conda 镜像后创建
     mirror-<hash>.yaml # 内容确定的镜像覆盖文件
@@ -398,7 +398,7 @@ nido proxy install --artifact /absolute/path/to/mihomo.gz --sha256 SHA256_HEX --
 nido proxy update --artifact /absolute/path/to/mihomo.gz --sha256 SHA256_HEX
 ```
 
-`--sha256` 接受输入文件的 64 位十六进制摘要；gzip 输入使用压缩包摘要。本地来源不查询发布 API，也不绑定官方 tag 或自动验签；安装仍会执行候选版本查询，已有配置时还会运行核心验证。自举时应固定可信版本、兼容架构和独立核对的摘要；在线下载另检查官方资产摘要、平台与展开大小。摘要验证不等于签名验证。新源码的内部 GitHub API 必须先绑定 listener，未绑定时在线安装和版本查询等 API 功能禁用；本地 artifact 不受此限制。已有有效非空绑定后可使用本次 `--proxy URL` 临时覆盖，资产保持 GitHub 文件策略。不为了下载自动启动 Proxy。若更新依赖当前 Proxy，先另行获取并核验本地包，再停止并使用 `--artifact` 更新，成功后仍需显式启动。
+`--sha256` 接受输入文件的 64 位十六进制摘要；gzip 输入使用压缩包摘要。本地来源不查询发布 API，也不绑定官方 tag 或自动验签；安装仍会执行候选版本查询，已有配置时还会运行核心验证。自举时应固定可信版本、兼容架构和独立核对的摘要；在线下载另检查官方资产摘要、平台与展开大小。摘要验证不等于签名验证。v0.8.2 的内部 GitHub API 必须先绑定 listener，未绑定时在线安装和版本查询等 API 功能禁用；本地 artifact 不受此限制。已有有效非空绑定后可使用本次 `--proxy URL` 临时覆盖，资产保持 GitHub 文件策略。不为了下载自动启动 Proxy。若更新依赖当前 Proxy，先另行获取并核验本地包，再停止并使用 `--artifact` 更新，成功后仍需显式启动。
 
 常规隔离测试使用临时根、假核心及回环辅助程序。真实核心兼容测试可通过 `NIDO_TEST_MIHOMO=/absolute/path/to/verified/mihomo make check-proxy-real` 显式执行，不自动下载核心，仅使用临时 HOME、软件根及回环 provider、HTTP/SOCKS/HTTPS 夹具。已执行的版本、结果和范围见[审计记录](proxy-audit.md)；本地夹具不能替代真实订阅、全部节点协议及其他平台的验证。
 
@@ -481,7 +481,7 @@ nido gds remove
 
 `nido gds update --check` 只读取安装凭证并联网查询 GDS 稳定版，不执行程序或改写配置；默认更新按数值版本选择最新 GDS，不自动降级。`update 0.1.0` 可显式重装或回退到指定版本。安装、更新也接受 `--artifact /absolute/path/to/gds [--sha256 HASH]`，不可与官方版本混用。
 
-官方来源固定为本仓库 `gds-vX.Y.Z` Release，独立于 Nido 的 `latest`。下载同时核对 API SHA-256、大小、严格摘要文件、ELF 和候选版本；Sigstore bundle 供独立验签，自动摘要校验不等于客户端验签。新源码的内部 GitHub API 必须先绑定 listener，未绑定时在线安装和版本查询等 API 功能禁用；本地 artifact 不受此限制。已有有效非空绑定后可使用本次 `--proxy URL` 临时覆盖，资产保持 GitHub 文件策略，不会为下载启动任何服务。
+官方来源固定为本仓库 `gds-vX.Y.Z` Release，独立于 Nido 的 `latest`。下载同时核对 API SHA-256、大小、严格摘要文件、ELF 和候选版本；Sigstore bundle 供独立验签，自动摘要校验不等于客户端验签。v0.8.2 的内部 GitHub API 必须先绑定 listener，未绑定时在线安装和版本查询等 API 功能禁用；本地 artifact 不受此限制。已有有效非空绑定后可使用本次 `--proxy URL` 临时覆盖，资产保持 GitHub 文件策略，不会为下载启动任何服务。
 
 `--dry-run` 只检查本地路径、来源语法、配置和运行记录，不联网、下载、执行程序、加载驱动或分配显存；远端版本及实时设备能力明确为未检查。
 
