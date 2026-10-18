@@ -7,7 +7,8 @@ gds_go=${GO:-go}
 gds_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 cd "$gds_root"
 gds_sdk=${GDS_RELEASE_GOROOT:-$("$gds_go" env GOROOT)}
-gds_image=public.ecr.aws/docker/library/golang@sha256:2015125fe4a3d97f9ba4ad55d458c2d1f025fdf9cb73d8f423a29e448d59da5e
+# Official golang:1.23.12-bullseye amd64 image; keep the content pinned.
+gds_image=docker.io/library/golang@sha256:2015125fe4a3d97f9ba4ad55d458c2d1f025fdf9cb73d8f423a29e448d59da5e
 gds_version=$(cat GDS_VERSION)
 gds_go_version=$(cat .go-version)
 case "$gds_sdk" in /*) ;; *) printf 'GDS_RELEASE_GOROOT must be an absolute Linux amd64 SDK path\n' >&2; exit 1 ;; esac
