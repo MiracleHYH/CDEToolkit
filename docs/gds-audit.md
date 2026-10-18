@@ -2,6 +2,36 @@
 
 审查日期为 2026 年 10 月 18 日，最终核对基线为 `b214363`，其 GDS 相关源码与开始审查时的 `1000e96` 一致。初审时，新 Go CLI 只能管理可选程序文件，旧 Bash monitor 和 CUDA worker 属于另一条冻结实现。当前源码已按独立组件设计重建，初审发现的问题及原始验证范围保留于下方。后续目标见 [GDS 组件设计](gds-design.md)。
 
+## 公开发行补验（2026-10-18）
+
+已发布 [GDS gds-v0.1.0](https://github.com/MiracleHYH/CDEToolkit/releases/tag/gds-v0.1.0) 与 [Nido v0.5.0](https://github.com/MiracleHYH/CDEToolkit/releases/tag/v0.5.0)，两个标签均精确指向 `60a71a9f54e4f04c538fe49232eaf2a0d4b884ad`。发布在冻结的独立检出中完成，没有纳入共享工作区其他会话正在修改的 Proxy/Git 功能。
+
+发布前另修复三项问题：
+
+- Linux `/proc/<pid>/stat` 读取可能在进程退出窗口返回 ESRCH。子项读取的 ESRCH/ENOENT 先复查整个 PID 目录，目录仍在时保持过渡状态；只有确认目录消失才视为退出。权限、损坏、UID 或出生变化仍保留错误，未放宽归属条件。
+- CUDA 假驱动测试的 `t.Run` 子测试不继承父 goroutine 的 OS 线程锁。逐个绑定线程，并验证错误线程释放被拒绝、原线程仍能清理和再次分配；生产 worker 的线程绑定及 Free 检查保持原语义。
+- Nido 升级和重复初始化会重写当前有效 TOML、丢失注释。当前配置与生成环境一致时直接保留原始字节，官方 v0.4.0 升级与重复安装均已实测。
+
+| 验证 | 最终结果 |
+| --- | --- |
+| [冻结源码 CI](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39088168342) | Linux Go 1.23 / 1.27.2、macOS Go 1.27.2、源码/历史扫描、普通用户原生隔离全部成功 |
+| [GDS 发布 CI](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39088481928) | 精确标签、两次离线构建、glibc 2.31 加载、普通用户原生隔离、签名验签及 4 项资产发布全部成功 |
+| [Nido 发布 CI](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39089003828) | 全量回归、四平台包、原生冒烟、审计、签名验签及 18 项资产发布全部成功 |
+| J66 普通用户原生源码验证 | UID 1001，Linux x86_64 6.8.0-124-generic，Go 1.27.2、GCC 13.3.0；GDS 253 项测试及子测试、Nido GDS CLI 28 项通过，零失败、零跳过 |
+| 公开下载资产 | 两个 Release 所有资产的 API SHA-256、大小与固定 URL 通过；sidecar 严格匹配；GDS 程序及 Nido 四个平台包均与本地冻结源码构建字节一致 |
+| 版本入口 | GDS 发布后 Nido `latest` 仍为 v0.4.0；Nido 发布后为 v0.5.0；最新安装器与标签源码一致 |
+| 普通用户公开程序隔离验收 | 官方 Nido v0.4.0 → v0.5.0、默认 latest 重复安装；GDS 默认官方安装、只读更新查询、指定/默认更新、本地 0.0.0 测试版本 → 官方 0.1.0 及移除全部成功 |
+
+[GDS 标签复核](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39088481925) 和 [Nido 标签复核第 2 次执行](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39089003809/attempts/2) 均已成功。Nido 标签复核首次在固定镜像下载时遇到 ECR `toomanyrequests: Data limit exceeded`（Docker exit 125）；仅重跑失败任务后，相同源码的可复现构建与完整原生隔离检查通过，没有修改已发布制品或标签。
+
+正式 GDS 程序 SHA-256 为 `504bb2c05599947b2bfe4578f40a3e12fcd65192eb50f62ee7e2f5ed407237d7`。原生源码清单逐文件匹配发布提交，清单 SHA-256 为 `e89daa549ca5fe26eb0509c9d3639aafd7722f7914193975ce8cefed90a4c2c9`。NVIDIA 假库另通过 Go 1.23 的 race 随机排序重复验证（147 项，零失败和跳过）；中止的 Go 1.27 仿真编译未计入验收。
+
+公开验收使用私有 HOME、PID、设备与临时软件根，显式共享公网；没有 GPU 设备、宿主 HOME 或服务 socket。Nido/GDS 配置注释、env.sh、未知文件、Codex 认证/会话/数据库、Proxy 与 Shell 哨兵逐字保持。仅执行 GDS 元数据，不调用真实探针、monitor 或 worker。旧本地测试版本不代表历史官方 GDS 发行。首次验收因隔离后的 awk alternatives 链接不可达而中止；最终入口仅为已有 awk 创建私有别名，完整重跑成功。
+
+最终证据位于本地 `build/gds-release-20261018/`：`evidence-native-release/`、`evidence-public/`、公开资产摘要、CI 结果和清理证明。远端本任务的 SDK、vendor、源码与临时程序已清理，相关 PID namespace 和测试映像均无残留。退出后的 namespace 编号可能复用，最终清理结合任务独有的程序、源码和 SDK 挂载路径核验，不单凭历史编号认定进程归属。现有入口、配置、认证、会话与数据没有因本次发布而改变；真实 GPU、驱动组合、显存释放与负载影响仍未验收。客户端自动核验 HTTPS、API 摘要与 sidecar；Sigstore 签名在发布 CI 验证，客户端当前不自动验签。
+
+以下保留发布前各阶段的历史记录，其中“未发布”描述对应当时的执行范围。
+
 ## 实现与修复
 
 当前源码增加 `internal/components/gds`、`internal/gdsapi`、`internal/gdsutil`、`internal/gdsruntime` 和独立 `cmd/gds`，删除仅承载 GDS 的旧 Go builtin 框架。Nido 管理层仍为纯 Go，NVML 与 CUDA Driver API 只进入独立 Linux amd64 cgo 组件。

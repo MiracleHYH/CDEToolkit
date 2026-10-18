@@ -13,9 +13,11 @@ stable='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
 [[ "$version" =~ $stable && "$gds_version" =~ $stable ]] || { printf '版本必须是稳定 X.Y.Z\n' >&2; exit 2; }
 [[ "$fixtures" == /* && -d "$fixtures" && ! -L "$fixtures" ]] || exit 2
 [[ "$output" == /* && ! -e "$output" && ! -L "$output" ]] || { printf '证据目录必须为不存在的绝对路径\n' >&2; exit 2; }
-for tool in bwrap timeout sha256sum tar file readlink cmp diff find curl; do
+for tool in bwrap timeout sha256sum tar file readlink cmp diff find curl awk; do
   command -v "$tool" >/dev/null || { printf '缺少已有命令：%s\n' "$tool" >&2; exit 2; }
 done
+awk_tool="$(readlink -f "$(command -v awk)")"
+[[ "$awk_tool" == /usr/* && -f "$awk_tool" && -x "$awk_tool" ]] || exit 2
 [[ -x /usr/bin/curl && -d /etc/ssl && -f /etc/resolv.conf && -f /etc/hosts ]] || exit 2
 for name in install.sh nido-previous.tar.gz expected-gds; do
   [[ -f "$fixtures/$name" && ! -L "$fixtures/$name" ]] || { printf '缺少普通公开 fixture：%s\n' "$name" >&2; exit 2; }
@@ -78,7 +80,7 @@ FORBIDDEN
   chmod 0755 "/work/guard/$tool"
 done
 
-# The bootstrap may download only the explicit official Nido asset and its
+# The bootstrap may download only the explicit/latest official Nido asset and its
 # checksum. Reject extra URLs, curl configuration, and arbitrary output paths.
 cat > /work/guard/curl <<'CURL'
 #!/usr/bin/env bash
@@ -100,6 +102,8 @@ while (($#)); do
       [[ "$output_path" =~ ^/tmp/nido-install\.[A-Za-z0-9]+/(nido-linux-amd64\.tar\.gz|checksum)$ ]] || deny
       shift 2 ;;
     https://github.com/MiracleHYH/CDEToolkit/releases/download/v"$NIDO_TEST_RELEASE_VERSION"/nido-linux-amd64.tar.gz|https://github.com/MiracleHYH/CDEToolkit/releases/download/v"$NIDO_TEST_RELEASE_VERSION"/nido-linux-amd64.tar.gz.sha256)
+      [[ -z "$source_url" ]] || deny; source_url="$1"; shift ;;
+    https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/nido-linux-amd64.tar.gz|https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/nido-linux-amd64.tar.gz.sha256)
       [[ -z "$source_url" ]] || deny; source_url="$1"; shift ;;
     *) deny ;;
   esac
@@ -170,7 +174,8 @@ sh /inputs/install.sh --version "$NIDO_TEST_RELEASE_VERSION" --root "$root" --ye
 [[ "$(nido version)" == "nido $NIDO_TEST_RELEASE_VERSION" ]]
 assert_preserved
 [[ ! -e "$root/gds" && ! -e "$root/proxy" && ! -e "$root/codex" ]]
-sh /inputs/install.sh --version "$NIDO_TEST_RELEASE_VERSION" --root "$root" --yes > /work/evidence/nido-repeat.log
+sh /inputs/install.sh --root "$root" --yes > /work/evidence/nido-repeat.log
+[[ "$(nido version)" == "nido $NIDO_TEST_RELEASE_VERSION" ]]
 assert_preserved
 [[ "$(wc -l < /work/evidence/nido-downloads.log)" == 4 ]]
 
@@ -235,10 +240,11 @@ INNER
 flags=(--unshare-all --share-net --die-with-parent --new-session --clearenv --cap-drop ALL
   --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64
   --symlink usr/bin /bin --symlink usr/sbin /sbin
+  --dir /test-bin --symlink "$awk_tool" /test-bin/awk
   --dir /etc --ro-bind /etc/ssl /etc/ssl --ro-bind /etc/resolv.conf /etc/resolv.conf --ro-bind /etc/hosts /etc/hosts
   --ro-bind "$scratch/inputs" /inputs --ro-bind "$scratch/runner.sh" /runner.sh
   --bind "$scratch/work" /work --proc /proc --dev /dev --tmpfs /tmp --chdir /work
-  --setenv HOME /work/home --setenv TMPDIR /tmp --setenv PATH /work/guard:/usr/bin:/bin
+  --setenv HOME /work/home --setenv TMPDIR /tmp --setenv PATH /work/guard:/test-bin:/usr/bin:/bin
   --setenv LANG C --setenv LC_ALL C --setenv TZ UTC
   --setenv NIDO_TEST_RELEASE_VERSION "$version" --setenv NIDO_TEST_RELEASE_GDS_VERSION "$gds_version")
 # Unlike offline tests, this explicit public-release check shares networking.

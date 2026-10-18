@@ -50,3 +50,9 @@ GDS Release 明确不占用 GitHub `latest`；Nido Release 明确更新 `latest`
 离线原生验收入口为 `tests/gds-linux-native-isolation.sh`；公开程序验收入口为 `tests/gds-public-release-isolation.sh`。两者都拒绝 root 和非原生 Linux amd64，隔离 HOME、PID、设备和临时数据，不挂载 GPU 或服务 socket。公开程序验收显式共享公网，覆盖 Nido v0.4.0 → v0.5.0、重复安装、GDS 官方下载校验及更新；较旧本地测试版本只用于验证升级路径，不冒充历史官方 GDS 发行。
 
 真实 GPU、CUDA 分配、驱动组合、功耗和真实负载让出仍未验收。CPU 协议及假 NVML/CUDA 测试不能替代这些硬件结果。运行边界与前期安全审计见 [设计](gds-design.md) 和 [审计记录](gds-audit.md)。
+
+## 首次公开发行验收
+
+2026 年 10 月 18 日已发布 [GDS gds-v0.1.0](https://github.com/MiracleHYH/CDEToolkit/releases/tag/gds-v0.1.0) 和 [Nido v0.5.0](https://github.com/MiracleHYH/CDEToolkit/releases/tag/v0.5.0)，均来自冻结提交 `60a71a9`。GDS 的 4 项和 Nido 的 18 项公开资产已逐项核对 API 摘要、大小及固定 URL；程序包与本地构建相同，Nido `latest` 最终指向 v0.5.0。
+
+普通 UID 1001 的 Linux amd64 原生验证通过 253 项 GDS 与 28 项 Nido GDS CLI 测试及子测试，零失败和跳过。公开程序另通过官方旧版升级、默认 latest 重复安装、GDS 下载校验安装、更新查询、指定/默认更新和移除；配置、认证、会话、数据及 Shell 哨兵均逐字保持。具体环境、修复、边界与证据见 [公开发行补验](gds-audit.md#公开发行补验2026-10-18)。
