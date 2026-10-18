@@ -1,6 +1,6 @@
 # Nido v0.8.1：Conda 镜像合并修复
 
-本文记录 v0.8.1 的发行及公开包验收。当前处于发布候选阶段；标签、正式资产、安装和自更新结果须在实际完成后补充。没有部署到 Zenith-Dev 或其他真实机器，没有切换真实镜像、调整真实路径或迁移数据。
+[v0.8.1](https://github.com/MiracleHYH/CDEToolkit/releases/tag/v0.8.1) 已于 2026-10-18 发布。**本次使用与执行验收目标仅为 Linux amd64**，不在 macOS 安装。正式资产与签名核验、固定旧上游 normal/strict 验收均通过；Linux 公网安装和自更新按端点及版本入口分别记录，当前不能统称双链全部通过。没有部署到 Zenith-Dev 或其他真实机器，没有切换真实镜像、调整真实路径或迁移数据。
 
 ## 修复内容
 
@@ -15,14 +15,41 @@ validate 改为按当前管理项查询，镜像单项仍完整验证七字段�
 | 项目 | 当前记录 |
 | --- | --- |
 | 源码 P0 历史证据 | 修复源码在 Conda 24.1.2 / Python 3.12.1 / pip 23.3.1 的 normal、strict 模式各 8/8；原 v0.8.0 各 7/8，问题组失败。详情见 [P0 历史](conda-p0-acceptance.md) |
-| 冻结提交、VERSION 与 v0.8.1 标签 | 待冻结与核对 |
-| 本次源码、公开敏感信息检查及 CI | 待本次最终检查与 CI |
-| 四平台正式包、摘要、安装器和 Sigstore | 待发布后逐项独立核验，不用本地候选通过代替 |
-| macOS 原生双链安装、自更新 | 待使用正式 v0.8.0 升级至 v0.8.1；直链及 `gh-proxy.org` 分别执行 |
-| Linux amd64 双链安装、自更新 | 待使用正式资产在隔离 Docker 中执行，并记录宿主与实际执行架构 |
-| v0.8.1 公开 Linux 包旧上游 normal/strict | 待同一已验签程序完成完整矩阵与运行时前后核对 |
+| 冻结提交、VERSION 与 v0.8.1 标签 | [`02ac76b`](https://github.com/MiracleHYH/CDEToolkit/commit/02ac76b453bfb9a185ca9dd4168487e94edbe32d)，精确标签为 v0.8.1，VERSION 为 0.8.1 |
+| 本次源码、公开敏感信息检查及 CI | 本地 `make check smoke release verify-release`、源码与历史 gitleaks 均通过；[main 检查](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39132395565)、[tag 检查](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39132395610)、[发行工作流](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39132395795)全部成功 |
+| 正式资产、摘要、安装器和 Sigstore | 保留四平台共 18 项资产：允许列表、API 大小/摘要与静态检查通过；9 份签名匹配精确 workflow、issuer、commit、ref；9 份原始载荷与相同冻结源码的本地 Go 1.27.2 构建逐字一致，latest 指向 v0.8.1。其他平台资产只记发行与静态核验事实，不作为本次使用或执行验收 |
+| Linux amd64 直链公网执行 | 初轮空响应和 TLS 故障，尚无完整通过结果；匿名 API 额度恢复后最后一次有界验收待完成 |
+| Linux amd64 加速公网执行 | 固定版本安装、重复安装及检查更新已通过，实际自更新响应不完整，尚无全链通过结果；最后一次串行验收中，见下表 |
+| v0.8.1 公开 Linux 包旧上游 normal/strict | 同一已验签公开程序两模式各 8/8，版本与五份测试脚本绑定精确标签；每模式运行时清单记录的类型、mode、UID/GID、链接及内容摘要前后不变 |
 
-以上状态仅在有对应原始证据后更新。[v0.8.0 发行时的通过项目](conda-release.md#v080-历史发行记录)保留为当时的平台、版本与配置范围，不替代本次新增目标形态或新资产验收。
+[v0.8.0 发行时的通过项目](conda-release.md#v080-历史发行记录)保留为当时的平台、版本与配置范围，不替代本次新增目标形态或 Linux 新资产验收。
+
+## 公网端点与重试记录
+
+| 平台、链路及入口 | 已确认结果 |
+| --- | --- |
+| Linux amd64 仿真，direct | 初轮首脚本请求 curl 52 空响应，重试出现 curl 35 TLS 连接错误；网络脚本未执行，不算安装通过 |
+| Linux amd64 仿真，gh-proxy.org，固定版本、仅加速 | 首装、重复安装、Shell 注册和保护检查、真实旧包初始化、失败保留及原生 `update --check` 通过；实际 update 返回不完整响应，未完成全链 |
+| Linux amd64 仿真，最后一次串行加速验收 | 使用新临时目录、默认生产超时，暂停其他下载后执行；结果待核对，不把阶段成功当作全链通过 |
+
+故障均保留各轮独立证据，没有通过无限重试、放宽生产超时、执行未核验包或本地响应替代来标为成功。后续当次官方匿名 core API 返回已用 60/60，响应给出的重置时间为 **2026-10-18 14:28:26 UTC（北京时间 22:28:26）**；这解释该次 403 的网络条件，不保证重置后所有链路可用。
+
+公网测试工具在标签发布后增加可选加速端点、latest/固定版本与单独 transport，默认行为不变。本次只执行 Linux amd64。宿主 `gh` 可只读核对官方输入元数据，但凭据不传入安装器、容器或 Go 客户端；实际自更新仍走匿名原生网络。固定版本成功不等同于 latest 成功，不同加速端点的状态也分别记录。
+
+<details>
+<summary>前期额外临时测试记录</summary>
+
+范围明确为 Linux amd64 前，曾在 macOS 的临时 HOME 测试公开程序，没有部署或修改真实配置。相关原始记录保留，不计入本次通过依据，也不继续在 macOS 安装或验收。
+
+</details>
+
+## 正式包旧上游验收
+
+公开 Linux 程序 SHA256 为 `e412dd4d37ffaa2baa7add444d1e1e398fb65877b6e7ca48156c79392c68c964`，执行前已独立验签。实际上游固定为 Conda **24.1.2**、Python **3.12.1**、pip **23.3.1**，normal/strict 各八组全部通过，包含原始 default、目标隐式配置、原生路径、双用户 pip 配置、自定义 CONDARC 证书代理和覆盖变量、失败重试及运行时完整性。五份 P0 脚本的哈希均匹配发行标签；公网测试入口的后续参数化不改变这些 P0 输入。
+
+两模式原始 trace 分别为 3,443,031 与 3,461,897 行，每侧 57 次已知 base history 探测；normal 可打开但内容不变，strict 全部由内核返回 EROFS。完整运行时清单记录的类型、mode、UID/GID、链接及内容摘要在各模式前后保持一致。各侧 11 个配置区外写入意图均为失败的 `/dev/tty` 探测（ENXIO），没有互联网 connect 或发送事件。可写 open 是意图证据，不把这些计数解释为曾写入多少字节；还须结合路径归类、文件摘要与只读挂载判断。
+
+该运行覆盖 Apple arm64 宿主上的 Linux amd64 仿真及原生 arm64 VM syscall 追踪，不等于原生 Linux amd64 或真实 GPFS。normal/strict 的清单按同模式比较所记录字段，种子文件模式差异仍按 [历史 P0 边界](conda-p0-acceptance.md#输入与隔离)解释，不要求两模式摘要相同。
 
 ## 验证入口
 
@@ -35,11 +62,13 @@ NIDO_ACCEPT_INPUT=/absolute/path/to/verified-v0.8.1/assets \
 NIDO_ACCEPT_OLD_INPUT=/absolute/path/to/verified-v0.8.0/assets \
 NIDO_ACCEPT_VERSION=0.8.1 \
 NIDO_ACCEPT_OLD_VERSION=0.8.0 \
+NIDO_ACCEPT_MODE=docker \
+NIDO_ACCEPT_PLATFORM=linux/amd64 \
 NIDO_ACCEPT_OUTPUT=/absolute/path/to/new-public-evidence-directory \
 make check-nido-public-release
 ```
 
-Docker 验收另设置 `NIDO_ACCEPT_MODE=docker NIDO_ACCEPT_PLATFORM=linux/amd64`。入口在临时 HOME 和软件根中分别验证 direct、`gh-proxy.org`、重复安装、Shell 注册与 PATH 幂等、真实旧版本更新、失败保留、同版本离线跳过和 Conda CLI 夹具。新旧程序均须来自其正式发行；公网安装结果与已验签程序逐字比较。
+入口只在 Linux amd64 容器的临时 HOME 和软件根中验证 direct、`gh-proxy.org`、重复安装、Bash 注册与 PATH 幂等、真实旧版本更新、失败保留、同版本离线跳过和 Conda CLI 夹具。新旧程序均须来自其正式发行；公网安装结果与已验签程序逐字比较。arm64 宿主上的 Linux amd64 容器属于仿真执行，应在结果中明确保留该边界。
 
 指定旧上游验收从同一已验签 Linux amd64 发行包提取 Nido，使用已有完整运行时镜像：
 
@@ -48,6 +77,7 @@ NIDO_P0_IMAGE=nido-conda-p0:24.1.2-amd64-final \
 NIDO_P0_BINARY=/absolute/path/to/verified-v0.8.1/linux-amd64/nido \
 NIDO_P0_OUTPUT=/absolute/path/to/new-runtime-evidence-directory \
 NIDO_P0_LABEL=published-v0.8.1 \
+NIDO_P0_VERSION=0.8.1 \
 NIDO_P0_STRACE=1 \
 NIDO_P0_STRACE_COMMAND=/usr/local/bin/nido-p0-strace \
 make check-conda-p0
@@ -57,6 +87,10 @@ make check-conda-p0
 
 ## 部署与恢复边界
 
-公开包通过新矩阵后，才能确认上述固定上游、固定配置形态的软件兼容条件；不自动满足真实 Zenith-Dev 部署条件。现场仍须确认 GPFS 配额与写入、原子 rename/link、锁及 fsync 能力，软件目录的持久保留方式，平台改源 hook 的职责，以及激活已有环境后的覆盖变量和悬空链接。隔离结果不证明镜像联网、求解、包下载或真实证书可用，也不等同于原生 Linux 或 GPFS 验收。
+正式包已满足上述固定旧上游、固定配置形态的软件兼容矩阵；公网下载路径的未完成项和网络限制独立保留，不自动满足真实 Zenith-Dev 部署条件。现场仍须确认 GPFS 配额与写入、原子 rename/link、锁及 fsync 能力，软件目录的持久保留方式，平台改源 hook 的职责，以及激活已有环境后的覆盖变量和悬空链接。隔离结果不证明镜像联网、求解、包下载或真实证书可用，也不等同于原生 Linux 或 GPFS 验收。
+
+未来首次启用须在尚未切源的目标 Shell 中核对 `CONDA_EXE`、PATH 中的 Python、配置来源及覆盖变量，再分别记录 Conda/pip default；指定 `CONDA_EXE` 不会同时固定 pip 的 Python。目标形态的原清华 defaults、SUSTech NVIDIA 映射及原 iVolc index 都属于本机 default，不应替换成官方地址后再捕获。新版本升级不重新捕获已有快照，也不替用户处理真实环境的旧缓存覆盖。
+
+本地证据位于忽略目录 `build/release-v0.8.1/`：`verified/receipt.json` 记录资产与签名；`local-check.log`、`public-audit-final.log` 与三个 CI 记录源码检查；`conda-p0-provenance.json` 绑定公开 Linux 程序、版本、五份脚本和两模式结果，`conda-p0/` 与 `conda-p0-trace-audit/` 保留原始命令、运行时清单和 trace。各 `accept-linux*` 目录保留本次每轮公网参数、HTTP 响应核验及失败位置，不把失败证据覆盖成成功。
 
 `default` 只恢复首次镜像语义，off/reset 只停止管理。目录修改不会自动还原历史键或移动数据。失败补偿拒绝覆盖用户并发编辑，系统拒绝撤销时报告未恢复部分；合法首次 default 可以保留。主配置已提交而 env 刷新失败时保留意图和 native 值，修复故障后可重新 init。完整人工撤销须事先保存相关原文件和 metadata，并独立处理数据；本次发行范围不包含部署或真实机器配置修改。

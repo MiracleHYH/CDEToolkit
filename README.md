@@ -89,7 +89,7 @@ nido codex update
 
 ## 配置 Conda / pip
 
-本组件自 v0.8.0 提供。本次 v0.8.1 发布候选修复隐式用户 `.condarc` 切源时混入旧 defaults 的问题，并按实际管理项查询配置；[发行与公开包验收状态](docs/conda-v0.8.1-release.md)单独记录。首次启用先保存本机原有镜像为持久的 `default`，之后可在原配置、官方和清华之间切换。缓存与环境位置直接写入上游原生配置。
+本组件自 v0.8.0 提供。v0.8.1 已修复隐式用户 `.condarc` 切源时混入旧 defaults 的问题，并按实际管理项查询配置；[本次 Linux amd64 发行与验收状态](docs/conda-v0.8.1-release.md)单独记录，公网路径仍有网络限制。本次只以 Linux amd64 为执行验收目标，不在 macOS 安装。首次启用先保存本机原有镜像为持久的 `default`，之后可在原配置、官方和清华之间切换。缓存与环境位置直接写入上游原生配置。
 
 ```sh
 nido conda setup

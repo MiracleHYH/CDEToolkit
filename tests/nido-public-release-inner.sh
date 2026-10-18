@@ -3,6 +3,17 @@ set -euo pipefail
 umask 077
 version=${NIDO_ACCEPT_VERSION:?}
 old_version=${NIDO_ACCEPT_OLD_VERSION:?}
+accelerator=${NIDO_ACCEPT_GITHUB_ACCELERATOR:-https://gh-proxy.org}
+case $accelerator in https://gh-proxy.org|https://ghfast.top) ;; *) printf 'unsupported accelerator\n' >&2; exit 2 ;; esac
+export NIDO_ACCEPT_GITHUB_ACCELERATOR="$accelerator"
+install_version_mode=${NIDO_ACCEPT_INSTALL_VERSION_MODE:-latest}
+case $install_version_mode in latest|tagged) ;; *) printf 'unsupported install version mode\n' >&2; exit 2 ;; esac
+selected_transport=${NIDO_ACCEPT_TRANSPORT:-both}
+case $selected_transport in
+  both) transports=(direct accelerated) ;;
+  direct|accelerated) transports=("$selected_transport") ;;
+  *) printf 'unsupported transport\n' >&2; exit 2 ;;
+esac
 input=${NIDO_ACCEPT_INPUT:?}
 output=${NIDO_ACCEPT_OUTPUT:?}
 platform=${NIDO_ACCEPT_PLATFORM:?}
@@ -64,7 +75,7 @@ while (($#)); do
   esac
 done
 source=$url
-case $source in https://gh-proxy.org/https://*) source=${source#https://gh-proxy.org/} ;; esac
+case $source in "$NIDO_ACCEPT_GITHUB_ACCELERATOR"/https://*) source=${source#"$NIDO_ACCEPT_GITHUB_ACCELERATOR"/} ;; esac
 case $source in
   https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/*|https://github.com/MiracleHYH/CDEToolkit/releases/download/v"$NIDO_ACCEPT_VERSION"/*) ;;
   *) printf 'unexpected public download URL\n' >&2; exit 93 ;;
@@ -131,7 +142,7 @@ assert_shell_activation() {
       ' public-accept "$NIDO_HOME" "$version" "${shell##*/}" > "$output/$label-${shell##*/}-activation.log"
   done
 }
-for transport in direct accelerated; do
+for transport in "${transports[@]}"; do
   export HOME="$case_root/$transport-user" TMPDIR="$case_root/$transport-tmp"
   export NIDO_HOME="$HOME/.nido" CODEX_HOME="$HOME/.codex" CURL_HOME="$HOME" ZDOTDIR="$HOME"
   export XDG_CONFIG_HOME="$HOME/.config" XDG_CACHE_HOME="$HOME/.cache" XDG_DATA_HOME="$HOME/.local/share" XDG_STATE_HOME="$HOME/.local/state"
@@ -140,10 +151,13 @@ for transport in direct accelerated; do
   protect "$transport"
   official=https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh
   policy=direct; outer=$official
-  if [[ $transport = accelerated ]]; then policy=https://gh-proxy.org; outer="$policy/$official"; fi
+  if [[ $transport = accelerated ]]; then policy=$accelerator; outer="$policy/$official"; fi
+  install_options=(--github-proxy "$policy")
+  [[ $install_version_mode != tagged ]] || install_options+=(--version "$version")
   # Exact README one-line flow: public latest script and package/checksum,
-  # explicit direct/accelerated transport, followed by parent-shell activation.
-  curl --http1.1 -fsSL "$outer" | sh -s -- --github-proxy "$policy" && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
+  # explicit transport, then activation. The separate tagged mode adds only
+  # the installer's existing --version option; it cannot claim latest success.
+  curl --http1.1 -fsSL "$outer" | sh -s -- "${install_options[@]}" && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
   assert_program
   assert_shell_activation "$transport"
   fresh_components "$transport-install"
@@ -151,11 +165,11 @@ for transport in direct accelerated; do
   grep -Fq "$policy" "$output/$transport-policy.json"
   cp "$NIDO_HOME/config.toml" "$case_root/$transport-config-before"
   cp "$NIDO_HOME/env.sh" "$case_root/$transport-env-before"
-  curl --http1.1 -fsSL "$outer" | sh -s -- --github-proxy "$policy"
+  curl --http1.1 -fsSL "$outer" | sh -s -- "${install_options[@]}"
   cmp "$NIDO_HOME/config.toml" "$case_root/$transport-config-before"
   cmp "$NIDO_HOME/env.sh" "$case_root/$transport-env-before"
   unchanged "$transport"
-  printf 'PASS %s latest installation, shell activation, repeat install and protected native data\n' "$transport"
+  printf 'PASS %s %s installation, shell activation, repeat install and protected native data\n' "$transport" "$install_version_mode"
 
   export NIDO_HOME="$HOME/upgrade-from-public-$old_version"
   "$case_root/old-nido" --root "$NIDO_HOME" init --yes --github-proxy "$policy" > "$output/$transport-old-init.log"
@@ -204,16 +218,28 @@ for transport in direct accelerated; do
   # upstreams; real Conda/Python/components remain forbidden in this harness.
   bash "$input/harness/conda-cli-isolation.sh" "$NIDO_HOME/bin/nido" > "$output/$transport-conda-cli.log" 2>&1
   unchanged "$transport"
+  printf '{"version":"%s","old_version":"%s","platform":"%s","transport":"%s","accelerator":"%s","install_version_mode":"%s","install":true,"repeat_install":true,"shell_activation":true,"real_old_self_update":true,"offline_same_version_noop":true,"downgrade_rejected":true,"failed_update_preserved":true,"conda_fake_upstream_suite":true,"protected_data_unchanged":true}\n' \
+    "$version" "$old_version" "$platform" "$transport" "$accelerator" "$install_version_mode" > "$output/$transport-result.json"
   printf 'PASS %s real signed public upgrade %s -> %s, failure preservation, offline noop and Conda isolation\n' "$transport" "$old_version" "$version"
 done
 [[ ! -e $NIDO_ACCEPT_FORBIDDEN_LOG ]]
-for transport in direct accelerated; do
+for transport in "${transports[@]}"; do
   prefix=https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/
-  if [[ $transport = accelerated ]]; then prefix=https://gh-proxy.org/$prefix; fi
+  if [[ $transport = accelerated ]]; then prefix=$accelerator/$prefix; fi
   for name in install.sh "$asset" "$asset.sha256"; do
-    grep -Fq $'VERIFIED-BEFORE-EXEC\t'"$prefix$name"$'\t' "$NIDO_ACCEPT_HTTP_LOG"
+    expected_prefix=$prefix
+    if [[ $install_version_mode = tagged && $name != install.sh ]]; then
+      expected_prefix="https://github.com/MiracleHYH/CDEToolkit/releases/download/v$version/"
+      if [[ $transport = accelerated ]]; then expected_prefix=$accelerator/$expected_prefix; fi
+    fi
+    grep -Fq $'VERIFIED-BEFORE-EXEC\t'"$expected_prefix$name"$'\t' "$NIDO_ACCEPT_HTTP_LOG"
   done
 done
-printf '{"version":"%s","old_version":"%s","old_binary":"actual-cosign-verified-public-release","platform":"%s","transports":["direct","accelerated"],"installer_responses_match_signed_bytes_before_execution":true,"self_update_validation":"native-api-digest-and-sha256-plus-signed-output-match","direct_install":true,"accelerated_install":true,"direct_self_update":true,"accelerated_self_update":true,"offline_same_version_noop":true,"failed_update_preserved":true,"conda_fake_upstream_suite":true,"protected_data_unchanged":true,"real_components_invoked":false}\n' \
-  "$version" "$old_version" "$platform" > "$output/result.json"
+case $selected_transport in
+  both) transports_json='["direct","accelerated"]'; direct_pass=true; accelerated_pass=true ;;
+  direct) transports_json='["direct"]'; direct_pass=true; accelerated_pass=null ;;
+  accelerated) transports_json='["accelerated"]'; direct_pass=null; accelerated_pass=true ;;
+esac
+printf '{"version":"%s","old_version":"%s","old_binary":"actual-cosign-verified-public-release","platform":"%s","transports":%s,"accelerator":"%s","install_version_mode":"%s","installer_responses_match_signed_bytes_before_execution":true,"self_update_validation":"native-api-digest-and-sha256-plus-signed-output-match","direct_install":%s,"accelerated_install":%s,"direct_self_update":%s,"accelerated_self_update":%s,"offline_same_version_noop":true,"failed_update_preserved":true,"conda_fake_upstream_suite":true,"protected_data_unchanged":true,"real_components_invoked":false}\n' \
+  "$version" "$old_version" "$platform" "$transports_json" "$accelerator" "$install_version_mode" "$direct_pass" "$accelerated_pass" "$direct_pass" "$accelerated_pass" > "$output/result.json"
 printf 'SUCCESS Nido %s public acceptance on %s; real signed old release %s, temporary homes only\n' "$version" "$platform" "$old_version"

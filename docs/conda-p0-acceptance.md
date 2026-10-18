@@ -1,6 +1,6 @@
 # Conda 组件目标版本 P0 隔离验收历史（2026-10-18）
 
-此前 P0 阶段使用已发行 v0.8.0 与当时未发布的源码修复构建分别验收，只修改源码和隔离测试夹具。该阶段没有发布、安装到真实机器、连接 Zenith-Dev、切换真实源或迁移数据。历史发行验收见 [v0.8.0 发行记录](conda-release.md)；[v0.8.1 发布候选与公开包验收](conda-v0.8.1-release.md)另行记录，不能将下表中的源码候选结果归于新公开包。
+此前 P0 阶段使用已发行 v0.8.0 与当时未发布的源码修复构建分别验收，只修改源码和隔离测试夹具。该阶段没有发布、安装到真实机器、连接 Zenith-Dev、切换真实源或迁移数据。历史发行验收见 [v0.8.0 发行记录](conda-release.md)；[v0.8.1 正式包验收](conda-v0.8.1-release.md)另行记录，新增正式包两模式各 8/8，不回填为下表中旧包或旧候选的结果。
 
 ## 输入与隔离
 
@@ -76,6 +76,7 @@ NIDO_P0_IMAGE=nido-conda-p0:24.1.2-amd64-final \
 NIDO_P0_BINARY=/absolute/path/to/trusted-linux-amd64-nido \
 NIDO_P0_OUTPUT=/absolute/path/to/new-evidence-directory \
 NIDO_P0_LABEL=published-v0.8.0 \
+NIDO_P0_VERSION=0.8.0 \
 NIDO_P0_PARALLEL=1 \
 NIDO_P0_STRACE=1 \
 NIDO_P0_STRACE_COMMAND=/usr/local/bin/nido-p0-strace \
@@ -94,7 +95,7 @@ make check-conda-p0
 
 ## 部署条件与回滚边界
 
-v0.8.0 原发行包含已复现问题，**不满足目标形态直接部署条件**。本次 v0.8.1 发布候选包含修复，须单独核验正式资产并重跑相同旧上游双模式矩阵，再判断公开包的软件兼容条件；该状态见 [v0.8.1 记录](conda-v0.8.1-release.md)。即便新包全部通过，仍须在真实环境确认 GPFS 用户配额与写入、原子 rename/link、锁及 fsync 能力，持久软件路径在平台重建后的保留方式，交互 Shell 平台 hook 是否会在其实际条件下再次改 pip，以及激活现有 energy 等环境后的路径覆盖。P0 不安装或激活这些真实环境，也不修复历史悬空链接。
+v0.8.0 原发行包含已复现问题，**不满足目标形态直接部署条件**。v0.8.1 正式资产经独立核验后，已通过相同旧上游双模式的软件兼容矩阵；来源、SHA256 和各公网端点结果见 [v0.8.1 记录](conda-v0.8.1-release.md)。这仍不替代真实环境中的 GPFS 用户配额与写入、原子 rename/link、锁及 fsync 能力确认，持久软件路径在平台重建后的保留方式，交互 Shell 平台 hook 是否会在其实际条件下再次改 pip，以及激活现有 energy 等环境后的路径覆盖。P0 不安装或激活这些真实环境，也不修复历史悬空链接。
 
 本轮只验证配置读取与写入，不验证真实证书可用性、镜像连通、下载、求解或包安装；这些也不能从旧版/新版的静态配置成功推断。
 

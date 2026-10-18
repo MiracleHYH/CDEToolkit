@@ -2,7 +2,7 @@
 
 Conda / pip 外部配置集成自 Nido v0.8.0 提供，包含在 Linux/macOS amd64、arm64 的 Nido 包中。Nido 不安装 Conda、初始化 Shell、安装包或迁移环境与缓存。日常命令见 [使用指南](usage.md#conda--pip)，配置格式与保护边界见 [设计说明](conda-design.md)。
 
-本文保留 v0.8.0 的历史发行记录。后续 [目标版本 P0 验收](conda-p0-acceptance.md) 发现：无显式 CONDARC、用户 `.condarc` 已有其他 `default_channels` 时，v0.8.0 切源可能合并保留旧地址；完整七字段同步及按项查询修复纳入 [v0.8.1 发布候选](conda-v0.8.1-release.md)。修复源码通过不等于新公开包通过，不回填为 v0.8.0 通过该目标形态；本次发行与公网验收状态在新记录中逐项补充。
+本文保留 v0.8.0 的历史发行记录。后续 [目标版本 P0 验收](conda-p0-acceptance.md) 发现：无显式 CONDARC、用户 `.condarc` 已有其他 `default_channels` 时，v0.8.0 切源可能合并保留旧地址；完整七字段同步及按项查询修复已随 [v0.8.1](conda-v0.8.1-release.md) 发行，正式新包的旧上游双模式均通过。v0.8.0 的原失败结论保留，各公网端点的实际结果与限制在新记录中分别列出。
 
 ## 发行功能
 

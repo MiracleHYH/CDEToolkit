@@ -183,7 +183,7 @@ nido codex update --proxy http://127.0.0.1:7890
 
 ## Conda / pip
 
-本节命令自 v0.8.0 提供；本次 v0.8.1 发布候选包含隐式用户配置的镜像合并修复与按项查询优化，[本次发行记录](conda-v0.8.1-release.md)列出公开包验收状态。Nido 把 Conda 与 pip 作为外部工具配置，不要求先安装内置 Proxy，也不安装 Conda 或执行 `conda init`。
+本节命令自 v0.8.0 提供；v0.8.1 已发布，包含隐式用户配置的镜像合并修复与按项查询优化。[本次发行记录](conda-v0.8.1-release.md)以 Linux amd64 为唯一执行验收目标，分别列出正式包、旧上游矩阵及各公网端点的实际状态。Nido 把 Conda 与 pip 作为外部工具配置，不要求先安装内置 Proxy，也不安装 Conda 或执行 `conda init`。
 
 先查看保存值和可选镜像：
 
