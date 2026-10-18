@@ -52,6 +52,39 @@ func TestStatusAndDryRunDoNotInitialize(t *testing.T) {
 	}
 }
 
+func TestCLIReinstallPreservesCurrentConfigurationBytes(t *testing.T) {
+	m, _ := fixture(t)
+	if err := m.Init(); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(m.Root, "config.toml")
+	config, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config = append([]byte("# user-maintained comment\n\n"), config...)
+	if err = os.WriteFile(configPath, config, 0600); err != nil {
+		t.Fatal(err)
+	}
+	env, err := os.ReadFile(filepath.Join(m.Root, "env.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := New(m.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = next.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(configPath); !bytes.Equal(got, config) {
+		t.Fatal("CLI reinstall rewrote existing TOML or comments")
+	}
+	if got, _ := os.ReadFile(filepath.Join(m.Root, "env.sh")); !bytes.Equal(got, env) {
+		t.Fatal("CLI reinstall rewrote the current environment")
+	}
+}
+
 func TestInitSingleRootAndExternalAssociation(t *testing.T) {
 	m, home := fixture(t)
 	shell := filepath.Join(home, ".bashrc")

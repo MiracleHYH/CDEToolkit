@@ -107,12 +107,13 @@ nido proxy start
 | 解除 Codex 关联，保留程序与数据 | `nido codex detach` |
 | 查询 / 停止状态下更新内置 Proxy | `nido proxy update --check` / `nido proxy update` |
 | 停止 / 卸载内置 Proxy 程序 | `nido proxy stop` / `nido proxy remove` |
-| 显式安装可选 GDS | `nido gds install --artifact /absolute/path/to/gds` |
+| 安装官方可选 GDS | `nido gds install` |
+| 查询 GDS 更新 | `nido gds update --check` |
 | 查看命令说明 | `nido --help` |
 
 内置组件卸载保留配置、日志和数据；安装、更新不会自动启动组件。Nido 不提供目录迁移、挂载路径恢复、版本仓库、通用回滚或外部 Codex 卸载功能。
 
-GDS 的 Go 调度启动尚未适配，当前启动操作会明确拒绝。仓库内 `scheduler.cu` 只是 CUDA worker，不能直接替代负责空闲检测的旧 monitor；本轮保留可选源码及显式程序管理，不会直接启动 worker。
+Nido v0.5.0 起支持独立 GDS 官方下载；首版 GDS 为 `gds-v0.1.0`，面向 Linux amd64、glibc 2.31 及以上的完整 NVIDIA GPU。安装不配置或启动，需另行显式选择 GPU UUID。组件在连续空闲后保留显存，发现外部任务或观察失效时释放，默认不运行计算 kernel。可靠启动自己的任务前先执行 `nido gds stop` 并确认成功。真实 GPU 行为尚未验收；详见 [组件设计](docs/gds-design.md)、[审查记录](docs/gds-audit.md) 和 [独立发行说明](docs/gds-release.md)。
 
 ## 开发
 
@@ -127,7 +128,7 @@ make smoke
 make dist TARGET_OS=linux TARGET_ARCH=amd64
 ```
 
-常规测试使用临时目录、模拟安装器和组件夹具，不需要真实 Codex、代理服务或 GPU。GDS 的额外隔离测试通过 `make check-gds` 显式选择。
+常规测试使用临时目录、模拟安装器和组件夹具，不需要真实 Codex、代理服务或 GPU。GDS 的 CPU 状态机、协议与假驱动测试进入常规测试，也可用 `make check-gds` 单独执行；普通用户 Linux amd64 原生 namespace 验证见[测试入口](docs/usage.md#可选-gds)。历史 Shell 测试通过 `make check-gds-legacy` 选择。
 
 真实 Mihomo 的回环兼容测试通过 `NIDO_TEST_MIHOMO=/absolute/path/to/verified/mihomo make check-proxy-real` 显式执行；测试不下载程序，仅使用临时 HOME、临时软件根和本地 provider/HTTP/SOCKS 夹具。核心来源、结果和验证范围见 [Proxy 审计记录](docs/proxy-audit.md)。
 

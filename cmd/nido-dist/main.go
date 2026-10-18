@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/MiracleHYH/CDEToolkit/internal/distribution"
 )
@@ -18,7 +19,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("用法: nido-dist pack|verify|installer|check-tag [选项]")
+		return fmt.Errorf("用法: nido-dist pack|verify|installer|check-tag|gds-pack|gds-verify|gds-check-tag [选项]")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	installerSource := flags.String("source", "scripts/install.sh", "POSIX CLI installer source")
@@ -27,7 +28,11 @@ func run(args []string) error {
 	output := flags.String("out", "dist", "output directory")
 	archive := flags.String("archive", "", "release tar.gz")
 	platform := flags.String("platform", "", "GOOS/GOARCH")
-	versionFile := flags.String("version-file", "VERSION", "source version file")
+	defaultVersionFile := "VERSION"
+	if strings.HasPrefix(args[0], "gds-") {
+		defaultVersionFile = "GDS_VERSION"
+	}
+	versionFile := flags.String("version-file", defaultVersionFile, "source version file")
 	tag := flags.String("tag", "", "exact release tag")
 	repository := flags.String("repository", "", "require clean tagged Git checkout")
 	smoke := flags.Bool("smoke", false, "run native read-only smoke test")
@@ -42,6 +47,29 @@ func run(args []string) error {
 		return err
 	}
 	switch args[0] {
+	case "gds-check-tag":
+		if err := distribution.CheckGDSTag(version, *tag); err != nil {
+			return err
+		}
+		if *repository != "" {
+			return distribution.CheckRepository(*repository, *tag)
+		}
+		return nil
+	case "gds-pack":
+		path, err := distribution.PackGDS(*binary, *output, version)
+		if err == nil {
+			fmt.Println(path)
+		}
+		return err
+	case "gds-verify":
+		data, err := distribution.VerifyGDS(*binary, version)
+		if err == nil && *smoke {
+			err = distribution.SmokeGDS(data, version)
+		}
+		if err == nil {
+			fmt.Println("GDS release verified: linux/amd64", version)
+		}
+		return err
 	case "installer":
 		return distribution.Installer(*installerSource, *output, *verifyInstaller)
 	case "check-tag":

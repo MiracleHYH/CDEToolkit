@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/MiracleHYH/CDEToolkit/internal/builtin"
+	"github.com/MiracleHYH/CDEToolkit/internal/components/gds"
 	"github.com/MiracleHYH/CDEToolkit/internal/components/proxy"
 	"github.com/MiracleHYH/CDEToolkit/internal/integrations/codex"
 )
@@ -34,8 +35,15 @@ nido [--root DIR] COMMAND
   proxy update --check         查询当前与最新核心版本
   proxy probe --url URL / remove
                                显式测试目标 / 卸载保留配置数据
-  gds install / update / remove
-                               GDS 显式可选，需本地程序；Go 调度启动待适配
+  gds install / update [gds-vX.Y.Z]
+                               官方稳定版 GDS；缺省最新，不自动启动
+  gds install / update --artifact FILE [--sha256 HASH]
+                               显式安装本地 Linux amd64 GDS
+  gds update --check           只读查询当前与官方最新 GDS 版本
+  gds configure --gpu UUID / --file FILE
+  gds validate / config-path / probe
+  gds start / stop / restart   单卡空闲显存保留，stop 确认 worker 退出
+  gds status / logs [--tail N] / remove
   path / version               输出软件目录 / CLI 版本
 
 选项：
@@ -43,8 +51,9 @@ nido [--root DIR] COMMAND
   --home DIR                   外部 CODEX_HOME，不得位于 Nido 目录内
   --proxy URL                  仅为本次官方安装、更新或版本查询指定代理
   --artifact FILE --sha256 HASH 内置组件程序来源与校验
+  --gpu UUID                   GDS 首次配置的完整 GPU UUID
   --file FILE / --url URL / --tail N
-                               Proxy 的配置输入 / 探测目标 / 日志行数
+                               组件配置 / Proxy 探测目标 / 日志行数
   --yes                        确认显式操作，不猜测来源或迁移数据
   --dry-run                    只读预览，不下载、不安装、不写配置
   --json                       结构化输出
@@ -62,11 +71,14 @@ type CLI struct {
 	// Runner is injected only by Go isolation tests, never a CLI flag.
 	Runner      codex.Runner
 	ProxyRunner proxy.Runner
+	GDSRunner   gds.Runner
+	// GDSHTTP is injected only by Go isolation tests, never a CLI flag.
+	GDSHTTP *http.Client
 }
 
 type cliOptions struct {
 	root, home, proxy, artifact, checksum string
-	file, url, tail                       string
+	file, url, tail, gpu                  string
 	yes, dry, json, check                 bool
 }
 
@@ -85,7 +97,7 @@ func parse(args []string) (cliOptions, []string, error) {
 			o.json = true
 		case "--check":
 			o.check = true
-		case "--root", "--home", "--proxy", "--artifact", "--sha256", "--file", "--url", "--tail":
+		case "--root", "--home", "--proxy", "--artifact", "--sha256", "--file", "--url", "--tail", "--gpu":
 			if seen[a] {
 				return o, nil, fmt.Errorf("重复选项: %s", a)
 			}
@@ -115,6 +127,8 @@ func parse(args []string) (cliOptions, []string, error) {
 				o.url = v
 			case "--tail":
 				o.tail = v
+			case "--gpu":
+				o.gpu = v
 			}
 		default:
 			if strings.HasPrefix(a, "-") {
@@ -184,7 +198,7 @@ func (c CLI) Run(args []string) int {
 	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if a == "--root" || a == "--home" || a == "--proxy" || a == "--artifact" || a == "--sha256" || a == "--file" || a == "--url" || a == "--tail" {
+		if a == "--root" || a == "--home" || a == "--proxy" || a == "--artifact" || a == "--sha256" || a == "--file" || a == "--url" || a == "--tail" || a == "--gpu" {
 			i++
 			continue
 		}
@@ -206,9 +220,12 @@ func (c CLI) Run(args []string) int {
 	}
 	command := words[0]
 	words = words[1:]
-	component := command == "codex" || command == "proxy" || builtin.Known(command)
-	if command != "proxy" && (o.file != "" || o.url != "" || o.tail != "") {
-		return c.fail(fmt.Errorf("--file、--url、--tail 仅用于 Proxy 对应操作"))
+	component := command == "codex" || command == "proxy" || command == "gds"
+	if command != "proxy" && command != "gds" && (o.file != "" || o.url != "" || o.tail != "") {
+		return c.fail(fmt.Errorf("--file、--url、--tail 仅用于对应组件操作"))
+	}
+	if o.gpu != "" && command != "gds" {
+		return c.fail(fmt.Errorf("--gpu 仅用于 GDS 配置"))
 	}
 	if !component && (o.home != "" || o.proxy != "" || o.artifact != "" || o.checksum != "" || o.check) {
 		return c.fail(fmt.Errorf("组件选项不能用于 %s", command))
@@ -232,6 +249,12 @@ func (c CLI) Run(args []string) int {
 	}
 	if c.ProxyRunner != nil {
 		m.Proxy.Runner = c.ProxyRunner
+	}
+	if c.GDSRunner != nil {
+		m.GDS.Runner = c.GDSRunner
+	}
+	if c.GDSHTTP != nil {
+		m.GDS.HTTP = c.GDSHTTP
 	}
 	switch command {
 	case "path":
@@ -322,10 +345,9 @@ func (c CLI) Run(args []string) int {
 		return c.codex(m, o, words)
 	case "proxy":
 		return c.proxy(m, o, words)
+	case "gds":
+		return c.gds(m, o, words)
 	default:
-		if builtin.Known(command) {
-			return c.builtin(m, o, command, words)
-		}
 		return c.fail(fmt.Errorf("未知命令: %s；使用 nido --help", command))
 	}
 	return 0
@@ -572,59 +594,6 @@ func (c *CLI) codex(m *Manager, o cliOptions, args []string) int {
 	default:
 		return c.fail(fmt.Errorf("未知 Codex 操作: %s", action))
 	}
-}
-
-func (c *CLI) builtin(m *Manager, o cliOptions, name string, args []string) int {
-	if o.home != "" || o.proxy != "" || o.check {
-		return c.fail(fmt.Errorf("内置组件不接受 Codex 选项"))
-	}
-	if (len(args) == 0 || len(args) == 1 && args[0] == "status") && (o.artifact != "" || o.checksum != "") {
-		return c.fail(fmt.Errorf("状态不接受程序包选项"))
-	}
-	if len(args) == 0 {
-		return c.output(o, m.Builtins.Status(name))
-	}
-	if len(args) != 1 {
-		return c.fail(fmt.Errorf("内置组件只接受一个操作"))
-	}
-	a := args[0]
-	if a == "status" {
-		return c.output(o, m.Builtins.Status(name))
-	}
-	if a != "install" && a != "update" && a != "start" && a != "stop" && a != "remove" {
-		return c.fail(fmt.Errorf("未知内置组件操作: %s", a))
-	}
-	if (o.artifact != "" || o.checksum != "") && a != "install" && a != "update" {
-		return c.fail(fmt.Errorf("程序包选项仅用于安装或更新"))
-	}
-	if name == "gds" && (a == "install" || a == "update") && o.artifact == "" {
-		return c.fail(fmt.Errorf("GDS 保持可选，请显式提供 --artifact 本地程序"))
-	}
-	if o.dry {
-		return c.output(o, map[string]string{"operation": a, "component": name, "root": m.Root})
-	}
-	if e := c.confirm(o, a+" 内置 "+name); e != nil {
-		return c.fail(e)
-	}
-	e := m.mutate(false, func() error {
-		switch a {
-		case "install":
-			return m.Builtins.Install(name, o.artifact, o.checksum)
-		case "update":
-			return m.Builtins.Update(name, o.artifact, o.checksum)
-		case "start":
-			return m.Builtins.Start(name)
-		case "stop":
-			return m.Builtins.Stop(name)
-		case "remove":
-			return m.Builtins.Remove(name)
-		}
-		return nil
-	})
-	if e != nil {
-		return c.fail(e)
-	}
-	return c.output(o, map[string]string{"component": name, "operation": a, "detail": "已完成；remove 保留配置与数据，install/update 不自动启动"})
 }
 
 func (c *CLI) output(o cliOptions, value any) int {

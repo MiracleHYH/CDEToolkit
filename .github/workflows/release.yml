@@ -60,4 +60,4 @@ jobs:
               --certificate-oidc-issuer https://token.actions.githubusercontent.com
             files+=("$asset" "${asset}.sigstore.json")
           done
-          gh release create "$RELEASE_TAG" "${files[@]}" --verify-tag --generate-notes
+          gh release create "$RELEASE_TAG" "${files[@]}" --verify-tag --generate-notes --latest

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       gds:
-        description: Run optional GDS isolation tests (no CUDA or real GPU)
+        description: Run historical Shell GDS tests (no CUDA or real GPU)
         type: boolean
         default: false
 
@@ -65,7 +65,45 @@ jobs:
           export PATH="$(go env GOPATH)/bin:$PATH"
           ./scripts/public-audit.sh
 
-  gds:
+  gds-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: go.sum
+      - name: Prepare temporary runner tools and check ordinary user namespaces
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$(id -u)" -ne 0
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          /usr/bin/bwrap --unshare-all --die-with-parent --new-session --clearenv --cap-drop ALL \
+            --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 \
+            --symlink usr/bin /bin --proc /proc --dev /dev --tmpfs /tmp \
+            /usr/bin/bash -euc '
+              test "$(/usr/bin/id -u)" -ne 0
+              test ! -e /dev/nvidiactl
+              test ! -e /run
+            '
+      - name: Build native adapter without loading a GPU driver
+        run: make build-gds
+      - name: CPU protocol and fake driver isolation
+        run: make check-gds
+      - name: Reproducible standalone GDS release with fixed glibc baseline
+        run: make gds-release gds-verify-release
+      - name: Ordinary user native namespace isolation without GPU or network
+        run: |
+          GOPROXY=off GOSUMDB=off go mod vendor -o "$RUNNER_TEMP/gds-vendor"
+          NIDO_TEST_GDS_VENDOR="$RUNNER_TEMP/gds-vendor" \
+          NIDO_TEST_GDS_OUTPUT="$RUNNER_TEMP/gds-native-evidence" \
+          make check-gds-linux-native GO="$(command -v go)"
+
+  gds-legacy:
     if: github.event_name == 'workflow_dispatch' && inputs.gds
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -73,4 +111,4 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - run: make check-gds
+      - run: make check-gds-legacy

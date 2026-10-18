@@ -4,11 +4,12 @@ HOST_ARCH = $(shell "$(GO)" env GOARCH)
 TARGET_OS ?= $(HOST_OS)
 TARGET_ARCH ?= $(HOST_ARCH)
 VERSION := $(shell cat VERSION)
+GDS_VERSION := $(shell cat GDS_VERSION)
 BINARY = build/$(TARGET_OS)-$(TARGET_ARCH)/nido
 PACKAGE = dist/nido-$(TARGET_OS)-$(TARGET_ARCH).tar.gz
 RELEASE_PLATFORMS = linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
-.PHONY: build test fmt-check check dist smoke release verify-release release-check check-gds check-proxy-real check-proxy-linux check-proxy-linux-race check-proxy-linux-native
+.PHONY: build test fmt-check check dist smoke release verify-release release-check gds-release gds-release-check gds-verify-release check-gds check-gds-linux-native check-gds-legacy build-gds check-proxy-real check-proxy-linux check-proxy-linux-race check-proxy-linux-native
 build:
 	CGO_ENABLED=0 GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) "$(GO)" build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w -X=github.com/MiracleHYH/CDEToolkit/internal/nido.Version=$(VERSION)' -o "$(BINARY)" ./cmd/nido
 
@@ -26,7 +27,8 @@ test:
 fmt-check:
 	@nido_unformatted=$$("$(shell "$(GO)" env GOROOT)/bin/gofmt" -l cmd internal); test -z "$$nido_unformatted" || { printf 'gofmt required:\n%s\n' "$$nido_unformatted"; exit 1; }
 	sh -n scripts/install.sh
-	bash -n tests/proxy-linux-isolation.sh tests/proxy-linux-bwrap.sh
+	sh -n scripts/gds-release-build.sh
+	bash -n tests/proxy-linux-isolation.sh tests/proxy-linux-bwrap.sh tests/gds-linux-native-isolation.sh tests/gds-public-release-isolation.sh
 
 check: fmt-check
 	"$(GO)" vet ./...
@@ -50,9 +52,39 @@ release-check:
 	$(MAKE) verify-release
 	"$(GO)" run ./cmd/nido-dist verify --archive "dist/nido-$(HOST_OS)-$(HOST_ARCH).tar.gz" --platform "$(HOST_OS)/$(HOST_ARCH)" --smoke
 
-# GDS uses only copied scripts, fake nvcc/nvidia-smi and a CPU fixture worker.
+# Current GDS tests use fake drivers, clocks and temporary CPU subprocesses.
 check-gds:
+	"$(GO)" test -race -count=1 ./internal/gdsapi ./internal/gdsutil ./internal/gdsruntime/... ./internal/components/gds ./cmd/gds
+	"$(GO)" test -race -count=1 ./internal/nido -run '^TestGDS'
+
+# Ordinary native amd64 user; needs existing bwrap, SDK, GCC and offline vendor.
+# NIDO_TEST_GDS_OUTPUT must name a fresh evidence directory. No host fallback.
+check-gds-linux-native:
+	GO="$(GO)" bash tests/gds-linux-native-isolation.sh
+
+# Explicit historical test; this is not the Nido GDS backend.
+check-gds-legacy:
 	bash tests/gds-isolation.sh
+
+# Native optional artifact; ordinary Nido builds remain CGO_ENABLED=0.
+# Run on Linux amd64 with a C compiler, or provide an explicit cross CC.
+build-gds:
+	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 GOAMD64=v1 "$(GO)" build -mod=readonly -trimpath -buildvcs=false -buildmode=exe -ldflags='-s -w -X=main.version=$(GDS_VERSION)' -o build/gds-linux-amd64 ./cmd/gds
+
+# Formal raw GDS assets use the current pinned Go SDK with the pinned Bullseye
+# libc/compiler image. GDS_RELEASE_GOROOT must be a Linux amd64 SDK on macOS.
+# Two clean, offline, CPU-only builds must be byte-identical before packaging.
+gds-release:
+	GO="$(GO)" sh scripts/gds-release-build.sh
+
+gds-verify-release:
+	"$(GO)" run ./cmd/nido-dist gds-verify --binary dist/gds-linux-amd64 --smoke
+
+gds-release-check:
+	"$(GO)" run ./cmd/nido-dist gds-check-tag --tag "$${GDS_RELEASE_TAG:?set GDS_RELEASE_TAG to gds-vVERSION}" --repository .
+	$(MAKE) check-gds
+	$(MAKE) gds-release
+	$(MAKE) gds-verify-release
 
 # Opt in with a previously verified standalone core. This target never downloads
 # a program; the test runs only in temporary HOME/root and loopback fixtures.

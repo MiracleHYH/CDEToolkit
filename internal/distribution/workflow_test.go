@@ -107,7 +107,115 @@ func TestReleaseWorkflowUsesExactTagAndNoPrivilegedRunner(t *testing.T) {
 }
 
 func TestReleaseWorkflowOnlyPublishesVerifiedAllowlist(t *testing.T) {
-	data, err := os.ReadFile("../../.github/workflows/release.yml")
+	assets := []string{"dist/install.sh"}
+	for _, platform := range Platforms {
+		asset, _ := assetName(platform)
+		assets = append(assets, "dist/"+asset, "dist/"+asset+".sha256")
+	}
+	testPublisher(t, "release.yml", "v0.1.0", "--latest", assets)
+}
+
+func TestGDSReleaseWorkflowOnlyPublishesIndependentVerifiedAllowlist(t *testing.T) {
+	testPublisher(t, "gds-release.yml", "gds-v0.1.0", "--latest=false", []string{"dist/gds-linux-amd64", "dist/gds-linux-amd64.sha256"})
+}
+
+func TestIndependentReleaseTagsAndGDSChecks(t *testing.T) {
+	for _, file := range []string{"release.yml", "gds-release.yml"} {
+		data, err := os.ReadFile("../../.github/workflows/" + file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var workflow struct {
+			On struct {
+				Push struct{ Tags []string }
+			}
+			Jobs map[string]struct {
+				Steps []struct {
+					Run string
+					Env map[string]string
+				}
+			}
+		}
+		if err = yaml.Unmarshal(data, &workflow); err != nil {
+			t.Fatal(err)
+		}
+		want := "v*"
+		if file == "gds-release.yml" {
+			want = "gds-v*"
+		}
+		if len(workflow.On.Push.Tags) != 1 || workflow.On.Push.Tags[0] != want {
+			t.Fatal("release namespaces must remain disjoint", file)
+		}
+		if file != "gds-release.yml" {
+			continue
+		}
+		checks, isolation := 0, 0
+		for _, step := range workflow.Jobs["release"].Steps {
+			if strings.Contains(step.Run, "make release-check") || strings.Contains(step.Run, "make release\n") {
+				t.Fatal("GDS tag must not run the Nido release pipeline")
+			}
+			if strings.Contains(step.Run, "make gds-release-check") {
+				checks++
+				if step.Env["GDS_RELEASE_TAG"] != "${{ github.ref_name }}" || strings.Contains(step.Run, "${{ github.ref_name }}") || !strings.Contains(step.Run, "go mod verify") {
+					t.Fatal("GDS checks must receive the exact tag through environment after dependency verification")
+				}
+			}
+			if strings.Contains(step.Run, "make check-gds-linux-native") {
+				isolation++
+			}
+		}
+		if checks != 1 || isolation != 1 {
+			t.Fatal("GDS release must run native CPU fixture and ordinary user isolation gates")
+		}
+	}
+}
+
+func TestGDSWorkflowsPrepareOrdinaryRunnerNamespaces(t *testing.T) {
+	for _, item := range []struct{ file, job string }{{"check.yml", "gds-native"}, {"gds-release.yml", "release"}} {
+		data, err := os.ReadFile("../../.github/workflows/" + item.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var workflow struct {
+			Jobs map[string]struct {
+				Steps []struct{ Run string }
+			}
+		}
+		if err = yaml.Unmarshal(data, &workflow); err != nil {
+			t.Fatal(err)
+		}
+		prepared, isolation := -1, -1
+		for index, step := range workflow.Jobs[item.job].Steps {
+			if strings.Contains(step.Run, "make check-gds-linux-native") {
+				isolation = index
+			}
+			if !strings.Contains(step.Run, "apt-get install --yes --no-install-recommends bubblewrap") {
+				continue
+			}
+			if prepared >= 0 {
+				t.Fatal("ambiguous namespace preparation", item.file)
+			}
+			prepared = index
+			for _, required := range []string{`test "$GITHUB_ACTIONS" = true`, `test "$(id -u)" -ne 0`, "/usr/bin/bwrap --unshare-all", "--clearenv --cap-drop ALL", `test "$(/usr/bin/id -u)" -ne 0`} {
+				if !strings.Contains(step.Run, required) {
+					t.Fatal("missing ordinary-user namespace gate", item.file, required)
+				}
+			}
+			for _, forbidden := range []string{"sysctl", "aa-disable", "--privileged", "sudo /usr/bin/bwrap", "|| true"} {
+				if strings.Contains(step.Run, forbidden) {
+					t.Fatal("namespace checks may not disable restrictions or fall back", item.file, forbidden)
+				}
+			}
+		}
+		if prepared < 0 || isolation <= prepared {
+			t.Fatal("namespace preparation must precede native isolation", item.file)
+		}
+	}
+}
+
+func testPublisher(t *testing.T, workflowFile, tag, latest string, assets []string) {
+	t.Helper()
+	data, err := os.ReadFile("../../.github/workflows/" + workflowFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,16 +252,10 @@ func TestReleaseWorkflowOnlyPublishesVerifiedAllowlist(t *testing.T) {
 				}
 			}
 			expected := map[string]bool{}
-			for _, platform := range Platforms {
-				asset, _ := assetName(platform)
-				for _, suffix := range []string{"", ".sha256"} {
-					path := "dist/" + asset + suffix
-					write(path, "fixture asset", 0600)
-					expected[path], expected[path+".sigstore.json"] = true, true
-				}
+			for _, path := range assets {
+				write(path, "fixture asset", 0600)
+				expected[path], expected[path+".sigstore.json"] = true, true
 			}
-			write("dist/install.sh", "fixture reviewed installer", 0600)
-			expected["dist/install.sh"], expected["dist/install.sh.sigstore.json"] = true, true
 			for _, name := range []string{"dist/legacy-install.sh", "dist/server-toolkit.tar.gz", "dist/private.cfg", "dist/nido-linux-armv7.tar.gz"} {
 				write(name, "must not publish", 0600)
 			}
@@ -190,7 +292,7 @@ if [ "$operation" = sign-blob ]; then printf '{}\n' > "$bundle"; else [ -f "$bun
 			cmd.Dir = dir
 			cmd.Env = []string{"PATH=" + filepath.Join(dir, "bin") + ":/usr/bin:/bin", "HOME=" + filepath.Join(dir, "home"),
 				"NIDO_FAIL=" + failure, "NIDO_GH_CALLS=" + calls, "NIDO_SIGN_CALLS=" + filepath.Join(dir, "sign-calls"),
-				"CERTIFICATE_IDENTITY=https://github.com/example/stk/.github/workflows/release.yml@refs/tags/v0.1.0", "RELEASE_TAG=v0.1.0"}
+				"CERTIFICATE_IDENTITY=https://github.com/example/stk/.github/workflows/" + workflowFile + "@refs/tags/" + tag, "RELEASE_TAG=" + tag}
 			out, err := cmd.CombinedOutput()
 			if failure != "none" {
 				if err == nil {
@@ -209,16 +311,16 @@ if [ "$operation" = sign-blob ]; then printf '{}\n' > "$bundle"; else [ -f "$bun
 				t.Fatal(err)
 			}
 			args := strings.Split(strings.TrimSpace(string(published)), "\n")
-			if len(args) != len(expected)+5 || strings.Join(args[:3], " ") != "release create v0.1.0" {
+			if len(args) != len(expected)+6 || strings.Join(args[:3], " ") != "release create "+tag {
 				t.Fatal("unexpected release command", args)
 			}
-			for _, path := range args[3 : len(args)-2] {
+			for _, path := range args[3 : len(args)-3] {
 				if !expected[path] {
 					t.Fatal("unverified or duplicate asset was published", path)
 				}
 				delete(expected, path)
 			}
-			if len(expected) != 0 || args[len(args)-2] != "--verify-tag" || args[len(args)-1] != "--generate-notes" {
+			if len(expected) != 0 || args[len(args)-3] != "--verify-tag" || args[len(args)-2] != "--generate-notes" || args[len(args)-1] != latest {
 				t.Fatal("missing verified files or tag guard")
 			}
 		})

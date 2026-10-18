@@ -10,7 +10,7 @@ Nido 的定位是开发环境配置助手，加少量内置工具。外部软件
 | --- | --- | --- | --- |
 | 外部集成 | Codex | 发现和关联 HOME、生成环境、局部代理配置、官方安装更新委托、状态和版本查询 | 程序运行、认证、会话、数据库、插件、daemon 和原渠道安装 |
 | 内置组件 | Proxy | 原生配置、静态与核心验证、端点导出、精确启停、停止更新、程序卸载 | 节点、规则、provider、连接与核心数据 |
-| 可选组件 | GDS | 固定目录程序安装、更新、卸载；调度启动未适配 | 显式提供程序；CUDA worker 与调度器适配 |
+| 可选组件 | GDS | 独立程序配置与启停、UUID 空闲观察、有限许可显存保留 | NVIDIA 驱动与受支持宿主环境；真实 GPU 验收 |
 
 只选择一个 Nido 软件目录，默认 `~/.nido`，通过 `NIDO_HOME` 或 `--root` 覆盖。
 
@@ -61,7 +61,7 @@ Proxy 使用 Mihomo 官方稳定版资产或显式本地程序，检查摘要、
 
 Codex builtin 代理只在组合层获取 Proxy 默认端点，再调用 Codex 自己的代理块写入接口。它不启动 Proxy，Proxy 也不主动修改外部 HOME。两个组件没有生命周期依赖。
 
-GDS 必须显式提供本地程序，不设默认下载源，也不作为 Codex 或 Proxy 的安装依赖。Go 调度启动尚未适配，`start` 明确拒绝，不能将仓库中的 CUDA worker 当作完整空闲调度器运行；可选源码及显式程序安装、更新、删除保留。
+GDS 使用独立 `gds` 程序，源码位于 `internal/components/gds`、`internal/gdsruntime` 和 `cmd/gds`。管理层保持纯 Go，Linux amd64 的 NVIDIA 适配单独启用 cgo，使用 NVML 与 CUDA Driver API。显存 worker 通过私有管道接受绝对单调期限的有限许可，失去有效观察即释放；Nido 不修改 Codex 的全局规则。自 Nido v0.5.0 接入独立 gds-v 标签的官方资产发现、摘要校验与本地程序两种来源，不作为其他组件依赖；安装更新不启动。真实 GPU 验收尚未完成，详见 [GDS 设计](gds-design.md) 与 [独立发行](gds-release.md)。
 
 ## 轻量安全边界
 
@@ -82,7 +82,8 @@ GDS 必须显式提供本地程序，不设默认下载源，也不作为 Codex 
 - `internal/nido`：CLI、单根配置、环境和组件组合。
 - `internal/integrations/codex`：独立外部集成，通过显式配置与命令执行接口提供功能。
 - `internal/components/proxy`：独立 Proxy 的配置、端点、程序来源、进程和平台实现。
-- `internal/builtin`：可选 GDS 的固定目录及程序管理；不再承载 Proxy。
+- `internal/components/gds`：可选 GDS 的程序、配置和管理接口；旧 `internal/builtin` 已退出。
+- `internal/gdsapi`、`internal/gdsutil`、`internal/gdsruntime`：GDS 的协议、局部文件与进程保护、状态机及运行程序。
 - `internal/distribution`：源码构建、归档与校验，独立于运行时组件逻辑。
 
 新增组件首先确定所有权：外部集成只增加上游公开的配置与安装委托；内置组件增加独立目录、自己的配置检查和程序来源。组件不导入 CLI，不借用 Codex 数据结构，也不要求先安装其他组件。仅在实际重复出现后抽取公共逻辑，不为假想组件增加通用生命周期抽象。

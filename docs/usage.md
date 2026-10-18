@@ -1,6 +1,6 @@
 # Nido 使用指南
 
-GDS 保持可选。当前 Go 版保留显式程序安装、更新和删除，调度启动尚未接入，`nido gds start` 会明确拒绝。仓库的 CUDA worker 不能单独替代旧脚本的空闲检测与 monitor。
+GDS 保持可选。Nido v0.5.0 起支持独立 Linux amd64 组件的官方下载安装、空闲观察和有限许可显存保留。首版 GDS 为 gds-v0.1.0；真实 GPU 验收尚未完成。旧 Shell/CUDA worker 不作为新 CLI 后端。
 
 从 v0.3.0 起，Nido 使用单目录设计和 `nido` 命令。旧 `cdet` 版本不会被自动迁移；本指南描述 Nido 的安装和使用。
 
@@ -244,15 +244,53 @@ Proxy 卸载要求停止，仅移除程序，保留配置、日志、进程历�
 
 ## 可选 GDS
 
-GDS 不参与默认初始化或在线安装，必须显式提供本地独立程序：
+以下命令自 Nido v0.5.0 提供。独立 GDS 首版为 gds-v0.1.0，官方资产支持 Linux amd64 v1、glibc 2.31 及以上；使用端需兼容的 NVIDIA 驱动，无需 Go、nvcc 或 CUDA Toolkit。自行构建可运行 `make build-gds`；正式构建基线与验签见 [GDS 发行说明](gds-release.md)。
 
 ```sh
-nido gds install --artifact /absolute/path/to/gds
-nido gds status
+nido gds install
+# 或固定独立组件版本
+nido gds install 0.1.0
+nido gds configure --gpu GPU-完整设备UUID
+nido gds validate
+nido gds start
+nido gds status --json
+nido gds logs --tail 100
+```
+
+配置固定在 `$NIDO_HOME/gds/config.toml`，策略不写入 Nido 主配置。默认连续空闲 30 分钟后保留总显存 25%，不持续运行 kernel；发现其他计算或图形活动、探针失效或显存余量不足时停止 worker。GPU UUID 必须完整，首版不接受 GPU index。MIG、MPS、vGPU、容器 PID 视图和非 DEFAULT 计算模式不受支持；观测能力无法确认时拒绝保留。
+
+安装和配置不启动组件，`status` 不加载驱动或执行程序。`probe` 显式进行有界 GPU 查询，`validate` 额外检查程序协议和设备能力，两者都不分配显存。配置替换用 `configure --file /absolute/config.toml`，要求停止；已有配置不被首次配置命令覆盖。
+
+自动让出有观察窗口，不能保证直接启动的任务不先 OOM。需要确定顺序时，先 `nido gds stop`，仅在成功后运行实际任务，结束后再按需 start。stop 等待 monitor 和 worker 退出；无法核验身份或退出时返回错误。
+
+更新与卸载均要求所有受管进程退出：
+
+```sh
+nido gds stop
+nido gds update
+nido gds start
+# 或在停止后卸载程序，保留配置、日志和运行历史
 nido gds remove
 ```
 
-当前 Go 版尚未接入 GDS 调度启动；`nido gds start` 会明确拒绝，且不会创建运行目录或启动 worker。没有默认在线下载源。它与 Codex 集成、Proxy 相互独立。
+`nido gds update --check` 只读取安装凭证并联网查询 GDS 稳定版，不执行程序或改写配置；默认更新按数值版本选择最新 GDS，不自动降级。`update 0.1.0` 可显式重装或回退到指定版本。安装、更新也接受 `--artifact /absolute/path/to/gds [--sha256 HASH]`，不可与官方版本混用。
+
+官方来源固定为本仓库 `gds-vX.Y.Z` Release，独立于 Nido 的 `latest`。下载同时核对 API SHA-256、大小、严格摘要文件、ELF 和候选版本；Sigstore bundle 供独立验签，自动摘要校验不等于客户端验签。下载使用当前终端代理，或本次 `--proxy URL`，不会为下载启动任何服务。
+
+`--dry-run` 只检查本地路径、来源语法、配置和运行记录，不联网、下载、执行程序、加载驱动或分配显存；远端版本及实时设备能力明确为未检查。
+
+安装生成 `installed.json`，绑定程序摘要与协议。缺失或不匹配的凭证会阻止执行、更新和卸载，不自动接管同路径的旧程序。并发提交冲突会保留内容并报告恢复文件路径；需审查现场后再处理，不自动覆盖或回滚。
+
+CPU 隔离测试通过 `make check-gds` 执行。普通用户原生 Linux amd64 验证使用已有 Go、GCC、bubblewrap 和离线 vendor，不下载或安装依赖：
+
+```sh
+GO=/absolute/path/to/go \
+NIDO_TEST_GDS_VENDOR=/absolute/path/to/offline/vendor \
+NIDO_TEST_GDS_OUTPUT=/absolute/path/to/new-evidence-directory \
+make check-gds-linux-native
+```
+
+此入口拒绝 root、其他平台及已有证据目录，在私有文件系统、PID、设备和网络空间中执行 race、CPU 多进程、假驱动及 CLI 隔离测试；namespace 创建失败时直接失败。真实 HOME、服务 socket 和 GPU 设备不进入测试环境。需要真 GPU 的验证未自动启用。当前验证范围见 [GDS 审查记录](gds-audit.md)，协议与限制见 [组件设计](gds-design.md)。
 
 ## 路径变化与旧版
 

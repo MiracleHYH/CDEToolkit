@@ -14,7 +14,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/MiracleHYH/CDEToolkit/internal/builtin"
+	"github.com/MiracleHYH/CDEToolkit/internal/components/gds"
 	"github.com/MiracleHYH/CDEToolkit/internal/components/proxy"
 	"github.com/MiracleHYH/CDEToolkit/internal/integrations/codex"
 	"github.com/pelletier/go-toml/v2"
@@ -39,7 +39,7 @@ type Manager struct {
 	Config                     Config
 	Env                        []string
 	Codex                      codex.Service
-	Builtins                   builtin.Manager
+	GDS                        gds.Service
 	Proxy                      proxy.Service
 	configBytes                []byte
 	rootInfo                   os.FileInfo
@@ -99,7 +99,7 @@ func New(root string) (*Manager, error) {
 		return nil, e
 	}
 	m.Codex = codex.Service{Root: root, UserHome: home, Env: m.Env}
-	m.Builtins = builtin.Manager{Root: root, Env: m.Env}
+	m.GDS = gds.Service{Root: root, Env: m.Env}
 	m.Proxy = proxy.Service{Root: root, Env: m.Env, Launcher: exe}
 	b, err := readFile(filepath.Join(root, "config.toml"), 1<<20)
 	if err == nil {
@@ -455,8 +455,14 @@ func (m *Manager) Init() error {
 		} else if e != nil && !os.IsNotExist(e) {
 			return e
 		}
-		if err = m.save(); err != nil {
-			return err
+		// A CLI replacement does not change user intent. Preserve TOML comments
+		// when the owned environment is already current; interrupted environment
+		// refreshes still use the existing repair path.
+		env, envErr := readFile(filepath.Join(m.Root, "env.sh"), 1<<20)
+		if m.configBytes == nil || envErr != nil || !bytes.Equal(env, []byte(m.Environment())) || m.Config.EnvDigest != digest(env) {
+			if err = m.save(); err != nil {
+				return err
+			}
 		}
 		return replaceFile(target, data, 0755, func() error {
 			if err := m.checkRoot(); err != nil {
@@ -600,22 +606,27 @@ func (m *Manager) Status() []Status {
 		detail += " 配置已修改，请显式 restart"
 	}
 	rows = append(rows, Status{Name: "proxy", Kind: "builtin", Configured: p.Config == "readable", State: state, Directory: filepath.Join(m.Root, "proxy"), Detail: strings.TrimSpace(detail)})
-	for _, name := range builtin.Names() {
-		b := m.Builtins.Status(name)
-		state := "未安装"
-		if b.Installed {
-			state = "已停止"
-			if !b.Configured {
-				state = "待配置"
-			}
-			if b.Running {
-				state = "运行中"
-			}
+	g := m.GDS.Status()
+	state = "未安装"
+	if g.Program == "present" {
+		state = "已停止"
+		if g.Config != "readable" {
+			state = "待配置"
 		}
-		if b.Problem != "" {
-			state = "异常"
+		if g.Runtime == "running" {
+			state = "运行中"
 		}
-		rows = append(rows, Status{Name: name, Kind: "builtin", Configured: b.Configured, State: state, Directory: b.Directory, Detail: b.Problem})
+		if g.Runtime == "starting" {
+			state = "启动中"
+		}
+		if g.Runtime == "exited" {
+			state = "已退出"
+		}
 	}
+	if len(g.Problems) != 0 {
+		state = "异常"
+	}
+	rows = append(rows, Status{Name: "gds", Kind: "builtin", Configured: g.Config == "readable", State: state, Directory: filepath.Join(m.Root, "gds"), Detail: strings.Join(g.Problems, "；")})
+
 	return rows
 }
