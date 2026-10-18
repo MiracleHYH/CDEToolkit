@@ -8,32 +8,31 @@ GDS 保持可选。Nido v0.5.0 起支持独立 Linux amd64 组件的官方下载
 
 ## 初始化与 Shell 环境
 
-下面的 GitHub 下载策略、自身更新及安装脚本新参数已在源码实现，等待下一版发布；公开 v0.6.0 尚不支持。当前发布版仍使用不带 `--github-proxy` 的原直链安装命令，见 [README](../README.md#快速开始)。
+自 v0.7.0 起，安装器支持 GitHub 下载策略，CLI 支持 `nido download` 与 `nido update`。以下命令安装最新版并在当前 Bash / Zsh 中启用 `nido`。
 
 选择一个独立软件目录，默认 `~/.nido`。首次安装选择官方直链或第三方加速链，不能指望脚本内的回退修复外层脚本下载失败。
 
 官方直链：
 
 ```sh
-curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy direct
+curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy direct && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
 ```
 
 第三方加速链：
 
 ```sh
-curl --http1.1 -fsSL https://gh-proxy.org/https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy https://gh-proxy.org
+curl --http1.1 -fsSL https://gh-proxy.org/https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy https://gh-proxy.org && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
 ```
 
-选择后加载当前终端环境：
+安装后检查版本：
 
 ```sh
-. "${NIDO_HOME:-$HOME/.nido}/env.sh"
 nido version
 ```
 
-需要固定版本或自定义目录时，在右侧 `sh -s --` 后补充 `--version X.Y.Z --root /absolute/path/to/nido`；脚本也可从对应 `releases/download/vX.Y.Z/install.sh` 获取。再加载目标目录下的 `env.sh`。源码构建方式见 [README](../README.md#开发)。
+需要自定义目录时，先执行 `export NIDO_HOME=/absolute/path/to/nido`，再运行上面的安装命令。固定版本可在 `&&` 之前的脚本参数中补充 `--version X.Y.Z`；脚本也可从对应 `releases/download/vX.Y.Z/install.sh` 获取。源码构建方式见 [README](../README.md#开发)。
 
-也可以通过 `NIDO_HOME` 指定目录；显式 `--root` 优先。首次初始化只接受不存在或空目录，不把普通数据目录或旧 toolkit 目录变成 Nido。重复初始化保留配置，并刷新自己的程序和环境文件；用户修改过的 `env.sh` 不被静默覆盖。
+安装器也接受 `--root /absolute/path/to/nido`，优先于 `NIDO_HOME`；使用该参数时，命令末尾也要加载指定目录的 `env.sh`。首次初始化只接受不存在或空目录，不把普通数据目录或旧 toolkit 目录变成 Nido。重复初始化保留配置，并刷新自己的程序和环境文件；用户修改过的 `env.sh` 不被静默覆盖。
 
 初始化不安装组件、不自动关联 Codex、不启动服务、不编辑 Shell 文件。需要新 Bash / Zsh 自动生效时，自行将下面一行加入对应的 `~/.bashrc` 或 `~/.zshrc`：
 

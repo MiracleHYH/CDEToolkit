@@ -12,35 +12,34 @@ Nido 为 Codex 提供目录关联、环境与代理配置，以及官方安装�
 
 ## 快速开始
 
-本节的 `--github-proxy`、`nido download` 和 `nido update` 已在源码实现，**随下一版本发布，当前公开 v0.6.0 尚不支持**。安装当前发布版可先使用 `curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh`；下面两条是下一版的安装方式。
+**v0.7.0 起支持 GitHub 加速下载和 Nido 自身更新。** 以下命令安装最新版，并在当前 Bash / Zsh 中启用 `nido`。
 
 需要 curl、tar 和 SHA-256 工具（Linux 通常自带 `sha256sum`，macOS 自带 `shasum`），无需 Go。首次安装请选择一种下载方式，安装最新 Go 版到 `~/.nido`。
 
 **能直接访问 GitHub：** 脚本和安装包都从 GitHub 下载。
 
 ```sh
-curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy direct
+curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy direct && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
 ```
 
 **GitHub 访问困难：** 脚本和安装包都通过第三方加速前缀下载。
 
 ```sh
-curl --http1.1 -fsSL https://gh-proxy.org/https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy https://gh-proxy.org
+curl --http1.1 -fsSL https://gh-proxy.org/https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy https://gh-proxy.org && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
 ```
 
 第二种方式会执行第三方转发的脚本，仅在信任该服务时使用。安装器核对包的 SHA-256，当前客户端不会验证 Sigstore 签名；第三方也能同时替换脚本、包和摘要，因此加速下载不能提供与官方直链相同的真实性保证。
 
-然后在当前终端加载命令：
+安装后检查：
 
 ```sh
-. "${NIDO_HOME:-$HOME/.nido}/env.sh"
 nido version
 nido status
 ```
 
-安装器只安装 Nido，不安装组件、不关联已有 Codex，也不启动服务。再次运行同一命令会更新 Nido，保留已有管理配置。可提前设置 `NIDO_HOME` 选择其他独立软件目录；外部 Codex HOME 必须在其之外。
+安装器只安装 Nido，不安装组件、不关联已有 Codex，也不启动服务。再次运行同一命令会更新 Nido，保留已有管理配置。可提前执行 `export NIDO_HOME=/absolute/path/to/nido` 选择其他独立软件目录；外部 Codex HOME 必须在其之外。
 
-安装脚本运行在子 Shell 中，不能直接更改当前终端的 PATH，因此安装后需要加载 `env.sh`。Nido 不自动编辑 Shell 配置。需要新终端自动加载时，将 `. "$HOME/.nido/env.sh"` 加入 `~/.bashrc` 或 `~/.zshrc`；自定义目录请替换路径。
+上面命令末尾的 `. .../env.sh` 把 `nido` 加入当前终端的 PATH；安装脚本自身无法修改父 Shell。Nido 不自动编辑 Shell 配置。需要新终端自动加载时，将 `. "$HOME/.nido/env.sh"` 加入 `~/.bashrc` 或 `~/.zshrc`；自定义目录请替换路径。
 
 之后可直接检查和更新 Nido 本身：
 
