@@ -51,7 +51,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          assets=(dist/nido-{linux,darwin}-{amd64,arm64}.tar.gz{,.sha256} dist/install.sh)
+          assets=(dist/nido-linux-amd64.tar.gz dist/nido-linux-amd64.tar.gz.sha256 dist/install.sh)
           files=()
           for asset in "${assets[@]}"; do
             cosign sign-blob --yes --bundle "${asset}.sigstore.json" "$asset"

@@ -39,7 +39,7 @@ func TestCheckWorkflowCoversDeclaredMinimumAndPinnedGo(t *testing.T) {
 		Jobs map[string]struct {
 			Strategy struct {
 				Matrix struct {
-					Include []struct{ Go string }
+					Include []struct{ Go, OS string }
 				}
 			}
 			Steps []struct{ Run string }
@@ -50,6 +50,9 @@ func TestCheckWorkflowCoversDeclaredMinimumAndPinnedGo(t *testing.T) {
 	}
 	versions := map[string]bool{}
 	for _, item := range workflow.Jobs["go"].Strategy.Matrix.Include {
+		if !strings.HasPrefix(item.OS, "ubuntu-") {
+			t.Fatal("Nido checks must execute only on supported Linux runners")
+		}
 		versions[item.Go] = true
 	}
 	if !versions[minimum] || !versions[strings.TrimSpace(string(pinned))] {
@@ -113,6 +116,33 @@ func TestReleaseWorkflowOnlyPublishesVerifiedAllowlist(t *testing.T) {
 		assets = append(assets, "dist/"+asset, "dist/"+asset+".sha256")
 	}
 	testPublisher(t, "release.yml", "v0.1.0", "--latest", assets)
+}
+
+func TestNidoReleasePlatformsAndBaseline(t *testing.T) {
+	if len(Platforms) != 1 || Platforms[0] != "linux/amd64" {
+		t.Fatal("Nido releases support only Linux amd64", Platforms)
+	}
+	data, err := os.ReadFile("../../Makefile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	platforms, baseline := false, false
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "RELEASE_PLATFORMS = ") {
+			platforms = strings.TrimPrefix(line, "RELEASE_PLATFORMS = ") == "linux/amd64"
+		}
+		if strings.Contains(line, "CGO_ENABLED=0 GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) GOAMD64=v1 ") {
+			baseline = true
+		}
+	}
+	if !platforms || !baseline {
+		t.Fatal("release targets must use only Linux amd64 with an explicit GOAMD64=v1 baseline")
+	}
+	for _, platform := range []string{"linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64"} {
+		if _, err := assetName(platform); err == nil {
+			t.Fatal("unsupported release platform accepted", platform)
+		}
+	}
 }
 
 func TestGDSReleaseWorkflowOnlyPublishesIndependentVerifiedAllowlist(t *testing.T) {
@@ -260,7 +290,7 @@ func testPublisher(t *testing.T, workflowFile, tag, latest string, assets []stri
 				write(path, "fixture asset", 0600)
 				expected[path], expected[path+".sigstore.json"] = true, true
 			}
-			for _, name := range []string{"dist/legacy-install.sh", "dist/server-toolkit.tar.gz", "dist/private.cfg", "dist/nido-linux-armv7.tar.gz"} {
+			for _, name := range []string{"dist/legacy-install.sh", "dist/server-toolkit.tar.gz", "dist/private.cfg", "dist/nido-linux-armv7.tar.gz", "dist/nido-linux-arm64.tar.gz", "dist/nido-darwin-amd64.tar.gz", "dist/nido-darwin-arm64.tar.gz"} {
 				write(name, "must not publish", 0600)
 			}
 			write("bin/cosign", `#!/bin/sh

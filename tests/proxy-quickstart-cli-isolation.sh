@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Both executables are built from this checkout. The second one is an inert
-# fixture, never Mihomo: it supports only -v and -t and refuses startup.
+# Current mode checks this checkout; legacy is explicitly selected only when
+# verifying frozen releases predating the Nido API listener binding.
+# The second executable is inert: only -v and -t, never Mihomo startup.
 binary="${1:?provide an absolute built Nido path}"
 core="${2:?provide the built tests/fixtures/proxy-core executable}"
+binding_mode="${3:-current}"
+[[ "$binding_mode" == current || "$binding_mode" == legacy ]]
 [[ "$binary" == /* && -f "$binary" && -x "$binary" && ! -L "$binary" ]]
 [[ "$core" == /* && -f "$core" && -x "$core" && ! -L "$core" ]]
 binary="$(cd "$(dirname "$binary")" && pwd -P)/$(basename "$binary")"
@@ -18,8 +21,8 @@ env -i HOME="$scratch/home" TMPDIR="$scratch/tmp" PATH="$scratch/forbidden:/usr/
   LANG=C LC_ALL=C TZ=UTC GORACE=halt_on_error=1 \
   GIT_CONFIG_GLOBAL="$scratch/home/.gitconfig" GIT_CONFIG_NOSYSTEM=1 \
   NIDO_FIXTURE_FORBIDDEN_LOG="$scratch/forbidden.log" \
-  /bin/bash -euo pipefail -s -- "$binary" "$core" "$scratch" <<'ISOLATED'
-binary="$1"; core="$2"; scratch="$3"
+  /bin/bash -euo pipefail -s -- "$binary" "$core" "$scratch" "$binding_mode" <<'ISOLATED'
+binary="$1"; core="$2"; scratch="$3"; binding_mode="$4"
 root="$scratch/software root"
 codex_home="$HOME/codex"
 for tool in curl wget systemctl supervisorctl sudo mihomo gds git; do
@@ -74,10 +77,27 @@ cp "$HOME/.gitconfig" "$scratch/git-bound"
 nido proxy bind --tool codex --proxy 'socks5h://user:p%40ss@127.0.0.1:17892' --yes >/dev/null
 grep -Fq 'socks5h://user:p%40ss@127.0.0.1:17892' "$codex_home/.env"
 cmp "$HOME/.gitconfig" "$scratch/git-bound"
-cp "$root/config.toml" "$scratch/config-before-empty"
-nido proxy bind download --yes --json > "$scratch/download.json"
-grep -Fq no_targets "$scratch/download.json"
-cmp "$root/config.toml" "$scratch/config-before-empty"
+cp "$root/config.toml" "$scratch/config-before-download"
+cp "$codex_home/.env" "$scratch/codex-before-download"
+if [[ "$binding_mode" == legacy ]]; then
+  nido proxy bind download --yes --json > "$scratch/download.json"
+  grep -Fq no_targets "$scratch/download.json"
+  [[ ! -e "$root/download-proxy.toml" ]]
+else
+  nido proxy bind download --endpoint endpoint-download --yes --json > "$scratch/download.json"
+  grep -Fq applied "$scratch/download.json"
+  grep -Fq nido-api-proxy "$root/download-proxy.toml"
+  grep -Fq endpoint-download "$root/download-proxy.toml"
+  [[ "$(stat -c %a "$root/download-proxy.toml")" == 600 ]]
+  nido download show --json > "$scratch/download-show.json"
+  grep -Fq '"api_listener":"endpoint-download"' "$scratch/download-show.json"
+  nido proxy bind download --proxy off --yes >/dev/null
+  [[ -f "$root/download-proxy.toml" ]]
+  ! grep -Fq endpoint-download "$root/download-proxy.toml"
+fi
+cmp "$root/config.toml" "$scratch/config-before-download"
+cmp "$codex_home/.env" "$scratch/codex-before-download"
+cmp "$HOME/.gitconfig" "$scratch/git-bound"
 
 # No listeners: show no endpoint and still offer custom proxy configuration.
 printf 'mixed-port: 17899\n' > "$root/proxy/config.yaml"

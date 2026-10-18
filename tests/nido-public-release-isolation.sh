@@ -6,6 +6,21 @@ set -euo pipefail
 umask 077
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 2; }
+normalize_accelerator() {
+  local origin=${1%/} host label
+  local LC_ALL=C
+  [[ $origin = https://* ]] || return 1
+  host=${origin#https://}
+  [[ ${#host} -le 253 && $host = *.* && $host =~ ^[A-Za-z0-9.-]+$ ]] || return 1
+  while :; do
+    label=${host%%.*}
+    [[ ${#label} -ge 1 && ${#label} -le 63 && $label != -* && $label != *- ]] || return 1
+    [[ $host = *.* ]] || break
+    host=${host#*.}
+  done
+  [[ $label =~ ^[A-Za-z] ]] || return 1
+  printf '%s\n' "$origin"
+}
 input=${NIDO_ACCEPT_INPUT:?set the new cosign-verified asset directory}
 old_input=${NIDO_ACCEPT_OLD_INPUT:?set the old cosign-verified asset directory}
 output=${NIDO_ACCEPT_OUTPUT:?set a fresh evidence directory}
@@ -20,7 +35,7 @@ mode=${NIDO_ACCEPT_MODE:-native}
 platform=${NIDO_ACCEPT_PLATFORM:-}
 stable='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
 [[ $version =~ $stable && $old_version =~ $stable && $version != "$old_version" ]] || fail 'invalid release versions'
-case $accelerator in https://gh-proxy.org|https://ghfast.top) ;; *) fail 'unsupported public acceptance accelerator' ;; esac
+accelerator=$(normalize_accelerator "$accelerator") || fail 'acceptance accelerator must be an HTTPS DNS origin without credentials, port, path, query or fragment'
 case $install_version_mode in latest|tagged) ;; *) fail 'install version mode must be latest or tagged' ;; esac
 case $transport in both|direct|accelerated) ;; *) fail 'transport must be both, direct or accelerated' ;; esac
 case $metadata_auth in public|gh) ;; *) fail 'metadata auth must be public or gh' ;; esac

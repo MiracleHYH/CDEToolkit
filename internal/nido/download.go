@@ -57,7 +57,23 @@ func (c *CLI) download(m *Manager, o cliOptions, args []string) int {
 		} else if err := githubdownload.Validate(saved); err != nil {
 			saved = "invalid; use download set to correct"
 		}
-		return c.output(o, map[string]string{"saved": saved, "effective": policy})
+		api, _, err := m.readAPIProxy()
+		if err != nil {
+			return c.fail(err)
+		}
+		address, state := "", "disabled"
+		if api.Listener != "" {
+			state = "configured"
+			address = "unavailable"
+			if endpoints, err := m.Proxy.ListenerEndpoints(); err == nil {
+				for _, endpoint := range endpoints {
+					if endpoint.Name == api.Listener && !endpoint.Authentication {
+						address = endpoint.URL()
+					}
+				}
+			}
+		}
+		return c.output(o, map[string]string{"saved": saved, "effective": policy, "api_state": state, "api_listener": api.Listener, "api_proxy": address})
 	}
 	if len(args) != 2 || args[0] != "set" || args[1] == "" {
 		return c.fail(fmt.Errorf("使用 download show 或 download set auto|direct|HTTPS前缀"))
@@ -314,6 +330,10 @@ func (c *CLI) update(m *Manager, o cliOptions, args []string) int {
 		if version == Version {
 			return c.output(o, selfupdate.Info{Current: Version, Latest: version})
 		}
+	}
+	service.APIHTTP, err = m.downloadAPIClient(o.proxy)
+	if err != nil {
+		return c.fail(err)
 	}
 	if version == "" {
 		info, err := service.Check(Version)

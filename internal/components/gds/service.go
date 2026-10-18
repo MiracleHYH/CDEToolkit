@@ -26,6 +26,9 @@ type Service struct {
 	StartTimeout time.Duration
 	// HTTP permits a per-operation explicit proxy and isolated test transport.
 	HTTP *http.Client
+	// APIHTTP, when set, keeps all release metadata (including list pages) on
+	// its explicit network route, without GitHub file accelerators or fallback.
+	APIHTTP *http.Client
 	// GitHubProxy affects only this component's public GitHub release requests.
 	// Empty keeps independent Service instances on the direct route.
 	GitHubProxy string

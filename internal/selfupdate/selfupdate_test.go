@@ -237,6 +237,7 @@ func TestPrepareValidatesNativeReleaseWithoutExecution(t *testing.T) {
 	}
 	for name, modified := range map[string][]byte{
 		"cgo-enabled":  bytes.ReplaceAll(binary, []byte("CGO_ENABLED=0"), []byte("CGO_ENABLED=1")),
+		"amd64-level":  bytes.ReplaceAll(binary, []byte("GOAMD64=v1"), []byte("GOAMD64=v3")),
 		"other-main":   bytes.ReplaceAll(binary, []byte("/cmd/nido"), []byte("/cmd/evil")),
 		"other-module": bytes.ReplaceAll(binary, []byte("github.com/MiracleHYH/CDEToolkit"), []byte("github.com/MiracleHYY/CDEToolkit")),
 	} {
@@ -271,8 +272,16 @@ func TestUnsupportedPlatformDoesNotDownload(t *testing.T) {
 		t.Fatal("unsupported platform attempted a download")
 		return nil, fmt.Errorf("forbidden")
 	})}
-	if _, err := (Service{HTTP: client, Platform: "linux/riscv64"}).Prepare(""); err == nil {
-		t.Fatal("accepted unsupported platform")
+	for _, platform := range []string{"linux/riscv64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64"} {
+		t.Run(platform, func(t *testing.T) {
+			service := Service{HTTP: client, APIHTTP: client, Platform: platform}
+			if _, err := service.Check("0.5.0"); err == nil {
+				t.Fatal("unsupported platform queried release metadata")
+			}
+			if _, err := service.Prepare(""); err == nil {
+				t.Fatal("accepted unsupported platform")
+			}
+		})
 	}
 }
 

@@ -84,8 +84,8 @@ func TestGDSCLIOfficialPreviewAndCancellationAreOffline(t *testing.T) {
 				t.Fatal(err)
 			}
 			code, _, stderr = directGDSCLI(t, m, cliOptions{json: true}, args...)
-			if code == 0 || requests != 0 || !strings.Contains(stderr, "交互未完成") {
-				t.Fatalf("cancel: code=%d err=%s requests=%d", code, stderr, requests)
+			if code == 0 || requests != 0 || !strings.Contains(stderr, "API 功能未启用") {
+				t.Fatalf("disabled before confirmation: code=%d err=%s requests=%d", code, stderr, requests)
 			}
 			if _, err = os.Lstat(filepath.Join(m.Root, "gds")); !os.IsNotExist(err) {
 				t.Fatal("cancel created component directory", err)
@@ -125,7 +125,8 @@ func TestGDSCLIInstallSelectsOfficialVersion(t *testing.T) {
 			}
 			// This test isolates release selection from the separately tested
 			// automatic mirror retry policy.
-			code, out, stderr := directGDSCLI(t, m, cliOptions{yes: true, json: true, githubProxy: "direct"}, test.args...)
+			proxyAddress := enabledAPIFixture(t, m, m.GDS.HTTP)
+			code, out, stderr := directGDSCLI(t, m, cliOptions{yes: true, json: true, githubProxy: "direct", proxy: proxyAddress}, test.args...)
 			if code == 0 || out != "" || !json.Valid([]byte(stderr)) || !reflect.DeepEqual(requests, []string{test.path}) {
 				t.Fatalf("code=%d out=%s err=%s requests=%v", code, out, stderr, requests)
 			}
@@ -142,6 +143,9 @@ func TestGDSCLIInstallSelectsOfficialVersion(t *testing.T) {
 
 func TestGDSCLICheckUpdateIsReadOnly(t *testing.T) {
 	m, home := fixture(t)
+	if err := m.Init(); err != nil {
+		t.Fatal(err)
+	}
 	m.GDS.Platform = "linux/amd64"
 	dir := filepath.Join(m.Root, "gds")
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -186,7 +190,8 @@ func TestGDSCLICheckUpdateIsReadOnly(t *testing.T) {
 		body := `[{"tag_name":"v99.0.0"},{"tag_name":"gds-v0.1.0"},{"tag_name":"gds-v0.2.0"}]`
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: r}, nil
 	})}
-	code, out, stderr := directGDSCLI(t, m, cliOptions{check: true, json: true}, "update")
+	proxyAddress := enabledAPIFixture(t, m, m.GDS.HTTP)
+	code, out, stderr := directGDSCLI(t, m, cliOptions{check: true, json: true, proxy: proxyAddress}, "update")
 	var result struct {
 		Current, Latest string
 		Available       bool

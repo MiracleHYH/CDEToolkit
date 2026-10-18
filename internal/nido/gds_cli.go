@@ -179,6 +179,13 @@ func (c *CLI) gds(m *Manager, o cliOptions, args []string) int {
 		}
 		return c.output(o, map[string]string{"component": "gds", "operation": previewAction, "detail": "本地静态预检通过；未联网、下载、执行程序或写入，远端版本及实时 GPU 能力未检查。"})
 	}
+	if (action == "install" || action == "update") && o.artifact == "" {
+		var err error
+		m.GDS.APIHTTP, err = m.downloadAPIClient(o.proxy)
+		if err != nil {
+			return fail(err)
+		}
+	}
 	if action == "update" && o.check {
 		info, err := m.GDS.CheckUpdate()
 		if err != nil {

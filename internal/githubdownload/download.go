@@ -1,16 +1,21 @@
-// Package githubdownload routes public Nido component downloads. It is not a
-// global HTTP proxy and must never be used by the Codex integration.
+// Package githubdownload routes public release files and version metadata.
+// It is not a global HTTP proxy. Codex version metadata uses only an explicit
+// API client with direct URL policy; its installer and runtime stay independent.
 package githubdownload
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -197,11 +202,71 @@ func httpsPort(u *url.URL) int {
 type downloadFailure struct {
 	retry bool
 	text  string
+	cause error
 }
 
 func (e *downloadFailure) Error() string { return e.text }
+func (e *downloadFailure) Unwrap() error { return e.cause }
 
 func fail(retry bool, message string) error { return &downloadFailure{retry: retry, text: message} }
+
+// Transport errors can contain proxy credentials and signed redirect URLs.
+// Keep the cause inspectable, but never include its text in a public error.
+func transportFailure(message string, cause error) error {
+	return &downloadFailure{retry: true, text: message + "（" + transportCategory(cause) + "）", cause: cause}
+}
+
+func transportCategory(err error) string {
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		if dns.Timeout() {
+			return "DNS 解析超时"
+		}
+		return "DNS 解析失败"
+	}
+	if errors.Is(err, context.DeadlineExceeded) || transportTimedOut(err) {
+		return "超时"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "请求已取消"
+	}
+	var verification *tls.CertificateVerificationError
+	var record tls.RecordHeaderError
+	var alert tls.AlertError
+	var authority x509.UnknownAuthorityError
+	var certificate x509.CertificateInvalidError
+	var hostname x509.HostnameError
+	var roots x509.SystemRootsError
+	if errors.As(err, &verification) || errors.As(err, &record) || errors.As(err, &alert) || errors.As(err, &authority) || errors.As(err, &certificate) || errors.As(err, &hostname) || errors.As(err, &roots) {
+		return "TLS 失败"
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE) {
+		return "连接中断"
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH) {
+		return "连接失败"
+	}
+	return "其他传输错误"
+}
+
+// url.Error and net.OpError do not necessarily unwrap every intermediate
+// wrapper in their Timeout methods, so inspect the typed causes themselves.
+func transportTimedOut(err error) bool {
+	if network, ok := err.(net.Error); ok && network.Timeout() {
+		return true
+	}
+	switch wrapped := err.(type) {
+	case interface{ Unwrap() error }:
+		return transportTimedOut(wrapped.Unwrap())
+	case interface{ Unwrap() []error }:
+		for _, cause := range wrapped.Unwrap() {
+			if transportTimedOut(cause) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func fetch(ctx context.Context, base *http.Client, source string, maximum int64, headerTimeout time.Duration) ([]byte, error) {
 	origin, err := secureURL(source)
@@ -257,9 +322,14 @@ func fetch(ctx context.Context, base *http.Client, source string, maximum int64,
 		if errors.As(err, &failure) {
 			return nil, failure
 		}
-		return nil, fail(true, "GitHub 下载连接失败或超时")
+		return nil, transportFailure("GitHub 下载请求失败", err)
 	}
-	defer resp.Body.Close()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = resp.Body.Close()
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fail(true, fmt.Sprintf("GitHub 下载返回 HTTP %d", resp.StatusCode))
 	}
@@ -270,8 +340,17 @@ func fetch(ctx context.Context, base *http.Client, source string, maximum int64,
 	if int64(len(b)) > maximum {
 		return nil, fail(false, "GitHub 下载响应大小越界")
 	}
-	if err != nil || resp.ContentLength > 0 && int64(len(b)) != resp.ContentLength {
-		return nil, fail(true, "GitHub 下载响应不完整")
+	if err != nil {
+		return nil, transportFailure("GitHub 下载响应不完整", err)
+	}
+	if resp.ContentLength > 0 && int64(len(b)) != resp.ContentLength {
+		return nil, transportFailure("GitHub 下载响应不完整", io.ErrUnexpectedEOF)
+	}
+	closed = true
+	if err := resp.Body.Close(); err != nil {
+		// A caller's body can enforce binding or instance identity at Close.
+		// Do not hide that invalidation with a successful result or fallback.
+		return nil, &downloadFailure{text: "GitHub 下载响应关闭失败（" + transportCategory(err) + "）", cause: err}
 	}
 	return b, nil
 }

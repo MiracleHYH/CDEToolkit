@@ -20,7 +20,7 @@ type proxyCategory struct {
 var proxyCategories = []proxyCategory{
 	{"ai", "AI 工具", []string{"codex"}},
 	{"daily", "日常工具", []string{"git"}},
-	{"download", "下载工具", nil},
+	{"download", "Nido API 查询", []string{"nido"}},
 }
 
 type proxyChoice struct {
@@ -43,8 +43,8 @@ func (c *CLI) proxyBind(m *Manager, o cliOptions, args []string) int {
 	}
 	var categories []proxyCategory
 	if o.tool != "" {
-		if o.tool != "codex" && o.tool != "git" {
-			return fail(fmt.Errorf("--tool 仅支持 codex 或 git"))
+		if o.tool != "codex" && o.tool != "git" && o.tool != "nido" {
+			return fail(fmt.Errorf("--tool 仅支持 codex、git 或 nido"))
 		}
 		categories = []proxyCategory{{label: o.tool, tools: []string{o.tool}}}
 	} else if len(args) == 1 {
@@ -78,7 +78,7 @@ func (c *CLI) proxyBind(m *Manager, o cliOptions, args []string) int {
 			results = append(results, result)
 			continue
 		}
-		choice, err := c.chooseProxy(m, o, category.label)
+		choice, err := c.chooseProxy(m, o, category.label, len(category.tools) == 1 && category.tools[0] == "nido")
 		if err != nil {
 			return fail(err)
 		}
@@ -87,9 +87,16 @@ func (c *CLI) proxyBind(m *Manager, o cliOptions, args []string) int {
 			results = append(results, result)
 			continue
 		}
+		var apiSnapshot apiProxySnapshot
 		for _, tool := range category.tools {
 			if err := m.checkToolProxy(tool, choice.address); err != nil {
 				return fail(fmt.Errorf("%s：%w", tool, err))
+			}
+			if tool == "nido" {
+				_, apiSnapshot, err = m.readAPIProxy()
+				if err != nil {
+					return fail(err)
+				}
 			}
 		}
 		result.Proxy = choice.address
@@ -101,7 +108,13 @@ func (c *CLI) proxyBind(m *Manager, o cliOptions, args []string) int {
 				return fail(err)
 			}
 			for _, tool := range category.tools {
-				if err := m.configureToolProxy(tool, choice.address, choice.endpoint); err != nil {
+				var err error
+				if tool == "nido" {
+					err = m.configureAPIProxySnapshot(choice.address, choice.endpoint, apiSnapshot)
+				} else {
+					err = m.configureToolProxy(tool, choice.address, choice.endpoint)
+				}
+				if err != nil {
 					return fail(fmt.Errorf("%s 未完成（已完成的类别保持各自结果）：%w", tool, err))
 				}
 			}
@@ -115,10 +128,13 @@ func (c *CLI) proxyBind(m *Manager, o cliOptions, args []string) int {
 
 // Listener enumeration is optional: a custom external proxy works even when
 // the component is missing or its native configuration has no listeners.
-func (c *CLI) chooseProxy(m *Manager, o cliOptions, label string) (proxyChoice, error) {
+func (c *CLI) chooseProxy(m *Manager, o cliOptions, label string, listenerOnly bool) (proxyChoice, error) {
 	if o.proxy != "" {
 		if o.proxy == "off" {
 			return proxyChoice{}, nil
+		}
+		if listenerOnly {
+			return proxyChoice{}, fmt.Errorf("Nido API 绑定请选择无认证的命名 listener，不保存自定义代理地址")
 		}
 		if err := validateBindingProxy(o.proxy); err != nil {
 			return proxyChoice{}, err
@@ -126,18 +142,33 @@ func (c *CLI) chooseProxy(m *Manager, o cliOptions, label string) (proxyChoice, 
 		return proxyChoice{address: o.proxy}, nil
 	}
 	endpoints, readErr := m.Proxy.ListenerEndpoints()
+	selectListener := func(endpoint proxy.Endpoint) (proxyChoice, error) {
+		if listenerOnly && endpoint.Authentication {
+			return proxyChoice{}, fmt.Errorf("Nido API 绑定请选择无认证的 listener")
+		}
+		return c.listenerChoice(endpoint, o.yes || o.json || o.dry)
+	}
 	if o.endpoint != "" {
 		if readErr != nil {
+			if listenerOnly {
+				return proxyChoice{}, fmt.Errorf("没有可用的 listener；请先配置 Proxy：%w", readErr)
+			}
 			return proxyChoice{}, fmt.Errorf("没有可用的 listener 端点；请用 --proxy 自定义代理：%w", readErr)
 		}
 		for _, endpoint := range endpoints {
 			if endpoint.Name == o.endpoint {
-				return c.listenerChoice(endpoint, o.yes || o.json || o.dry)
+				return selectListener(endpoint)
 			}
+		}
+		if listenerOnly {
+			return proxyChoice{}, fmt.Errorf("未找到指定 listener；请运行 proxy endpoints 后重新选择")
 		}
 		return proxyChoice{}, fmt.Errorf("未找到指定 listener；请重新选择或用 --proxy 自定义")
 	}
 	if o.yes || o.json || o.dry {
+		if listenerOnly {
+			return proxyChoice{}, fmt.Errorf("非交互 Nido API 绑定需要 --endpoint NAME；解除绑定使用 --proxy off")
+		}
 		return proxyChoice{}, fmt.Errorf("非交互配置需要 --endpoint NAME 或 --proxy URL|off")
 	}
 	fmt.Fprintln(c.Err, label+"：请选择代理")
@@ -154,9 +185,14 @@ func (c *CLI) chooseProxy(m *Manager, o cliOptions, label string) (proxyChoice, 
 		}
 		fmt.Fprintf(c.Err, "%d. %s  %s %s\n", i+1, endpoint.Name, endpoint.URL(), auth)
 	}
-	custom := len(endpoints) + 1
-	fmt.Fprintf(c.Err, "%d. 自定义代理地址\n%d. 保持现状\n%d. 移除 Nido 管理的代理配置\n", custom, custom+1, custom+2)
-	value, err := c.ask("选择序号，或 listener:名称", strconv.Itoa(custom+1))
+	custom, keep, off := len(endpoints)+1, len(endpoints)+2, len(endpoints)+3
+	if listenerOnly {
+		custom, keep, off = 0, len(endpoints)+1, len(endpoints)+2
+	} else {
+		fmt.Fprintf(c.Err, "%d. 自定义代理地址\n", custom)
+	}
+	fmt.Fprintf(c.Err, "%d. 保持现状\n%d. 移除 Nido 管理的代理配置\n", keep, off)
+	value, err := c.ask("选择序号，或 listener:名称", strconv.Itoa(keep))
 	if err != nil {
 		return proxyChoice{}, err
 	}
@@ -166,21 +202,24 @@ func (c *CLI) chooseProxy(m *Manager, o cliOptions, label string) (proxyChoice, 
 	if name, explicit := strings.CutPrefix(value, "listener:"); explicit {
 		for _, endpoint := range endpoints {
 			if endpoint.Name == name {
-				return c.listenerChoice(endpoint, false)
+				return selectListener(endpoint)
 			}
 		}
 		return proxyChoice{}, fmt.Errorf("未找到指定 listener")
 	}
 	if index, err := strconv.Atoi(value); err == nil {
 		if index > 0 && index <= len(endpoints) {
-			return c.listenerChoice(endpoints[index-1], false)
+			return selectListener(endpoints[index-1])
 		}
 		switch index {
 		case custom:
+			if listenerOnly {
+				return proxyChoice{}, fmt.Errorf("无效的 listener 选择")
+			}
 			value = "custom"
-		case custom + 1:
+		case keep:
 			value = "keep"
-		case custom + 2:
+		case off:
 			value = "off"
 		default:
 			return proxyChoice{}, fmt.Errorf("无效的代理选择；按名称选择请使用 listener:名称")
@@ -193,6 +232,9 @@ func (c *CLI) chooseProxy(m *Manager, o cliOptions, label string) (proxyChoice, 
 		return proxyChoice{}, nil
 	}
 	if value == "custom" {
+		if listenerOnly {
+			return proxyChoice{}, fmt.Errorf("Nido API 绑定请选择无认证的命名 listener")
+		}
 		address, err := c.ask("代理地址 protocol://[username:password@]host:port", "")
 		if err != nil {
 			return proxyChoice{}, err
@@ -204,7 +246,7 @@ func (c *CLI) chooseProxy(m *Manager, o cliOptions, label string) (proxyChoice, 
 	}
 	for _, endpoint := range endpoints {
 		if value == endpoint.Name {
-			return c.listenerChoice(endpoint, false)
+			return selectListener(endpoint)
 		}
 	}
 	return proxyChoice{}, fmt.Errorf("无效的代理选择")

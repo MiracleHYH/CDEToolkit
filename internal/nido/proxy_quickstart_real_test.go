@@ -205,12 +205,17 @@ func TestProxyRealMihomoQuickStart(t *testing.T) {
 		t.Fatal("自定义 SOCKS 代理没有按原地址写入")
 	}
 	realProxyTraffic(t, ispEndpoint.URL(), custom, origin, tlsOrigin, &origins, &relayTraffic)
-	beforeEmpty, _ := os.ReadFile(filepath.Join(cli.root, "config.toml"))
-	if out := quickStartMustInput(t, cli, "", "proxy", "bind", "download", "--yes", "--json"); !bytes.Contains(out, []byte("no_targets")) {
-		t.Fatal("空下载类别产生了伪绑定")
+	beforeDownload, _ := os.ReadFile(filepath.Join(cli.root, "config.toml"))
+	quickStartMustInput(t, cli, "", "proxy", "bind", "download", "--endpoint", "endpoint-download", "--yes", "--json")
+	bindingPath := filepath.Join(cli.root, "download-proxy.toml")
+	if binding, err := os.ReadFile(bindingPath); err != nil || !bytes.Contains(binding, []byte("nido-api-proxy")) || !bytes.Contains(binding, []byte("endpoint-download")) {
+		t.Fatalf("Nido API 绑定没有保存 listener 名称: %s %v", binding, err)
 	}
-	if current, _ := os.ReadFile(filepath.Join(cli.root, "config.toml")); !bytes.Equal(current, beforeEmpty) {
-		t.Fatal("空类别修改了配置")
+	if info, err := os.Stat(bindingPath); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("Nido API 绑定文件权限错误: %v %v", info, err)
+	}
+	if current, _ := os.ReadFile(filepath.Join(cli.root, "config.toml")); !bytes.Equal(current, beforeDownload) {
+		t.Fatal("Nido API 绑定修改了主配置")
 	}
 	quickStartMustInput(t, cli, "", "proxy", "bind", "--tool", "git", "--proxy", "off", "--yes", "--json")
 	quickStartMustInput(t, cli, "", "proxy", "bind", "--tool", "codex", "--proxy", "off", "--yes", "--json")

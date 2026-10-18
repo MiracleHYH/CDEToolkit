@@ -31,8 +31,6 @@ jobs:
             go: '1.23.x'
           - os: ubuntu-24.04
             go: '1.27.2'
-          - os: macos-15
-            go: '1.27.2'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
@@ -46,6 +44,35 @@ jobs:
       - run: go mod verify
       - name: Check isolated fixtures and native release package
         run: make check smoke
+      - name: Accept the local package API contract on native Linux amd64
+        if: matrix.go == '1.27.2'
+        run: |
+          set -euo pipefail
+          [[ $RUNNER_OS = Linux && $RUNNER_ARCH = X64 && $(uname -m) = x86_64 ]]
+          evidence="$RUNNER_TEMP/nido-api-pre-release"
+          mkdir "$evidence" "$evidence/fixture"
+          version=$(cat VERSION)
+          [[ $version =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          image=docker.io/library/golang@sha256:2015125fe4a3d97f9ba4ad55d458c2d1f025fdf9cb73d8f423a29e448d59da5e
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1 go build -trimpath -buildvcs=false -o "$evidence/fixture/api-fixture" ./tests/fixtures/nido-api-release
+          sha256sum dist/nido-linux-amd64.tar.gz dist/nido-linux-amd64.tar.gz.sha256 "$evidence/fixture/api-fixture" > "$evidence/inputs.sha256"
+          docker pull --platform linux/amd64 "$image" > "$evidence/docker-pull.log" 2>&1
+          docker image inspect "$image" > "$evidence/docker-image.json"
+          jq -e 'length == 1 and .[0].Os == "linux" and .[0].Architecture == "amd64"' "$evidence/docker-image.json"
+          NIDO_API_RELEASE_INPUT="$GITHUB_WORKSPACE/dist" \
+          NIDO_API_RELEASE_FIXTURE="$evidence/fixture/api-fixture" \
+          NIDO_API_RELEASE_OUTPUT="$evidence/contract" \
+          NIDO_API_RELEASE_VERSION="$version" \
+          NIDO_API_RELEASE_INPUT_SCOPE=pre-release-local \
+          NIDO_API_RELEASE_IMAGE="$image" bash tests/nido-api-release-isolation.sh
+      - name: Upload native local API contract evidence
+        if: always() && matrix.go == '1.27.2'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nido-api-pre-release-${{ matrix.go }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nido-api-pre-release
+          if-no-files-found: warn
+          retention-days: 14
 
   public-audit:
     runs-on: ubuntu-24.04

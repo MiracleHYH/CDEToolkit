@@ -71,8 +71,8 @@ case "$root" in *'
 if [ "$version" != latest ]; then
     stable_version "$version" || fail 'version must be X.Y.Z or latest'
 fi
-case "$(uname -s)" in Linux) os=linux ;; Darwin) os=darwin ;; *) fail 'supported systems: Linux and macOS' ;; esac
-case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) fail 'supported architectures: amd64 and arm64' ;; esac
+case "$(uname -s)" in Linux) os=linux ;; *) fail 'supported platform: Linux amd64 only' ;; esac
+case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; *) fail 'supported platform: Linux amd64 only' ;; esac
 
 asset=nido-$os-$arch.tar.gz
 base=https://github.com/MiracleHYH/CDEToolkit/releases

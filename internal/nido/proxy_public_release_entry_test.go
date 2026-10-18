@@ -250,9 +250,9 @@ func TestProxyPublicReleaseEntryRequiresActualEvidence(t *testing.T) {
 		mode string
 		ok   bool
 	}{
-		{"pass", true}, {"previous", true}, {"socks", true},
+		{"pass", true}, {"previous", true}, {"socks", true}, {"current", true}, {"default-current", true},
 		{"wrong-os", false}, {"wrong-arch", false}, {"root-user", false},
-		{"bad-version", false}, {"bad-socks", false}, {"bad-socks-port", false},
+		{"bad-version", false}, {"bad-socks", false}, {"bad-socks-port", false}, {"bad-binding-mode", false},
 		{"checksum-mismatch", false}, {"checksum-malformed", false}, {"extra-member", false},
 		{"linked-core", false}, {"missing-input", false},
 		{"previous-package-only", false}, {"previous-version-only", false},
@@ -274,7 +274,11 @@ func TestProxyPublicReleaseEntryRequiresActualEvidence(t *testing.T) {
 			}
 			calls, _ := os.ReadFile(filepath.Join(state, "bwrap-args"))
 			if len(calls) != 0 {
-				for _, required := range []string{"--unshare-all\n", "--share-net\n", "--clearenv\n", "--cap-drop\nALL\n", "--setenv\nHOME\n/work/home\n", "--setenv\nNIDO_TEST_PROXY_RELEASE_VERSION\n0.6.0\n"} {
+				bindingMode := "legacy"
+				if test.mode == "current" || test.mode == "default-current" {
+					bindingMode = "current"
+				}
+				for _, required := range []string{"--unshare-all\n", "--share-net\n", "--clearenv\n", "--cap-drop\nALL\n", "--setenv\nHOME\n/work/home\n", "--setenv\nNIDO_TEST_PROXY_RELEASE_VERSION\n0.6.0\n", "--setenv\nNIDO_TEST_PROXY_RELEASE_BINDING_MODE\n" + bindingMode + "\n"} {
 					if !strings.Contains(string(calls), required) {
 						t.Fatalf("missing isolation flag %q: %s", required, calls)
 					}
@@ -337,7 +341,9 @@ func runProxyPublicReleaseEntryFixture(t *testing.T, mode string) (string, strin
 			t.Fatal(err)
 		}
 	}
-	for _, name := range []string{"uname", "id", "readlink", "sha256sum", "timeout", "bwrap"} {
+	// file is required only by the outer command inventory in this mock.
+	// Any attempted execution still reaches unexpected() and fails closed.
+	for _, name := range []string{"uname", "id", "readlink", "sha256sum", "timeout", "bwrap", "file"} {
 		if err := os.WriteFile(filepath.Join(bin, name), []byte(proxyPublicReleaseEntryMock), 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -439,6 +445,17 @@ func runProxyPublicReleaseEntryFixture(t *testing.T, mode string) (string, strin
 		"NIDO_TEST_PROXY_RELEASE_VERSION=" + version, "NIDO_TEST_PROXY_PREVIOUS_VERSION=" + previous,
 		"NIDO_TEST_PROXY_RELEASE_SOCKS=" + socks, "NIDO_PUBLIC_ENTRY_STATE=" + state, "NIDO_PUBLIC_ENTRY_MODE=" + mode,
 		"HTTP_PROXY=http://poison.invalid:1", "ALL_PROXY=socks5://poison.invalid:1", "NIDO_TEST_MIHOMO=/poison/never-forward",
+	}
+	// These inputs model historical v0.6.0 contracts unless a mode case
+	// explicitly checks the new default/current selection or invalid input.
+	if mode != "default-current" {
+		bindingMode := "legacy"
+		if mode == "current" {
+			bindingMode = "current"
+		} else if mode == "bad-binding-mode" {
+			bindingMode = "unsupported"
+		}
+		cmd.Env = append(cmd.Env, "NIDO_TEST_PROXY_RELEASE_BINDING_MODE="+bindingMode)
 	}
 	out, runErr := cmd.CombinedOutput()
 	if ctx.Err() != nil {

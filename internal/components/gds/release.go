@@ -56,7 +56,7 @@ func (s *Service) release(source string) (releaseInfo, error) {
 		if !stableReleaseTag.MatchString(source) {
 			return releaseInfo{}, fmt.Errorf("无效 GDS 发布标签")
 		}
-		b, err := s.get(base+"/tags/"+source, 4<<20)
+		b, err := s.getAPI(base+"/tags/"+source, 4<<20)
 		if err != nil {
 			return releaseInfo{}, err
 		}
@@ -71,7 +71,7 @@ func (s *Service) release(source string) (releaseInfo, error) {
 	var latest releaseInfo
 	seen := map[string]bool{}
 	for page := 1; page <= 10; page++ {
-		b, err := s.get(fmt.Sprintf("%s?per_page=100&page=%d", base, page), 4<<20)
+		b, err := s.getAPI(fmt.Sprintf("%s?per_page=100&page=%d", base, page), 4<<20)
 		if err != nil {
 			return releaseInfo{}, err
 		}
@@ -215,4 +215,11 @@ func (s *Service) downloadRelease(source, supplied string) (preparedArtifact, er
 
 func (s *Service) get(source string, maximum int64) ([]byte, error) {
 	return githubdownload.Get(s.HTTP, source, maximum, s.GitHubProxy)
+}
+
+func (s *Service) getAPI(source string, maximum int64) ([]byte, error) {
+	if s.APIHTTP != nil {
+		return githubdownload.Get(s.APIHTTP, source, maximum, "direct")
+	}
+	return s.get(source, maximum)
 }

@@ -3,6 +3,8 @@ package nido
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,13 +112,18 @@ func TestMalformedSavedDownloadPolicyDoesNotBlockIndependentOperations(t *testin
 	}
 	called := 0
 	runner := func(name string, args, env []string, _ []byte) ([]byte, error) {
-		called++
-		if name != "curl" || args[len(args)-1] != codex.LatestURL {
-			t.Fatalf("Codex used GitHub acceleration: %s %v", name, args)
-		}
-		return []byte(`{"tag_name":"rust-v1.2.3"}`), nil
+		t.Fatalf("Codex metadata query invoked external command: %s %v", name, args)
+		return nil, nil
 	}
-	code, _, stderr := isolatedCLI(t, m, []string{"codex", "update", "--check", "--proxy", "http://127.0.0.1:7890"}, "", runner)
+	client := &http.Client{Transport: updateCLITransport(func(request *http.Request) (*http.Response, error) {
+		called++
+		if request.URL.String() != codex.LatestURL {
+			t.Fatalf("Codex API was rewritten: %s", request.URL)
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"tag_name":"rust-v1.2.3"}`))}, nil
+	})}
+	endpoint := enabledAPIFixture(t, m, client)
+	code, _, stderr := isolatedCLI(t, m, []string{"codex", "update", "--check", "--proxy", endpoint}, "", runner)
 	if code != 0 || called != 1 {
 		t.Fatalf("Codex was blocked by download policy: code=%d calls=%d %s", code, called, stderr)
 	}
@@ -183,6 +190,10 @@ func TestCodexIgnoresGitHubAccelerationAndUsesGeneralProxy(t *testing.T) {
 	if err := os.Mkdir(external, 0700); err != nil {
 		t.Fatal(err)
 	}
+	runtimeEnv := []byte("HTTPS_PROXY=${RUNTIME_PROXY}\nKEEP=runtime-data\n")
+	if err := os.WriteFile(filepath.Join(external, ".env"), runtimeEnv, 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := m.ConfigureCodex(func(codex.Config) (codex.Config, error) { return m.Codex.Associate(external) }); err != nil {
 		t.Fatal(err)
 	}
@@ -191,29 +202,26 @@ func TestCodexIgnoresGitHubAccelerationAndUsesGeneralProxy(t *testing.T) {
 	t.Setenv("NIDO_GITHUB_PROXY", "not-a-github-prefix")
 	called := 0
 	runner := func(name string, args, env []string, input []byte) ([]byte, error) {
-		called++
-		if name != "curl" || args[len(args)-1] != codex.LatestURL || len(input) != 0 {
-			t.Fatalf("Codex request was rewritten or executed an installer: %s %v", name, args)
-		}
-		for _, key := range []string{"http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"} {
-			found := false
-			for _, value := range env {
-				if value == key+"=http://127.0.0.1:7890" {
-					found = true
-				}
-			}
-			if !found {
-				t.Fatal("Codex lost its explicit general proxy", key)
-			}
-		}
-		return []byte(`{"tag_name":"rust-v1.2.3"}`), nil
+		t.Fatalf("Codex API query executed curl or installer: %s %v", name, args)
+		return nil, nil
 	}
-	code, _, stderr := isolatedCLI(t, m, []string{"codex", "update", "--check", "--proxy", "http://127.0.0.1:7890", "--json"}, "", runner)
+	client := &http.Client{Transport: updateCLITransport(func(request *http.Request) (*http.Response, error) {
+		called++
+		if request.URL.String() != codex.LatestURL {
+			t.Fatalf("Codex API was rewritten: %s", request.URL)
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"tag_name":"rust-v1.2.3"}`))}, nil
+	})}
+	endpoint := enabledAPIFixture(t, m, client)
+	code, _, stderr := isolatedCLI(t, m, []string{"codex", "update", "--check", "--proxy", endpoint, "--json"}, "", runner)
 	if code != 0 || called != 1 {
 		t.Fatalf("code=%d calls=%d stderr=%s", code, called, stderr)
 	}
 	if after, _ := os.ReadFile(filepath.Join(m.Root, "config.toml")); !bytes.Equal(after, before) {
 		t.Fatal("Codex version query changed configuration")
+	}
+	if after, _ := os.ReadFile(filepath.Join(external, ".env")); !bytes.Equal(after, runtimeEnv) {
+		t.Fatal("Nido API query changed Codex runtime proxy settings")
 	}
 }
 

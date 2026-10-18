@@ -3,8 +3,23 @@ set -euo pipefail
 umask 077
 version=${NIDO_ACCEPT_VERSION:?}
 old_version=${NIDO_ACCEPT_OLD_VERSION:?}
+normalize_accelerator() {
+  local origin=${1%/} host label
+  local LC_ALL=C
+  [[ $origin = https://* ]] || return 1
+  host=${origin#https://}
+  [[ ${#host} -le 253 && $host = *.* && $host =~ ^[A-Za-z0-9.-]+$ ]] || return 1
+  while :; do
+    label=${host%%.*}
+    [[ ${#label} -ge 1 && ${#label} -le 63 && $label != -* && $label != *- ]] || return 1
+    [[ $host = *.* ]] || break
+    host=${host#*.}
+  done
+  [[ $label =~ ^[A-Za-z] ]] || return 1
+  printf '%s\n' "$origin"
+}
 accelerator=${NIDO_ACCEPT_GITHUB_ACCELERATOR:-https://gh-proxy.org}
-case $accelerator in https://gh-proxy.org|https://ghfast.top) ;; *) printf 'unsupported accelerator\n' >&2; exit 2 ;; esac
+accelerator=$(normalize_accelerator "$accelerator") || { printf 'acceptance accelerator must be an HTTPS DNS origin without credentials, port, path, query or fragment\n' >&2; exit 2; }
 export NIDO_ACCEPT_GITHUB_ACCELERATOR="$accelerator"
 install_version_mode=${NIDO_ACCEPT_INSTALL_VERSION_MODE:-latest}
 case $install_version_mode in latest|tagged) ;; *) printf 'unsupported install version mode\n' >&2; exit 2 ;; esac
@@ -85,7 +100,7 @@ case $name in install.sh|"$NIDO_ACCEPT_ASSET"|"$NIDO_ACCEPT_ASSET.sha256") ;; *)
 fetched=$(mktemp "$TMPDIR/public-response.XXXXXX")
 trap 'rm -f -- "$fetched"' EXIT
 printf 'REQUEST\t%s\n' "$url" >> "$NIDO_ACCEPT_HTTP_LOG"
-/usr/bin/curl --connect-timeout 15 --max-time 180 --max-filesize 268435456 "${arguments[@]}" --output "$fetched" "$url"
+/usr/bin/curl -q --connect-timeout 15 --max-time 180 --max-filesize 268435456 "${arguments[@]}" --output "$fetched" "$url"
 cmp "$fetched" "$NIDO_ACCEPT_INPUT/new/$name" || { printf 'public bytes differ from the cosign-verified input\n' >&2; exit 95; }
 if command -v sha256sum >/dev/null; then sum=$(sha256sum "$fetched"); else sum=$(shasum -a 256 "$fetched"); fi
 printf 'VERIFIED-BEFORE-EXEC\t%s\t%s\n' "$url" "${sum%% *}" >> "$NIDO_ACCEPT_HTTP_LOG"
@@ -105,9 +120,60 @@ protect() {
   export CONDARC="$HOME/custom-conda.yaml" PIP_CONFIG_FILE="$HOME/custom-pip.conf"
   cp -R "$HOME" "$case_root/before/$name"
 }
+file_attributes() {
+  if [[ $platform = darwin/* ]]; then stat -f '%Lp:%u:%g' "$1"; else stat -c '%a:%u:%g' "$1"; fi
+}
 unchanged() {
-  local name=$1 relative
-  for relative in "${protected[@]}"; do cmp "$HOME/$relative" "$case_root/before/$name/$relative"; done
+  local name=$1 relative actual expected
+  for relative in "${protected[@]}"; do
+    cmp "$HOME/$relative" "$case_root/before/$name/$relative" || return
+    actual=$(file_attributes "$HOME/$relative") || return
+    expected=$(file_attributes "$case_root/before/$name/$relative") || return
+    [[ $actual = "$expected" ]] || return 1
+  done
+}
+update_file_attributes() {
+  local relative
+  for relative in bin/nido config.toml env.sh proxy/config.yaml gds/config.toml user-data.txt; do
+    file_attributes "$NIDO_HOME/$relative" || return
+  done
+}
+update_preserved() {
+  local actual candidates
+  cmp "$NIDO_HOME/bin/nido" "$case_root/old-nido" || return
+  cmp "$NIDO_HOME/config.toml" "$case_root/$transport-update-config-before" || return
+  cmp "$NIDO_HOME/env.sh" "$case_root/$transport-update-env-before" || return
+  printf 'INTERNAL-PROXY-SENTINEL\n' | cmp - "$NIDO_HOME/proxy/config.yaml" || return
+  printf 'INTERNAL-GDS-SENTINEL\n' | cmp - "$NIDO_HOME/gds/config.toml" || return
+  printf 'USER-DATA-SENTINEL\n' | cmp - "$NIDO_HOME/user-data.txt" || return
+  actual=$(update_file_attributes) || return
+  [[ $actual = "$update_attributes_before" ]] || return 1
+  candidates=$(find "$NIDO_HOME/bin" -name '.nido-update-*' -print) || return
+  [[ -z $candidates ]] || return 1
+  unchanged "$transport" || return
+  [[ ! -e $NIDO_ACCEPT_FORBIDDEN_LOG ]]
+}
+checked_update_operation() {
+  local operation=$1 stage=$2 status preserved=false
+  shift 2
+  if nido update "$@" > "$output/$transport-$operation.json"; then
+    return 0
+  else
+    status=$?
+  fi
+  # Record the actual failure state before cleanup, without converting this
+  # failed operation into a successful acceptance or advancing later stages.
+  if update_preserved > "$output/$transport-$operation-transfer-preservation.log" 2>&1; then preserved=true; fi
+  printf '{"stage":"%s","operation_exit":%s,"preservation_verified":%s,"complete":false}\n' \
+    "$stage" "$status" "$preserved" > "$output/$transport-$operation-transfer-failure.json"
+  printf 'actual %s failed (exit=%s); preservation verified=%s\n' "$operation" "$status" "$preserved" >&2
+  return "$status"
+}
+checked_update() {
+  checked_update_operation update actual-self-update --github-proxy "$policy" --yes --json
+}
+checked_update_check() {
+  checked_update_operation update-check actual-self-update-check --check --github-proxy "$policy" --json
 }
 fresh_components() {
   "$NIDO_HOME/bin/nido" status --json > "$output/$1-status.json"
@@ -197,20 +263,19 @@ for transport in "${transports[@]}"; do
   printf 'USER-DATA-SENTINEL\n' > "$NIDO_HOME/user-data.txt"
   cp "$NIDO_HOME/config.toml" "$case_root/$transport-update-config-before"
   cp "$NIDO_HOME/env.sh" "$case_root/$transport-update-env-before"
+  update_attributes_before=$(update_file_attributes)
   if nido update --version "$version" --github-proxy https://127.0.0.1:1 --yes > "$output/$transport-update-failure.log" 2>&1; then
     printf 'failed transport unexpectedly updated the binary\n' >&2; exit 1
   fi
-  cmp "$NIDO_HOME/bin/nido" "$case_root/old-nido"
-  cmp "$NIDO_HOME/config.toml" "$case_root/$transport-update-config-before"
-  cmp "$NIDO_HOME/env.sh" "$case_root/$transport-update-env-before"
-  nido update --check --github-proxy "$policy" --json > "$output/$transport-update-check.json"
+  update_preserved
+  checked_update_check
   grep -Eq '"current"[[:space:]]*:[[:space:]]*"'"$old_version"'"' "$output/$transport-update-check.json"
   grep -Eq '"latest"[[:space:]]*:[[:space:]]*"'"$version"'"' "$output/$transport-update-check.json"
   grep -Eq '"available"[[:space:]]*:[[:space:]]*true' "$output/$transport-update-check.json"
   # Native Go HTTP checks exact public release metadata, API SHA-256/size and
   # the archive checksum. Installer downloads on this same route have already
   # been compared with signed inputs; verify the installed program again here.
-  nido update --github-proxy "$policy" --yes --json > "$output/$transport-update.json"
+  checked_update
   assert_program
   cmp "$NIDO_HOME/config.toml" "$case_root/$transport-update-config-before"
   cmp "$NIDO_HOME/env.sh" "$case_root/$transport-update-env-before"
@@ -226,7 +291,8 @@ for transport in "${transports[@]}"; do
   cmp "$NIDO_HOME/config.toml" "$case_root/$transport-update-config-before"
   cmp "$NIDO_HOME/env.sh" "$case_root/$transport-update-env-before"
   assert_shell_activation "$transport-updated"
-  [[ -z $(find "$NIDO_HOME/bin" -name '.nido-update-*' -print) ]]
+  update_candidates=$(find "$NIDO_HOME/bin" -name '.nido-update-*' -print)
+  [[ -z $update_candidates ]]
   unchanged "$transport"
   # The public, signed upgrade result must expose the new Conda CLI. The
   # comprehensive suite supplies its own temporary HOME and fake read-only

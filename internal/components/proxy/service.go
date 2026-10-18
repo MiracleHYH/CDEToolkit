@@ -16,10 +16,13 @@ import (
 )
 
 type Service struct {
-	Root   string
-	Env    []string
-	HTTP   *http.Client
-	Runner Runner
+	Root string
+	Env  []string
+	HTTP *http.Client
+	// APIHTTP selects a separate explicit network route for official metadata.
+	// It does not change release file routing or enable accelerator fallback.
+	APIHTTP *http.Client
+	Runner  Runner
 	// GitHubProxy routes public release downloads only. Empty preserves direct
 	// operation for independently constructed components.
 	GitHubProxy string

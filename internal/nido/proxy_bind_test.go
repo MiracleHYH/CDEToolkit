@@ -133,11 +133,25 @@ func TestProxyBindCategoryAndSingleToolAreIndependent(t *testing.T) {
 		t.Fatal("later explicit category operation did not replace single-tool selection")
 	}
 	before, _ := os.ReadFile(filepath.Join(m.Root, "config.toml"))
-	if code, out, stderr := proxyCLI(t, m, r, "", "proxy", "bind", "download", "--yes", "--json"); code != 0 || !strings.Contains(out, "no_targets") {
-		t.Fatalf("empty category: %d %s %s", code, out, stderr)
+	gitBeforeDownload, _ := os.ReadFile(gitPath)
+	aiBeforeDownload, _ := os.ReadFile(filepath.Join(codexHome, ".env"))
+	call("download", "--endpoint", "arbitrary-daily")
+	bindingPath := filepath.Join(m.Root, "download-proxy.toml")
+	binding, err := os.ReadFile(bindingPath)
+	if err != nil || !bytes.Contains(binding, []byte("nido-api-proxy")) || !bytes.Contains(binding, []byte("arbitrary-daily")) {
+		t.Fatalf("download binding did not persist the selected listener: %s %v", binding, err)
+	}
+	if info, err := os.Stat(bindingPath); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("download binding is not private: %v %v", info, err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(m.Root, "config.toml")); !bytes.Equal(got, before) {
-		t.Fatal("empty download category persisted a false binding")
+		t.Fatal("download binding changed the main config schema")
+	}
+	if got, _ := os.ReadFile(gitPath); !bytes.Equal(got, gitBeforeDownload) {
+		t.Fatal("Nido API binding changed Git")
+	}
+	if got, _ := os.ReadFile(filepath.Join(codexHome, ".env")); !bytes.Equal(got, aiBeforeDownload) {
+		t.Fatal("Nido API binding changed Codex")
 	}
 	call("--tool", "git", "--proxy", "off")
 	if got, _ := os.ReadFile(gitPath); string(got) != "[user]\n\tname = Fixture User\n" {

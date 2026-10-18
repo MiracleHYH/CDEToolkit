@@ -1,6 +1,8 @@
 # Nido v0.8.1：Conda 镜像合并修复
 
-[v0.8.1](https://github.com/MiracleHYH/CDEToolkit/releases/tag/v0.8.1) 已于 2026-10-18 发布。**本次使用与执行验收目标仅为 Linux amd64**，不在 macOS 安装。正式资产与签名、固定旧上游 normal/strict 及 gh-proxy.org 固定版本全套验收均通过。官方直链首装通过，但重复安装和真实自更新受本轮出口网络阻断，**公网双链整体验收未通过**。没有部署到 Zenith-Dev 或其他真实机器，没有切换真实镜像、调整真实路径或迁移数据。
+[v0.8.1](https://github.com/MiracleHYH/CDEToolkit/releases/tag/v0.8.1) 已于 2026-10-18 发布。**本次使用与执行验收目标仅为 Linux amd64**，不在 macOS 安装。正式资产与签名、固定旧上游 normal/strict 及 gh-proxy.org 固定版本全套验收均通过。发行当轮官方直链首装通过，重复安装和真实自更新发生传输阶段错误，**公网双链整体验收未通过**。没有部署到 Zenith-Dev 或其他真实机器，没有切换真实镜像、调整真实路径或迁移数据。
+
+后续 [Linux amd64 网络复查](nido-v0.8.1-network-recheck.md) 已补齐当前时段的直链重复安装，真实旧包自更新仍因 archive 响应不完整失败，且核实了此次失败后的文件保护；没有重写以下历史失败记录。诊断源码修复尚未发布。
 
 ## 修复内容
 

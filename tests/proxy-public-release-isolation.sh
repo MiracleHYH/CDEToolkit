@@ -8,10 +8,12 @@ set -euo pipefail
 inputs="${NIDO_TEST_PROXY_RELEASE_INPUTS:?provide a verified public fixture directory}"
 output="${NIDO_TEST_PROXY_RELEASE_OUTPUT:?provide a new evidence directory}"
 version="${NIDO_TEST_PROXY_RELEASE_VERSION:?provide the exact stable release version}"
+binding_mode="${NIDO_TEST_PROXY_RELEASE_BINDING_MODE:-current}"
 previous="${NIDO_TEST_PROXY_PREVIOUS_VERSION:-}"
 socks="${NIDO_TEST_PROXY_RELEASE_SOCKS:-}"
 stable='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
 [[ "$version" =~ $stable ]] || { printf '版本必须是稳定 X.Y.Z\n' >&2; exit 2; }
+[[ "$binding_mode" == current || "$binding_mode" == legacy ]] || { printf '绑定验收模式必须为 current 或 legacy\n' >&2; exit 2; }
 [[ "$inputs" == /* && -d "$inputs" && ! -L "$inputs" ]] || exit 2
 [[ "$output" == /* && ! -e "$output" && ! -L "$output" ]] || { printf '证据目录必须为不存在的绝对路径\n' >&2; exit 2; }
 if [[ -n "$socks" ]]; then
@@ -62,13 +64,14 @@ trap 'exit 143' TERM
 mkdir "$scratch/inputs" "$scratch/work"
 for name in "${names[@]}"; do cp -- "$inputs/$name" "$scratch/inputs/$name"; done
 (cd "$scratch/inputs" && sha256sum ./*) > "$output/inputs.sha256"
-printf 'host_uid=%s\nhost_kernel=%s\nhost_machine=%s\nnido_version=%s\nprevious_version=%s\nnetwork=shared; genuine HTTPS downloads only\nprivate_home=true\nreal_mihomo=false\n' "$(id -u)" "$(uname -r)" "$(uname -m)" "$version" "${previous:-not-requested}" > "$output/environment.txt"
+printf 'host_uid=%s\nhost_kernel=%s\nhost_machine=%s\nnido_version=%s\nprevious_version=%s\nbinding_mode=%s\nnetwork=shared; genuine HTTPS downloads only\nprivate_home=true\nreal_mihomo=false\n' "$(id -u)" "$(uname -r)" "$(uname -m)" "$version" "${previous:-not-requested}" "$binding_mode" > "$output/environment.txt"
 
 cat > "$scratch/runner.sh" <<'INNER'
 #!/usr/bin/env bash
 set -euo pipefail
 umask 077
 [[ "$(id -u)" != 0 && "$(uname -m)" == x86_64 ]] || exit 1
+[[ "$NIDO_TEST_PROXY_RELEASE_BINDING_MODE" == current || "$NIDO_TEST_PROXY_RELEASE_BINDING_MODE" == legacy ]] || exit 1
 [[ ! -e /sys && ! -e /run && ! -e /home && ! -e /root && ! -e /dev/nvidiactl && ! -e /dev/dri ]] || exit 1
 mkdir -p /work/evidence /work/guard "$HOME/.codex/sessions" "$HOME/.config/mihomo" /work/before /work/package
 printf 'namespace_uid=%s\n' "$(id -u)" > /work/evidence/namespace.txt
@@ -207,7 +210,7 @@ if [[ -n "$NIDO_TEST_PROXY_PREVIOUS_VERSION" ]]; then
   upgrade=true
 fi
 [[ "$(wc -l < /work/evidence/public-downloads.log)" == "$downloads" ]] || exit 1
-bash /inputs/proxy-quickstart-cli-isolation.sh "$root/bin/nido" /inputs/fake-mihomo > /work/evidence/quickstart-cli.log 2>&1
+bash /inputs/proxy-quickstart-cli-isolation.sh "$root/bin/nido" /inputs/fake-mihomo "$NIDO_TEST_PROXY_RELEASE_BINDING_MODE" > /work/evidence/quickstart-cli.log 2>&1
 grep -Fxq 'Proxy quick start CLI 隔离验证通过' /work/evidence/quickstart-cli.log
 preserved
 for entry in /proc/[0-9]*/exe; do
@@ -229,6 +232,7 @@ flags=(--unshare-all --share-net --die-with-parent --new-session --clearenv --ca
   --setenv HOME /work/home --setenv TMPDIR /tmp --setenv PATH /work/guard:/test-bin:/usr/bin:/bin
   --setenv LANG C --setenv LC_ALL C --setenv TZ UTC
   --setenv NIDO_TEST_PROXY_RELEASE_VERSION "$version"
+  --setenv NIDO_TEST_PROXY_RELEASE_BINDING_MODE "$binding_mode"
   --setenv NIDO_TEST_PROXY_PREVIOUS_VERSION "$previous"
   --setenv NIDO_TEST_PROXY_RELEASE_SOCKS "$socks")
 timeout --kill-after=5s 30m bwrap "${flags[@]}" /bin/bash /runner.sh 2>&1 | tee "$output/run.log"

@@ -65,6 +65,9 @@ func checkBinary(data []byte, platform string) error {
 	if settings["GOOS"]+"/"+settings["GOARCH"] != platform || settings["CGO_ENABLED"] != "0" {
 		return fmt.Errorf("Nido 发布程序的平台或静态构建参数不符")
 	}
+	if platform == "linux/amd64" && settings["GOAMD64"] != "v1" {
+		return fmt.Errorf("Nido 发布程序必须使用 GOAMD64=v1 基线")
+	}
 	return nil
 }
 

@@ -163,6 +163,9 @@ func TestSelfUpdateCLIWithIsolatedPublicRelease(t *testing.T) {
 			if tc.explicit {
 				o.version = "0.6.0"
 			}
+			if !tc.dry && (!tc.explicit || tc.current != o.version) {
+				o.proxy = enabledAPIFixture(t, m, client)
+			}
 			code := c.update(m, o, nil)
 			if (code != 0) != tc.wantFailure || len(*calls) != tc.wantCalls {
 				t.Fatalf("code=%d calls=%v out=%q err=%q", code, *calls, out.String(), stderr.String())
@@ -518,7 +521,8 @@ func TestSelfUpdateCLIPinsConfirmedReleaseVersion(t *testing.T) {
 			})
 			var out, stderr bytes.Buffer
 			c := CLI{Out: &out, Err: &stderr, UpdateHTTP: client}
-			code := c.update(m, cliOptions{yes: true, json: true, githubProxy: "direct"}, nil)
+			proxyAddress := enabledAPIFixture(t, m, client)
+			code := c.update(m, cliOptions{yes: true, json: true, githubProxy: "direct", proxy: proxyAddress}, nil)
 			if (code != 0) != drift {
 				t.Fatalf("unexpected result %d %s %s", code, out.String(), stderr.String())
 			}

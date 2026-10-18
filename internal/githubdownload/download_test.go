@@ -2,15 +2,19 @@ package githubdownload
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -310,5 +314,185 @@ func TestGetRedirectLoopAndSlowResponseRemainBounded(t *testing.T) {
 	start := time.Now()
 	if _, err := Get(client, "https://github.com/start", 32, "direct"); err == nil || time.Since(start) > time.Second {
 		t.Fatalf("caller timeout ignored: %v", err)
+	}
+}
+
+type failingReader struct{ err error }
+
+func (r failingReader) Read([]byte) (int, error) { return 0, r.err }
+
+type diagnosticNetError struct{ timeout bool }
+
+func (e diagnosticNetError) Error() string   { return "credential-sentinel" }
+func (e diagnosticNetError) Timeout() bool   { return e.timeout }
+func (e diagnosticNetError) Temporary() bool { return false }
+
+func TestTransportFailuresClassifyAndRedactWithoutLosingCause(t *testing.T) {
+	for _, tc := range []struct {
+		name, category string
+		cause          error
+	}{
+		{"dns", "DNS 解析失败", &net.DNSError{Err: "credential-sentinel", Name: "signed-url-sentinel", IsNotFound: true}},
+		{"dns-timeout", "DNS 解析超时", &net.DNSError{Err: "credential-sentinel", Name: "signed-url-sentinel", IsTimeout: true}},
+		{"deadline", "超时", context.DeadlineExceeded},
+		{"network-deadline", "超时", &net.OpError{Op: "credential-sentinel", Net: "tcp", Err: context.DeadlineExceeded}},
+		{"network-timeout", "超时", diagnosticNetError{timeout: true}},
+		{"wrapped-network-timeout", "超时", &net.OpError{Op: "dial", Net: "tcp", Err: fmt.Errorf("credential-sentinel: %w", diagnosticNetError{timeout: true})}},
+		{"joined-network-timeout", "超时", errors.Join(errors.New("credential-sentinel"), diagnosticNetError{timeout: true})},
+		{"network-non-timeout", "其他传输错误", diagnosticNetError{timeout: false}},
+		{"cancelled", "请求已取消", context.Canceled},
+		{"tls-verification", "TLS 失败", &tls.CertificateVerificationError{Err: errors.New("credential-sentinel")}},
+		{"tls-authority", "TLS 失败", x509.UnknownAuthorityError{Cert: &x509.Certificate{}}},
+		{"tls-hostname", "TLS 失败", x509.HostnameError{Certificate: &x509.Certificate{}, Host: "credential-sentinel"}},
+		{"tls-record", "TLS 失败", tls.RecordHeaderError{Msg: "credential-sentinel"}},
+		{"tls-alert", "TLS 失败", tls.AlertError(40)},
+		{"empty-response", "连接中断", io.EOF},
+		{"truncated-response", "连接中断", io.ErrUnexpectedEOF},
+		{"closed-connection", "连接中断", net.ErrClosed},
+		{"reset-connection", "连接中断", &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}},
+		{"refused-connection", "连接失败", &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}},
+		{"unrecognized", "其他传输错误", errors.New("tls: DNS timeout credential-sentinel")},
+	} {
+		for _, phase := range []string{"request", "body"} {
+			t.Run(tc.name+"/"+phase, func(t *testing.T) {
+				// Both the transport message and URL would leak secrets if the
+				// cause were formatted, including through net/http's own wrapper.
+				sensitive := &url.Error{Op: "Get", URL: "https://credential-sentinel:proxy-password@proxy.invalid/asset?token=token-sentinel&jwt=signed-url-sentinel", Err: fmt.Errorf("credential-sentinel: %w", tc.cause)}
+				client := &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+					if phase == "request" {
+						return nil, sensitive
+					}
+					resp := response(r, 200, "")
+					resp.ContentLength = -1
+					resp.Body = io.NopCloser(io.MultiReader(strings.NewReader("partial"), failingReader{sensitive}))
+					return resp, nil
+				})}
+				b, err := Get(client, "https://github.com/example/tool/asset?jwt=signed-url-sentinel", 64, "direct")
+				prefix := "GitHub 下载请求失败"
+				if phase == "body" {
+					prefix = "GitHub 下载响应不完整"
+				}
+				if err == nil || err.Error() != prefix+"（"+tc.category+"）" || b != nil {
+					t.Fatalf("unexpected public error or partial bytes: %q %v", b, err)
+				}
+				var failure *downloadFailure
+				var urlFailure *url.Error
+				if !errors.As(err, &failure) || !failure.retry || !errors.As(err, &urlFailure) || !errors.Is(err, sensitive) || !errors.Is(err, tc.cause) {
+					t.Fatal("lost original retry semantics or inspectable cause")
+				}
+				for _, formatted := range []string{err.Error(), fmt.Sprintf("%v", err), fmt.Sprintf("%+v", err), fmt.Errorf("update failed: %w", err).Error()} {
+					for _, secret := range []string{"credential-sentinel", "proxy-password", "token-sentinel", "signed-url-sentinel", "proxy.invalid", "https://"} {
+						if strings.Contains(formatted, secret) {
+							t.Fatal("public transport diagnostic exposed its cause")
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestTransportFailureFallbackPolicyIsUnchanged(t *testing.T) {
+	for _, phase := range []string{"request", "body"} {
+		for _, policy := range []string{"direct", "auto", "https://custom.invalid/prefix"} {
+			t.Run(phase+"/"+policy, func(t *testing.T) {
+				var calls []string
+				client := &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+					calls = append(calls, r.URL.String())
+					if len(calls) > 1 {
+						return response(r, 200, "recovered"), nil
+					}
+					if phase == "request" {
+						return nil, io.EOF
+					}
+					resp := response(r, 200, "")
+					resp.ContentLength = -1
+					resp.Body = io.NopCloser(failingReader{io.ErrUnexpectedEOF})
+					return resp, nil
+				})}
+				source := "https://api.github.com/repos/example/tool/releases/latest"
+				b, err := Get(client, source, 32, policy)
+				want := []string{source}
+				switch policy {
+				case "auto":
+					want = append(want, defaultPrefix+"/"+source)
+					if err != nil || string(b) != "recovered" {
+						t.Fatalf("auto failed to recover: %q %v", b, err)
+					}
+				case "direct":
+					if err == nil || b != nil {
+						t.Fatal("direct retried or returned partial bytes")
+					}
+				default:
+					want[0] = policy + "/" + source
+					if err == nil || b != nil {
+						t.Fatal("explicit prefix retried or returned partial bytes")
+					}
+				}
+				if !reflect.DeepEqual(calls, want) {
+					t.Fatalf("download routes changed: %v", calls)
+				}
+			})
+		}
+	}
+}
+
+func TestResponseLengthMismatchRemainsRetryableAndInspectable(t *testing.T) {
+	client := &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+		resp := response(r, 200, "short")
+		resp.ContentLength = 10
+		return resp, nil
+	})}
+	b, err := Get(client, "https://github.com/example/tool/asset", 32, "direct")
+	var failure *downloadFailure
+	if b != nil || !errors.As(err, &failure) || !failure.retry || !errors.Is(err, io.ErrUnexpectedEOF) || err.Error() != "GitHub 下载响应不完整（连接中断）" {
+		t.Fatalf("length mismatch accepted or changed retry semantics: %q %v", b, err)
+	}
+}
+
+func TestLocalTLSHTTP1AndHTTP2CompleteAndTruncatedResponses(t *testing.T) {
+	for _, http2 := range []bool{false, true} {
+		for _, truncated := range []bool{false, true} {
+			t.Run(fmt.Sprintf("http2=%t/truncated=%t", http2, truncated), func(t *testing.T) {
+				protocol := make(chan int, 1)
+				server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					protocol <- r.ProtoMajor
+					length := len("fixture")
+					if truncated {
+						length++
+					}
+					w.Header().Set("Content-Length", fmt.Sprint(length))
+					fmt.Fprint(w, "fixture")
+				}))
+				server.EnableHTTP2 = http2
+				server.StartTLS()
+				defer server.Close()
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				b, err := fetch(ctx, server.Client(), server.URL, 32, 0)
+				wantProtocol := 1
+				if http2 {
+					wantProtocol = 2
+				}
+				select {
+				case got := <-protocol:
+					if got != wantProtocol {
+						t.Fatalf("TLS fixture did not negotiate HTTP/%d: %d", wantProtocol, got)
+					}
+				default:
+					t.Fatal("TLS fixture was not reached")
+				}
+				if !truncated {
+					if err != nil || string(b) != "fixture" {
+						t.Fatalf("complete TLS response failed: %q %v", b, err)
+					}
+					return
+				}
+				var failure *downloadFailure
+				if b != nil || !errors.As(err, &failure) || !failure.retry || !errors.Is(err, io.ErrUnexpectedEOF) || err.Error() != "GitHub 下载响应不完整（连接中断）" {
+					t.Fatalf("truncated TLS response accepted or misclassified: %q %v", b, err)
+				}
+			})
+		}
 	}
 }

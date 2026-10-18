@@ -30,7 +30,7 @@ func (c *CLI) proxy(m *Manager, o cliOptions, args []string) int {
 		args = args[1:]
 	}
 	fail := func(err error) int { return c.proxyError(o, err) }
-	if o.githubProxy != "" && (action != "install" && action != "update" || o.artifact != "") {
+	if o.githubProxy != "" && (action != "install" && action != "update" || o.artifact != "" && o.artifact != "latest") {
 		return fail(fmt.Errorf("--github-proxy 仅用于在线安装、更新或版本查询"))
 	}
 	if action == "bind" {
@@ -54,7 +54,7 @@ func (c *CLI) proxy(m *Manager, o cliOptions, args []string) int {
 	if o.check && (o.artifact != "" || o.checksum != "") {
 		return fail(fmt.Errorf("版本查询不接受程序包选项"))
 	}
-	if (action == "install" || action == "update") && o.artifact == "" {
+	if (action == "install" || action == "update") && (o.artifact == "" || o.artifact == "latest") {
 		policy, err := m.githubPolicy(o.githubProxy)
 		if err != nil {
 			return fail(err)
@@ -184,6 +184,13 @@ func (c *CLI) proxy(m *Manager, o cliOptions, args []string) int {
 			return fail(err)
 		}
 		return c.output(o, map[string]string{"component": "proxy", "operation": action, "detail": "静态预检通过；核心验证和远端版本尚未查询，未写入或启动"})
+	}
+	if (action == "install" || action == "update") && (o.artifact == "" || o.artifact == "latest") {
+		var err error
+		m.Proxy.APIHTTP, err = m.downloadAPIClient(o.proxy)
+		if err != nil {
+			return fail(err)
+		}
 	}
 	if action == "update" && o.check {
 		info, err := m.Proxy.CheckUpdate()

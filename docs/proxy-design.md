@@ -86,9 +86,17 @@ HTTP/file provider 必须显式设置组件根内的相对 `path`，inline provi
 
 核心验证结果不持久化成容易失真的健康布尔值。`probe --endpoint NAME --url URL` 才显式通过已就绪端点测试指定 HTTP/HTTPS 目标，无名称时要求唯一，不跟随重定向。探测绑定同一进程记录快照，响应后复核配置、程序、内核身份和全部代理监听，变化时拒绝报告成功。检查与连接之间没有 OS socket 租约，不能保证已发送的请求绝不遇到替换监听；结果也不能证明所有远端可用。
 
-`proxy bind` 在 Nido 组合层逐类独立选择，`bind ai|daily|download` 只配置一类，`bind --tool codex|git` 只配置单工具。AI 当前包括 Codex，日常包括 Git，下载没有对象并返回 `no_targets`。每次类别选择一次应用到类别内全部工具，后续显式单工具或类别操作生效，没有后台继承或自动端口同步。Proxy 组件不依赖工具集成；各集成负责自身文件和归属规则。
+`proxy bind` 在 Nido 组合层逐类独立选择，`bind ai|daily|download` 只配置一类，`bind --tool codex|git|nido` 只配置单工具。AI 当前包括 Codex，日常包括 Git。**尚未发布的源码**将下载类别用于 Nido 内部 GitHub API，`--tool nido` 等同；v0.8.1 及此前版本的该类别仍返回 `no_targets`。Codex/Git 类别选择应用到类别内工具，后续显式操作生效；没有后台改写工具配置。Proxy 组件不依赖工具集成，API 绑定由 Nido 组合层负责。
 
-菜单列出可用 listener，始终提供自定义、保持现状和移除受管配置。无核心、配置不可读或没有 listener 时仍可使用自定义 `protocol://[username:password@]host:port`，支持 HTTP/HTTPS/SOCKS5/SOCKS5H。显式 `--endpoint NAME` 或 `--proxy URL|off` 可与 `--yes` 做非交互配置，互斥且必须指定类别或工具；`--dry-run` 只预检。自定义及输出不做脱敏，不自动启动 Proxy。
+Codex/Git 菜单列出可用 listener，始终提供自定义、保持现状和移除受管配置。无核心、配置不可读或没有 listener 时仍可使用自定义 `protocol://[username:password@]host:port`，支持 HTTP/HTTPS/SOCKS5/SOCKS5H。显式 `--endpoint NAME` 或 `--proxy URL|off` 可与 `--yes` 做非交互配置，互斥且必须指定类别或工具；`--dry-run` 只预检。自定义及输出不做脱敏，不自动启动 Proxy。
+
+Nido API 菜单仅接受具名、无认证 listener，支持保持现状和移除，不保存自定义 URL 或凭据。`proxy bind download --endpoint NAME --yes` 可非交互绑定，`--proxy off` 清空绑定。软件根中的独立 `download-proxy.toml` 权限为 `0600`，内容为 `schema = 1`、`product = "nido-api-proxy"`、`listener = "名称"`；主 `config.toml` schema 不变，旧版会忽略并保留该 sidecar。归属、权限、路径或内容冲突时拒绝覆盖，移除不会删除未知文件。
+
+未绑定时 API 功能禁用：没有 sidecar 或 listener 为空均属于正常 `disabled` 状态。Nido 自身、Proxy、GDS 中依赖 GitHub API 的版本查询、在线安装或更新，在任何网络请求、候选执行、确认和写入前明确提示未启用；Nido 主动查询 Codex 版本的 API 同样受开关约束。显式 `--proxy`、`--github-proxy`、HTTP(S)_PROXY 等代理变量和文件前缀均不能替代绑定。已有有效非空绑定后，`--proxy` 才可作为本次临时覆盖。
+
+使用持久绑定时，每次内部 GitHub API 联网操作重新解析名称、端口及当前配置，并核验受管进程和 listener 就绪；保存的名称不会变成过时的固定 URL。API 使用官方 URL 经该 listener 传输，绕过文件加速前缀；checksum、archive 等资产继续采用原 GitHub 下载策略。listener 被删除、改为认证、服务停止或配置修改后未重启时明确失败，不直连、不套用文件前缀、不隐式启停服务。本地 artifact、dry-run、普通只读和无需 API 的同版本操作不受 API 禁用或坏绑定阻断。
+
+此绑定只作用于 Nido 发起的上述 API，不导出代理环境，不改变 Codex 官方安装/更新脚本的独立代理及程序运行网络、Git、Conda/pip 或用户自行发起的 curl 等请求。`codex update --check` 未绑定时明确失败；普通 `codex update` 未绑定时跳过可选 API 预查询，官方脚本仍按原有代理和确认流程执行。用户显式 `proxy probe --url` 属独立诊断，不纳入 API 开关。文件自举 `install.sh` 不依赖 API，不受未绑定限制。`download show --json` 提供 `api_state`、`api_listener`、`api_proxy` 供静态查看；`api_state` 为 `disabled` 或 `configured`，未绑定时名称和地址为空，`configured` 不表示运行或网络就绪。普通 status/doctor 不联网，未绑定不计作 doctor 故障。最新禁用规则属于未发布源码，已通过包括 224 个禁用场景的 Linux amd64 隔离验收；验收范围、首次安装 Proxy 的 API 依赖及更新自身的停机边界见[自举方案](nido-proxy-bootstrap.md)。
 
 Codex 写入已关联 HOME 的受管 `.env` 块，旧 `nido codex proxy builtin` 同样只从 listeners 选择并始终支持自定义；唯一无认证 listener 可在 `--yes` 下直接采用，多候选需交互或改用明确的绑定命令。确认后写入前及写入后复核所选端点与配置摘要；变化时拒绝提交归属记录，并只撤销本次可证明未被并发修改的代理块。
 
@@ -116,7 +124,7 @@ Linux `/proc/exe` 的删除标记作为映像变化状态保留，报告 unknown
 
 安装来源为 Mihomo 官方稳定发布或用户提供的本地独立程序/gzip 包。在线获取检查稳定发布身份、平台资产、大小、SHA-256、解压大小和程序格式；候选版本来自 `mihomo -v`，在线候选须与发布 tag 一致。ELF 的动态段、动态节及字符串表必须指向相同的可加载字节，拒绝内嵌 audit/filter 加载扩展；Mach-O 拒绝内嵌动态加载器环境命令。系统库目录本身及其子路径可用于依赖检查，外部目录和非规范路径被拒绝。格式与摘要检查不等于签名验证，也不能隔离恶意程序。
 
-`update --check` 显式执行本地版本查询并联网获取最新发布，按稳定语义版本数值比较，较旧发布不能被当作可用更新；无法比较的开发版本明确报错。不改变组件；普通 status 不执行这一步。下载使用标准代理环境或本次 `--proxy`，不自动启动代理。
+`update --check` 需要先启用内部 API；未绑定时明确提示并停止。启用后执行本地版本查询并联网获取最新发布，按稳定语义版本数值比较，较旧发布不能被当作可用更新；无法比较的开发版本明确报错。不改变组件；普通 status 不执行这一步。新源码的 GitHub API 使用已绑定 listener，资产保持原文件策略；已有有效非空绑定后可用本次 `--proxy` 临时覆盖，不自动启动代理。
 
 实际更新统一要求停止状态：准备私有临时程序 → 检查格式与版本 → 使用候选检查现有配置 → 复核目录、程序、配置和候选快照 → 原子替换。准备或验证失败不覆盖原程序；成功后仍停止，随后由用户显式 start。没有版本仓库和 rollback 命令。
 
@@ -156,9 +164,12 @@ Nido 不调用 `/upgrade`。官方热更新会管理自身工作目录、覆盖�
 ```sh
 NIDO_TEST_PROXY_RELEASE_INPUTS=/absolute/verified-public-inputs \
 NIDO_TEST_PROXY_RELEASE_VERSION=0.6.0 \
+NIDO_TEST_PROXY_RELEASE_BINDING_MODE=legacy \
 NIDO_TEST_PROXY_RELEASE_OUTPUT=/absolute/new-evidence-directory \
 bash tests/proxy-public-release-isolation.sh
 ```
+
+`NIDO_TEST_PROXY_RELEASE_BINDING_MODE` 默认为 `current`，检查新源码的持久 API 绑定；验收 v0.8.1 及此前历史包时须像上例明确选择 `legacy`，保留其 `no_targets` 契约。入口不根据运行失败自动降级，两种模式均写入本轮环境证据。
 
 可选输入 `nido-previous.tar.gz` 与 `NIDO_TEST_PROXY_PREVIOUS_VERSION=0.5.0` 必须同时提供；旧包同样应先独立核验大小与摘要。入口只流提取其中唯一的 `nido` 成员，在临时旧根初始化后添加配置注释与未知文件，再验证公网升级逐字节保留配置、环境文件与未知数据。需要出网代理时，只接受为本轮测试创建的 `NIDO_TEST_PROXY_RELEASE_SOCKS=socks5h://127.0.0.1:PORT`，不继承用户代理环境。
 

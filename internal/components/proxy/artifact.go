@@ -89,7 +89,11 @@ func (m *Service) release() (releaseInfo, error) {
 	if api == "" {
 		api = "https://api.github.com"
 	}
-	b, err := m.get(strings.TrimRight(api, "/")+"/repos/MetaCubeX/mihomo/releases/latest", 4<<20)
+	client, policy := m.HTTP, m.GitHubProxy
+	if m.APIHTTP != nil {
+		client, policy = m.APIHTTP, "direct"
+	}
+	b, err := githubdownload.Get(client, strings.TrimRight(api, "/")+"/repos/MetaCubeX/mihomo/releases/latest", 4<<20, policy)
 	if err != nil {
 		return releaseInfo{}, err
 	}

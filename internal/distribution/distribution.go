@@ -21,7 +21,7 @@ import (
 
 const maxBinary = 512 << 20
 
-var Platforms = []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"}
+var Platforms = []string{"linux/amd64"}
 var stableVersion = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 
 func Version(path string) (string, error) {
@@ -67,6 +67,9 @@ func checkBinary(data []byte, version, platform string) error {
 	}
 	if settings["GOOS"]+"/"+settings["GOARCH"] != platform || settings["CGO_ENABLED"] != "0" {
 		return fmt.Errorf("程序平台或静态构建参数与发布目标不符")
+	}
+	if settings["GOAMD64"] != "v1" {
+		return fmt.Errorf("Linux amd64 发布程序必须使用 GOAMD64=v1 基线")
 	}
 	// Go omits linker flags from build info with -trimpath. Smoke verifies
 	// the reported version on a native runner; all targets use the same flags.

@@ -139,10 +139,18 @@ FIXTURE
 chmod 0755 "$NIDO_TEST_ROOT/forbidden/curl"
 "$root/bin/nido" --root "$root" codex update --dry-run > "$NIDO_TEST_ROOT/update-preview.log"
 [[ ! -e "$NIDO_FIXTURE_CURL_LOG" ]]
-"$root/bin/nido" --root "$root" codex update --check --json > "$NIDO_TEST_ROOT/versions.json"
-/usr/bin/grep -Fq '1.0.0' "$NIDO_TEST_ROOT/versions.json"
-/usr/bin/grep -Fq '2.0.0' "$NIDO_TEST_ROOT/versions.json"
+if "$root/bin/nido" --root "$root" codex update --check --json > "$NIDO_TEST_ROOT/versions.json" 2> "$NIDO_TEST_ROOT/api-disabled.err"; then
+  printf 'Unconfigured Nido API feature unexpectedly enabled\n' >&2
+  exit 1
+fi
+/usr/bin/grep -Fq 'API 功能未启用' "$NIDO_TEST_ROOT/api-disabled.err"
+[[ ! -e "$NIDO_FIXTURE_CURL_LOG" ]]
 "$root/bin/nido" --root "$root" codex update --yes > "$NIDO_TEST_ROOT/update.log"
+if /usr/bin/grep -Fq 'api.github.com' "$NIDO_FIXTURE_CURL_LOG"; then
+  printf 'Optional Codex API query ran without an API binding\n' >&2
+  exit 1
+fi
+/usr/bin/grep -Fq 'https://chatgpt.com/codex/install.sh' "$NIDO_FIXTURE_CURL_LOG"
 "$HOME/.local/bin/codex" --version > "$NIDO_TEST_ROOT/updated-version.log"
 /usr/bin/grep -Fxq 'codex-cli 2.0.0' "$NIDO_TEST_ROOT/updated-version.log"
 "$root/bin/nido" --root "$root" codex detach --yes > "$NIDO_TEST_ROOT/detach.log"

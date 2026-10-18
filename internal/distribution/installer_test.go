@@ -2,6 +2,7 @@ package distribution
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -41,6 +42,9 @@ func TestInstallerPublishesOnlyReviewedPOSIXSource(t *testing.T) {
 }
 
 func TestPOSIXInstallerWithIsolatedReleaseAndHomes(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("installer execution is supported only in isolated Linux amd64")
+	}
 	repo, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
@@ -48,11 +52,19 @@ func TestPOSIXInstallerWithIsolatedReleaseAndHomes(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "nido")
 	goTool := filepath.Join(runtime.GOROOT(), "bin", "go")
 	cmd := exec.Command(goTool, "build", "-trimpath", "-buildvcs=false", "-ldflags=-X=github.com/MiracleHYH/CDEToolkit/internal/nido.Version=1.2.3", "-o", binary, "./cmd/nido")
-	cmd.Dir, cmd.Env = repo, append(os.Environ(), "CGO_ENABLED=0", "GOOS="+runtime.GOOS, "GOARCH="+runtime.GOARCH)
+	cmd.Dir, cmd.Env = repo, append(os.Environ(), "CGO_ENABLED=0", "GOOS="+runtime.GOOS, "GOARCH="+runtime.GOARCH, "GOAMD64=v1")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build isolated native CLI: %v: %s", err, out)
 	}
 	platform := runtime.GOOS + "/" + runtime.GOARCH
+	data, err := os.ReadFile(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	elevatedBaseline := bytes.ReplaceAll(data, []byte("GOAMD64=v1"), []byte("GOAMD64=v3"))
+	if bytes.Equal(data, elevatedBaseline) || checkBinary(elevatedBaseline, "1.2.3", platform) == nil {
+		t.Fatal("release validation accepted a raised AMD64 CPU baseline")
+	}
 	asset, _ := assetName(platform)
 	packedRoot, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {

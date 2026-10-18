@@ -7,11 +7,11 @@ VERSION := $(shell cat VERSION)
 GDS_VERSION := $(shell cat GDS_VERSION)
 BINARY = build/$(TARGET_OS)-$(TARGET_ARCH)/nido
 PACKAGE = dist/nido-$(TARGET_OS)-$(TARGET_ARCH).tar.gz
-RELEASE_PLATFORMS = linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
+RELEASE_PLATFORMS = linux/amd64
 
-.PHONY: build test fmt-check check dist smoke release verify-release release-check gds-release gds-release-check gds-verify-release check-gds check-gds-linux-native check-gds-legacy build-gds check-proxy-real check-proxy-linux check-proxy-linux-race check-proxy-linux-native check-proxy-quickstart-linux-native check-proxy-quickstart-real-linux check-proxy-public-release check-nido-public-release
+.PHONY: build test fmt-check check dist smoke release verify-release release-check gds-release gds-release-check gds-verify-release check-gds check-gds-linux-native check-gds-legacy build-gds check-proxy-real check-proxy-linux check-proxy-linux-race check-proxy-linux-native check-proxy-quickstart-linux-native check-proxy-quickstart-real-linux check-proxy-public-release check-nido-public-release check-nido-proxy-bootstrap nido-api-release-isolation
 build:
-	CGO_ENABLED=0 GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) "$(GO)" build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w -X=github.com/MiracleHYH/CDEToolkit/internal/nido.Version=$(VERSION)' -o "$(BINARY)" ./cmd/nido
+	CGO_ENABLED=0 GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) GOAMD64=v1 "$(GO)" build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w -X=github.com/MiracleHYH/CDEToolkit/internal/nido.Version=$(VERSION)' -o "$(BINARY)" ./cmd/nido
 
 # Each release package contains only nido, never user data or legacy scripts.
 dist: build
@@ -25,7 +25,7 @@ test:
 	"$(GO)" test ./...
 
 fmt-check:
-	@nido_unformatted=$$("$(shell "$(GO)" env GOROOT)/bin/gofmt" -l cmd internal tests/fixtures/proxy-core); test -z "$$nido_unformatted" || { printf 'gofmt required:\n%s\n' "$$nido_unformatted"; exit 1; }
+	@nido_unformatted=$$("$(shell "$(GO)" env GOROOT)/bin/gofmt" -l cmd internal tests/fixtures/proxy-core tests/fixtures/nido-api-release); test -z "$$nido_unformatted" || { printf 'gofmt required:\n%s\n' "$$nido_unformatted"; exit 1; }
 	sh -n scripts/install.sh
 	sh -n scripts/gds-release-build.sh
 	bash -n tests/proxy-linux-isolation.sh tests/proxy-linux-bwrap.sh tests/gds-linux-native-isolation.sh tests/gds-public-release-isolation.sh
@@ -35,6 +35,8 @@ fmt-check:
 	bash -n tests/conda-p0-isolation.sh
 	sh -n tests/fixtures/conda-p0-runtime/nido-p0-strace
 	bash -n tests/nido-public-release-isolation.sh tests/nido-public-release-inner.sh
+	bash -n tests/nido-proxy-bootstrap-isolation.sh
+	bash -n tests/nido-api-release-isolation.sh tests/nido-api-release-inner.sh
 
 check: fmt-check
 	"$(GO)" vet ./...
@@ -143,3 +145,13 @@ check-proxy-public-release:
 # releases; all installation, upgrade and Conda fixtures use temporary homes.
 check-nido-public-release:
 	bash tests/nido-public-release-isolation.sh
+
+# Offline Linux amd64 API binding/gate contracts. Supply trusted prebuilt tests,
+# an existing Linux SDK, a cached Docker image and a fresh evidence directory.
+check-nido-proxy-bootstrap:
+	bash tests/nido-proxy-bootstrap-isolation.sh
+
+# Verified public Nido CLI and a separately built loopback fixture, Linux amd64
+# only. This opt-in acceptance never downloads or modifies host configuration.
+nido-api-release-isolation:
+	bash tests/nido-api-release-isolation.sh

@@ -11,6 +11,14 @@ import (
 // Codex or category configuration, and categories have no background inheritance.
 func (m *Manager) checkToolProxy(tool, endpoint string) error {
 	switch tool {
+	case "nido":
+		if _, _, err := m.readAPIProxy(); err != nil {
+			return err
+		}
+		if endpoint == "" {
+			return nil
+		}
+		return validateBindingProxy(endpoint)
 	case "codex":
 		return m.Codex.CheckProxy(m.Config.Codex, endpoint)
 	case "git":
@@ -21,6 +29,9 @@ func (m *Manager) checkToolProxy(tool, endpoint string) error {
 }
 
 func (m *Manager) configureToolProxy(tool, endpoint string, expected *proxy.Endpoint) error {
+	if tool == "nido" {
+		return m.configureAPIProxy(endpoint, expected)
+	}
 	if tool == "codex" {
 		return m.configureProxy(endpoint, false, expected)
 	}

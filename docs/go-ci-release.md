@@ -4,7 +4,9 @@ Nido: Lightweight Development Environment Manager。开发中的命令为 `nido`
 
 从 v0.3.0 起发布 Nido Go 版。历史 cdet Release 保留原状，新版使用下述包名和安装行为，不自动迁移旧版安装。
 
-v0.8.0 增加 Conda / pip 外部配置集成，随同四平台 Nido 包提供，不增加 Conda 安装包或独立组件资产。v0.8.1 已纳入完整镜像同步及按项查询修复；[新版本发行记录](conda-v0.8.1-release.md)与 [v0.8.0 历史记录](conda-release.md)分别保留。
+v0.8.2 正在准备发布，新增内部 GitHub API listener 绑定及未绑定禁用逻辑，**本版发行和执行验收仅面向 Linux amd64**。发布、签名和公网验收状态见 [v0.8.2 发行记录](nido-v0.8.2-release.md)，下述流程不是已发布声明。
+
+v0.8.0 增加 Conda / pip 外部配置集成，当时随四平台 Nido 包提供，不增加 Conda 安装包或独立组件资产；v0.8.1 纳入完整镜像同步及按项查询修复。其[发行记录](conda-v0.8.1-release.md)与 [v0.8.0 历史记录](conda-release.md)保留，不把历史资产范围套用到 v0.8.2。
 
 ## 本地检查
 
@@ -13,8 +15,8 @@ v0.8.0 增加 Conda / pip 外部配置集成，随同四平台 Nido 包提供，
 | `make check` | 格式、Shell 语法、vet、race、下载器与 CLI 隔离验证 |
 | `make smoke` | 构建并校验本机发行包，运行只读版本与空环境状态检查 |
 | `make dist TARGET_OS=linux TARGET_ARCH=amd64` | 构建、打包并校验指定平台 |
-| `make release` | 仅在本地构建四个平台包、摘要与 POSIX 下载器 |
-| `make verify-release` | 复核四个平台包与下载器源码一致性 |
+| `make release` | 本地构建 Linux amd64 包、摘要与 POSIX 下载器 |
+| `make verify-release` | 复核 Linux amd64 包与下载器源码一致性 |
 | `make check-nido-public-release` | 显式使用已验签新旧 Nido 包，验证公网直链、GitHub 加速安装及真实旧包自更新 |
 | `make check-conda-p0` | 显式使用固定完整旧上游镜像，在 normal/strict 两种模式离线验收可信 Linux 程序；镜像与程序须另行验真 |
 | `make check-proxy-public-release` | 显式在 Linux amd64 临时 HOME 中验证已验签的公开 Nido 包、安装器和 Proxy quick start；需提供核验输入及已有 bwrap |
@@ -47,7 +49,11 @@ nido --root /absolute/software/path init --yes
 
 压缩包下载上限为 256 MiB；解包输出另在子 Shell 中施加 `ulimit -f 524288` 文件大小限制，避免小压缩包无限展开到临时盘。按 Shell 的 512/1024 字节块单位，该输出上限为 256/512 MiB。超限或解包失败时不执行候选程序，限制不传给后续初始化。该局部边界不替代完整归档验证，也不限制归档列表检查的 CPU 时间。
 
-只有用户显式提供下载 flag 或环境变量时，再传入 `--github-proxy VALUE` 保存；普通重复安装不重置已有策略。Shell 不读取主配置。更新已安装 Nido 推荐 `nido update --check` 和 `nido update`，可加本次 `--version X.Y.Z`、`--github-proxy VALUE` 与独立 `--proxy URL`；持久偏好由 `nido download show/set` 管理。自身更新只允许当前运行的受管 `bin/nido`，只更新到稳定新版，同版不下载，拒绝降级；`dev` 构建需要源码更新。Go 下载器的自动 API 回退仅使用 `gh-proxy.org`，`ghfast.top` 仅用于资产。
+只有用户显式提供下载 flag 或环境变量时，再传入 `--github-proxy VALUE` 保存；普通重复安装不重置已有策略。Shell 不读取主配置。持久文件策略由 `nido download show/set` 管理。
+
+v0.8.2 的 Nido、Proxy、GDS 及 Nido 主动 Codex 版本 API 查询必须先通过 `proxy bind download` 启用；独立 `download-proxy.toml` 只保存无认证 listener 名称。升级不自动绑定，没有记录或名称为空时明确禁用，代理环境、文件前缀和 `--proxy` 不能自行启用。持久 API 路由固定官方 URL，经所选 listener；资产仍采用原文件策略。已有有效非空绑定记录后，`--proxy URL` 可临时覆盖 API 路由，不核验所保存 listener 是否运行。Codex 官方安装脚本及用户网络请求保持独立；普通 Codex 更新禁用时跳过可选 API 预查询。操作与保护边界见[自举方案](nido-proxy-bootstrap.md)和[API 审计](nido-api-proxy-audit.md)。
+
+已启用后使用 `nido update --check` 和 `nido update`，可加本次 `--version X.Y.Z` 或 `--github-proxy VALUE`。自身更新只允许当前运行的受管 `bin/nido`，只更新到稳定新版，同版不下载，拒绝降级；`dev` 构建需要源码更新。旧 v0.8.1 尚无新开关，可用 `--github-proxy direct --proxy URL` 临时升级；升级后须显式绑定。文件自举安装器不调用 API，仍可用于首次安装或重新安装固定版本。
 
 自身更新在版本查询前捕获程序目录和入口身份，并与命令启动时的入口身份核对；确认后再次复核，不接受同内容但不同文件对象的替换。候选执行前后复核目录、文件身份和字节，失败时保留旧程序与用户替换内容。清理仅删除本次创建且身份仍一致的临时文件。发布准备还检查实际 ELF/Mach-O 架构，归档尾部一旦出现额外字节即拒绝，避免为垃圾尾部额外分配大块内存。
 
@@ -61,7 +67,7 @@ nido --root /absolute/software/path init --yes
 
 ## GitHub Actions
 
-`check.yml` 在 Linux 最低 Go、Linux 固定 Go 和 macOS 固定 Go 上执行 `make check smoke`。单独检查源码与历史中的敏感内容。GDS 的假驱动、CPU worker 测试和普通用户原生隔离验证自动运行；历史 Shell GDS 测试另保留显式入口。
+v0.8.2 的 CI 与发行目标为 Linux amd64，使用最低 Go 与固定 Go 执行相应项目检查和原生只读冒烟；不增加本版 macOS 或 arm64 资产、安装或验收承诺。单独检查源码与历史中的敏感内容。GDS 的假驱动、CPU worker 测试和普通用户原生隔离验证保持独立；历史 Shell GDS 测试另保留显式入口。
 
 Conda / pip 的单元、race 与 CLI 隔离测试进入 `make check`，使用临时 HOME、配置和假命令；普通 CI 不要求安装 Conda/Python，也不访问镜像。真实 Conda 配置合并与来源保护验收须显式提供已有程序，分别运行 [Conda 发行说明](conda-release.md#验证入口)中的离线入口。源码检查、实际上游本地配置核对和公开发行资产验收分别记录，不能互相替代。
 
@@ -69,16 +75,16 @@ Conda 24.1.2 / Python 3.12.1 / pip 23.3.1 的完整运行时入口为 `make chec
 
 Proxy 的真实核心与跨版本测试需要显式提供已核验程序，普通 CI 不会下载这些输入，不能把 `make check smoke` 通过解释为完成全部平台的真实核心验证。Linux 隔离入口会拒绝指定测试跳过、缺少 PASS 及子命令失败；新版 quick start 真实入口还要求 17 个节点配置子项逐项精确 PASS。纯 mock 回归只验证这些入口判定和清理边界。预构建输入的架构、CLI 元数据和 race 符号检查不能证明其来自当前提交；需另记录冻结源码与产物摘要。新版 quick start 的假核心/真实核心入口、实际结果和协议边界见 [Proxy 审计](proxy-audit.md)与[独立入口说明](proxy-design.md#quick-start-的-linux-amd64-真实核心隔离验证)。
 
-本次 Proxy 的服务器部署目标已限定为 Linux amd64，其他平台的验证缺口不阻塞该目标；Nido 的四平台包构建与静态校验仍按原流程保留。
+v0.8.2 的 Nido 与 Proxy 执行目标均限定为 Linux amd64；历史四平台资产及验证结果按其原版本保留，不作为本版发行范围。
 
 `release.yml` 只响应 `v*` 标签。在上传前，它检查精确标签、源码、测试、包与本机只读冒烟，再使用 Sigstore 签名并逐项验证发布白名单。普通检查仅有 `contents: read`；只有发布 job 才拥有上传和 OIDC 权限。Action 固定完整 SHA，checkout 不保留凭据。
 
-Nido 发行资产仅包含：
+v0.8.2 的 Nido 发行白名单计划仅包含：
 
-- Linux/macOS × amd64/arm64 的四个 `nido-GOOS-GOARCH.tar.gz`，每包只含一个普通可执行文件 `nido`。
-- 四个对应 `.sha256` 文件。
+- `nido-linux-amd64.tar.gz`，只含一个普通可执行文件 `nido`。
+- 对应的 `nido-linux-amd64.tar.gz.sha256`。
 - 来自 `scripts/install.sh` 的单个 `install.sh`。
-- 上述九个文件各自的 `.sigstore.json` bundle。
+- 上述三个文件各自的 `.sigstore.json` bundle，共六项资产。
 
 发行流程不会上传用户数据、仓库快照、旧 Bash 安装器或 dist 中其他文件。源码 URL 和仓库名保持不变：
 
@@ -94,11 +100,13 @@ GDS 发布明确使用 `--latest=false`，Nido 发布明确使用 `--latest`。N
 
 包校验检查 Go 主程序身份、GOOS/GOARCH、CGO=0、唯一普通成员、权限、大小、归档尾部和 SHA-256 文件名，拒绝链接、越界路径、额外成员、损坏 CRC 和尾随数据。归档时间和所有者固定，避免泄露构建机器信息。
 
-原生冒烟只运行 `version` 与 `status --json`；验证 Codex、Conda 分类为外部集成，Proxy、GDS 分类为内置组件，且空环境不配置任何组件、不创建软件目录。跨平台包只做静态校验，不尝试执行。
+Linux amd64 原生冒烟只运行 `version` 与 `status --json`；验证 Codex、Conda 分类为外部集成，Proxy、GDS 分类为内置组件，且空环境不配置任何组件、不创建软件目录。其他平台的旧包验证规则保留在历史版本记录中。
 
 发布测试只调用假的 cosign 与 gh，覆盖签名或验签失败后停止上传，以及发布白名单。测试本身不产生标签、发布、推送或真实服务操作。
 
-`tests/nido-public-release-isolation.sh` 显式验证普通 Nido 的公开发行包。必须先独立核对新旧包的 API 元数据、摘要、平台及对应标签的 Sigstore 身份，再把冻结目录交给入口；公网下载响应在执行前与已验签输入逐字比较。安装器和客户端自身仍只做各自的摘要验证。通过 `NIDO_ACCEPT_VERSION`、`NIDO_ACCEPT_OLD_VERSION` 绑定新旧版本，不能把当前源码伪装成旧版来代替真实自更新。本次 v0.8.1 执行范围仅为 Linux amd64，使用 Docker 隔离入口分别检查 direct 和 `gh-proxy.org`，明确记录是否仿真；不在 macOS 安装。随后从同一已验签 Linux 包提取的程序再做 `check-conda-p0`，两类验收结果分开保存。四平台发行构建和静态核验继续保留，但不扩展本次执行验收范围。
+`tests/nido-public-release-isolation.sh` 显式验证普通 Nido 的公开发行包。必须先独立核对新旧包的 API 元数据、摘要、平台及对应标签的 Sigstore 身份，再把冻结目录交给入口；公网下载响应在执行前与已验签输入逐字比较。安装器和客户端自身仍只做各自的摘要验证。通过 `NIDO_ACCEPT_VERSION`、`NIDO_ACCEPT_OLD_VERSION` 绑定新旧版本，不能把当前源码伪装成旧版来代替真实自更新。v0.8.1 的 Linux amd64 直链、加速及真实 Conda P0 结果见其[历史记录](conda-v0.8.1-release.md)；v0.8.2 的正式包验收另行记录，不复用历史 PASS。
+
+v0.8.2 验收需分别证明：旧 v0.8.1 真实客户端升级、升级后未绑定明确禁用、具名 listener 绑定后的官方 API/文件资产分路由，以及 off 恢复禁用。新版 CLI 使用 `current`，旧发行 CLI 使用显式 `legacy`，不按失败结果自动回退。先前 141 项源码隔离通过不替代公开资产验签和真实下载结果。只在私有临时 HOME/软件根和既有 Linux amd64 隔离环境执行，不部署或修改目标机配置。
 
 发行后的公网测试入口另支持选择 `NIDO_ACCEPT_GITHUB_ACCELERATOR=https://gh-proxy.org|https://ghfast.top`、`NIDO_ACCEPT_INSTALL_VERSION_MODE=latest|tagged`、`NIDO_ACCEPT_TRANSPORT=both|direct|accelerated`，默认仍为 gh-proxy.org、latest、both。`NIDO_ACCEPT_METADATA_AUTH=gh` 仅让宿主 gh 只读核对新旧官方 API 元数据，不把 token 传入安装器、容器或 Go 更新客户端，不替换客户端响应；客户端更新仍使用真实匿名网络。固定版本或单链通过不能记录成 latest 或另一端点通过。公网故障与有界重试按端点保留原证据，不调整生产超时或关闭真实性检查来掩盖失败。
 

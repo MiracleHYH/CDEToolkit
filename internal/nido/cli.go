@@ -3,6 +3,7 @@ package nido
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,7 +41,7 @@ nido [--root DIR] COMMAND
   proxy configure [--file FILE] 配置原生 YAML，替换前要求停止
   proxy endpoints              只枚举 listeners，可任意命名
   proxy bind [ai|daily|download] 为类别选择 listener 或自定义代理
-  proxy bind --tool codex|git   只配置一个工具
+  proxy bind --tool codex|git|nido 只配置一个工具或 Nido API
   proxy validate / config-path 核心验证 / 查询配置路径
   proxy start / stop / restart 只控制本实例并确认监听就绪
   proxy status / endpoint [NAME] / logs [--tail N]
@@ -350,6 +351,9 @@ func (c CLI) Run(args []string) int {
 			if _, err := m.githubPolicy(""); err != nil {
 				issues = append(issues, "GitHub 下载配置无效；使用 download set 修正或 --github-proxy 覆盖")
 			}
+			if _, err := m.downloadAPIClient(""); err != nil && !errors.Is(err, ErrAPIDisabled) {
+				issues = append(issues, err.Error())
+			}
 			if h := os.Getenv("CODEX_HOME"); m.Config.Codex.Home != "" && h != m.Config.Codex.Home {
 				issues = append(issues, "当前终端 CODEX_HOME 与关联目录不一致；请重新加载 Nido 环境")
 			}
@@ -530,6 +534,21 @@ func (c *CLI) codex(m *Manager, o cliOptions, args []string) int {
 		if o.dry {
 			return c.output(o, map[string]string{"operation": action, "home": cfg.Home, "installer": "https://chatgpt.com/codex/install.sh"})
 		}
+		var apiHTTP *http.Client
+		var apiErr error
+		if action == "update" {
+			apiHTTP, apiErr = m.downloadAPIClient(o.proxy)
+			if o.check && apiErr != nil {
+				return c.fail(apiErr)
+			}
+		}
+		if o.check {
+			latest, e := m.Codex.LatestHTTP(apiHTTP)
+			if e != nil {
+				return c.fail(e)
+			}
+			return c.output(o, map[string]string{"current": m.Codex.Status(cfg).Version, "latest": latest})
+		}
 		proxy, e := m.Codex.ProxyEnv(cfg)
 		if e != nil {
 			return c.fail(e)
@@ -542,20 +561,15 @@ func (c *CLI) codex(m *Manager, o cliOptions, args []string) int {
 				proxy[key] = o.proxy
 			}
 		}
-		if o.check {
-			latest, e := m.Codex.Latest(proxy)
-			if e != nil {
-				return c.fail(e)
-			}
-			return c.output(o, map[string]string{"current": m.Codex.Status(cfg).Version, "latest": latest})
-		}
 		current, latest := "", ""
 		if action == "update" {
 			current = m.Codex.Status(cfg).Version
 			if !o.json {
 				fmt.Fprintln(c.Out, "当前 Codex 版本:", current)
 			}
-			if v, e := m.Codex.Latest(proxy); e == nil {
+			if apiErr != nil {
+				fmt.Fprintln(c.Err, "跳过 Nido 的 Codex 最新版本查询：", apiErr)
+			} else if v, e := m.Codex.LatestHTTP(apiHTTP); e == nil {
 				latest = v
 				if !o.json {
 					fmt.Fprintln(c.Out, "最新 Codex 版本:", latest)
@@ -590,7 +604,7 @@ func (c *CLI) codex(m *Manager, o cliOptions, args []string) int {
 			if readErr == nil && len(listeners) == 1 && (o.yes || o.json || o.dry) {
 				choice, e = c.listenerChoice(listeners[0], true)
 			} else {
-				choice, e = c.chooseProxy(m, o, "Codex")
+				choice, e = c.chooseProxy(m, o, "Codex", false)
 			}
 			if e != nil {
 				return c.fail(e)

@@ -28,7 +28,10 @@ var assetDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 var releaseID = regexp.MustCompile(`^[1-9][0-9]*$`)
 
 type Service struct {
-	HTTP        *http.Client
+	HTTP *http.Client
+	// APIHTTP, when set, is the explicit network route for release metadata.
+	// Metadata keeps its official URL and never uses GitHub file accelerators.
+	APIHTTP     *http.Client
 	GitHubProxy string
 	Platform    string
 }
@@ -85,6 +88,9 @@ func (s Service) Check(current string) (Info, error) {
 	if err != nil {
 		return result, err
 	}
+	if _, err := s.platform(); err != nil {
+		return result, err
+	}
 	r, err := s.release("")
 	if err != nil {
 		return result, err
@@ -118,7 +124,11 @@ func (s Service) release(version string) (release, error) {
 		expectedTag = "v" + normalized
 		source = releasesAPI + "/tags/" + expectedTag
 	}
-	b, err := githubdownload.Get(s.HTTP, source, maxMetadata, s.GitHubProxy)
+	client, policy := s.HTTP, s.GitHubProxy
+	if s.APIHTTP != nil {
+		client, policy = s.APIHTTP, "direct"
+	}
+	b, err := githubdownload.Get(client, source, maxMetadata, policy)
 	if err != nil {
 		return release{}, fmt.Errorf("获取 Nido 发布信息失败: %w", err)
 	}
@@ -141,10 +151,10 @@ func (s Service) platform() (string, error) {
 		platform = runtime.GOOS + "/" + runtime.GOARCH
 	}
 	switch platform {
-	case "linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64":
+	case "linux/amd64":
 		return platform, nil
 	default:
-		return "", fmt.Errorf("Nido 自身更新不支持当前平台")
+		return "", fmt.Errorf("Nido 自身更新仅支持 Linux amd64")
 	}
 }
 

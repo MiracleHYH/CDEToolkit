@@ -1,0 +1,158 @@
+name: nido-api-acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact public Nido stable version, without v
+        required: true
+        type: string
+        default: '0.8.2'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nido-api-acceptance-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  GOTOOLCHAIN: local
+  GOFLAGS: -mod=readonly
+  NIDO_API_IMAGE: docker.io/library/golang@sha256:2015125fe4a3d97f9ba4ad55d458c2d1f025fdf9cb73d8f423a29e448d59da5e
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Validate the requested version before resolving a tag
+        id: request
+        env:
+          REQUEST_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/nido-api-acceptance"
+          [[ $REQUEST_VERSION =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ $RUNNER_OS = Linux && $RUNNER_ARCH = X64 && $(uname -m) = x86_64 ]]
+          printf 'version=%s\ntag=v%s\n' "$REQUEST_VERSION" "$REQUEST_VERSION" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\nplatform=linux/amd64\ninput_scope=verified-public\n' "$REQUEST_VERSION" > "$RUNNER_TEMP/nido-api-acceptance/request.txt"
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ steps.request.outputs.tag }}
+          path: tagged-source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          cache-dependency-path: tagged-source/go.sum
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
+      - name: Resolve the exact public release and download only six bounded assets
+        id: release
+        working-directory: tagged-source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.request.outputs.version }}
+          RELEASE_TAG: ${{ steps.request.outputs.tag }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/nido-api-acceptance"
+          repository=MiracleHYH/CDEToolkit
+          [[ $GITHUB_REPOSITORY = "$repository" && $(cat VERSION) = "$RELEASE_VERSION" ]]
+          commit=$(git rev-parse --verify 'HEAD^{commit}')
+          [[ $commit =~ ^[0-9a-f]{40}$ && $(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}") = "$commit" ]]
+          gh api "repos/$repository/git/ref/tags/$RELEASE_TAG" > "$evidence/tag-ref.json"
+          object=$(jq -er '.object.sha' "$evidence/tag-ref.json")
+          kind=$(jq -er '.object.type' "$evidence/tag-ref.json")
+          depth=0
+          while [[ $kind = tag && $depth -lt 8 ]]; do
+            [[ $object =~ ^[0-9a-f]{40}$ ]]
+            gh api "repos/$repository/git/tags/$object" > "$evidence/tag-object-$depth.json"
+            kind=$(jq -er '.object.type' "$evidence/tag-object-$depth.json")
+            object=$(jq -er '.object.sha' "$evidence/tag-object-$depth.json")
+            depth=$((depth+1))
+          done
+          [[ $kind = commit && $object = "$commit" ]]
+          printf '%s\n' "$commit" > "$evidence/tag-commit.txt"
+          printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
+          gh api "repos/$repository/releases/tags/$RELEASE_TAG" > "$evidence/release.json"
+          jq -e --arg tag "$RELEASE_TAG" --arg repo "$repository" '
+            .tag_name == $tag and .draft == false and .prerelease == false and
+            (.assets | length == 6) and
+            ([.assets[].name] | sort) == (["nido-linux-amd64.tar.gz", "nido-linux-amd64.tar.gz.sha256", "install.sh", "nido-linux-amd64.tar.gz.sigstore.json", "nido-linux-amd64.tar.gz.sha256.sigstore.json", "install.sh.sigstore.json"] | sort) and
+            ([.assets[].id] | unique | length == 6) and
+            all(.assets[];
+              .state == "uploaded" and (.id | type == "number") and .id > 0 and .id == (.id | floor) and
+              (.size | type == "number") and .size > 0 and .size == (.size | floor) and
+              (.digest | test("^sha256:[0-9a-f]{64}$")) and
+              .browser_download_url == ("https://github.com/" + $repo + "/releases/download/" + $tag + "/" + .name) and
+              (if .name == "nido-linux-amd64.tar.gz" then .size <= 134217728
+               elif .name == "nido-linux-amd64.tar.gz.sha256" then .size <= 256
+               elif .name == "install.sh" then .size <= 65536
+               else .size <= 8388608 end))
+          ' "$evidence/release.json" > "$evidence/release-metadata-valid.txt"
+          mkdir "$evidence/assets"
+          while IFS=$'\t' read -r name id size digest; do
+            gh api -H 'Accept: application/octet-stream' "repos/$repository/releases/assets/$id" > "$evidence/assets/$name"
+            [[ $(wc -c < "$evidence/assets/$name") = "$size" ]]
+            actual=$(sha256sum "$evidence/assets/$name")
+            [[ "sha256:${actual%% *}" = "$digest" ]]
+          done < <(jq -r '.assets[] | [.name, .id, .size, .digest] | @tsv' "$evidence/release.json")
+          sha256sum "$evidence/assets/"* > "$evidence/downloaded-assets.sha256"
+      - name: Verify signatures, release source, package identity and fixture build
+        working-directory: tagged-source
+        env:
+          RELEASE_VERSION: ${{ steps.request.outputs.version }}
+          RELEASE_TAG: ${{ steps.request.outputs.tag }}
+          RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/nido-api-acceptance"
+          identity="https://github.com/MiracleHYH/CDEToolkit/.github/workflows/release.yml@refs/tags/$RELEASE_TAG"
+          cosign version > "$evidence/cosign-version.txt"
+          for name in nido-linux-amd64.tar.gz nido-linux-amd64.tar.gz.sha256 install.sh; do
+            cosign verify-blob "$evidence/assets/$name" --bundle "$evidence/assets/$name.sigstore.json" \
+              --certificate-identity "$identity" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-github-workflow-repository MiracleHYH/CDEToolkit \
+              --certificate-github-workflow-sha "$RELEASE_COMMIT" \
+              --certificate-github-workflow-ref "refs/tags/$RELEASE_TAG" \
+              --certificate-github-workflow-trigger push \
+              --certificate-github-workflow-name release > "$evidence/cosign-$name.log" 2>&1
+          done
+          cmp scripts/install.sh "$evidence/assets/install.sh"
+          go mod download
+          go mod verify > "$evidence/go-mod-verify.txt"
+          go run ./cmd/nido-dist verify --archive "$evidence/assets/nido-linux-amd64.tar.gz" --platform linux/amd64 > "$evidence/static-package-verify.txt"
+          mkdir "$evidence/fixture"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1 go build -trimpath -buildvcs=false -o "$evidence/fixture/api-fixture" ./tests/fixtures/nido-api-release
+          sha256sum tests/fixtures/nido-api-release/main.go "$evidence/fixture/api-fixture" > "$evidence/fixture.sha256"
+      - name: Pull the pinned Linux amd64 fixture runtime
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/nido-api-acceptance"
+          docker pull --platform linux/amd64 "$NIDO_API_IMAGE" > "$evidence/docker-pull.log" 2>&1
+          docker image inspect "$NIDO_API_IMAGE" > "$evidence/docker-image.json"
+          jq -e 'length == 1 and .[0].Os == "linux" and .[0].Architecture == "amd64"' "$evidence/docker-image.json"
+      - name: Accept the signed release using real native process ownership
+        working-directory: tagged-source
+        env:
+          NIDO_API_RELEASE_INPUT: ${{ runner.temp }}/nido-api-acceptance/assets
+          NIDO_API_RELEASE_FIXTURE: ${{ runner.temp }}/nido-api-acceptance/fixture/api-fixture
+          NIDO_API_RELEASE_OUTPUT: ${{ runner.temp }}/nido-api-acceptance/contract
+          NIDO_API_RELEASE_VERSION: ${{ steps.request.outputs.version }}
+          NIDO_API_RELEASE_INPUT_SCOPE: verified-public
+        run: |
+          set -euo pipefail
+          NIDO_API_RELEASE_IMAGE="$NIDO_API_IMAGE" bash tests/nido-api-release-isolation.sh
+      - name: Upload public API contract evidence even after failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nido-api-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nido-api-acceptance
+          if-no-files-found: warn
+          retention-days: 14
