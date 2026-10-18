@@ -59,6 +59,11 @@ if [[ $mode = native ]]; then
     NIDO_ACCEPT_GENERAL_PROXY="${NIDO_ACCEPT_GENERAL_PROXY:-}" \
     /bin/bash "$output/inputs/harness/nido-public-release-inner.sh" 2>&1 | tee "$output/acceptance.log"
 else
+  # Only these copied public assets and harness files are exposed to the
+  # ordinary container uid. Keep the independently verified source directories
+  # private and leave native-mode input permissions unchanged.
+  find "$output/inputs" -type d -exec chmod 0755 {} +
+  find "$output/inputs" -type f -exec chmod 0644 {} +
   mkdir "$output/container-evidence"
   chmod 0777 "$output/container-evidence"
   # Read-only root and inputs, ordinary uid, private writable execution tmpfs;

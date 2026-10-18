@@ -32,21 +32,30 @@ bash tests/conda-cli-isolation.sh /absolute/path/to/nido
 
 ```sh
 conda run -n agent --no-capture-output python tests/conda-source-upstream-isolation.py /absolute/path/to/nido /absolute/path/to/conda
+conda run -n agent --no-capture-output python tests/pip-upstream-isolation.py /absolute/path/to/nido
 NIDO_TEST_REAL_CONDA=/absolute/path/to/conda go test ./internal/integrations/conda -run '^TestFinalAuditRuntime' -count=1
 ```
 
-这两项将写入限制在临时 HOME、软件根和配置夹具；来源保护脚本另建临时 Conda root、prefix 及证书夹具。它们只读查询已有 Conda，不联网、不安装包、不修改真实机器配置。标准及自定义 CONDARC 的优先级、证书和代理保护、default 完整恢复等历史通过记录见 [组件审计](conda-audit.md)。这些结果不证明镜像下载、包完整性或所有平台的实际上游行为。
+这些入口将写入限制在临时 HOME、软件根和配置夹具；来源保护脚本另建临时 Conda root、prefix 及证书夹具。pip 入口使用当前 Python 的真实 pip，检查冷进程恢复原 default、原生缓存、证书、代理和 reset 保留。这些入口只读查询已有工具，不联网、不安装包、不修改真实机器配置。标准及自定义 CONDARC 的优先级、证书和代理保护、default 完整恢复等历史通过记录见 [组件审计](conda-audit.md)。这些结果不证明镜像下载、包完整性或所有平台的实际上游行为。
 
 ## 本次发行记录
 
-本节用于记录 v0.8.0 最终冻结提交及其产物。发布前源码审计结果保留在上面的历史记录中；公开资产验收结果须在实际执行后补入。
+v0.8.0 于 2026-10-18 发布。以下记录区分源码检查、公开资产核验与实际执行的验收；发布前审计保留在历史记录中。
 
 | 项目 | 记录 |
 | --- | --- |
-| 冻结提交、v0.8.0 标签与 VERSION 一致性 | 待最终发布步骤记录 |
-| 四平台包、摘要、安装器及 Sigstore 签名 | 待发布工作流完成后记录 |
-| 最终源码检查与临时 HOME 验证 | 待最终冻结提交复核后记录 |
-| 公开发行包的临时目录下载、校验与 CLI 验收 | 待实际执行后记录 |
+| 冻结提交、v0.8.0 标签与 VERSION 一致性 | [`32a0feb`](https://github.com/MiracleHYH/CDEToolkit/commit/32a0feb6408b813cb04e92011979d450750587cf)，标签与 VERSION 均为 v0.8.0 / 0.8.0 |
+| 四平台包、摘要、安装器及 Sigstore 签名 | [正式发行](https://github.com/MiracleHYH/CDEToolkit/releases/tag/v0.8.0)共 18 份资产；9 份签名逐项独立核验通过，证书 workflow、issuer、commit、ref、repo、name 与 push 身份匹配；9 份原始资产均与本地固定 Go 1.27.2 构建逐字相同 |
+| 最终源码检查与临时 HOME 验证 | 本地 `make check smoke release verify-release`、敏感信息扫描通过；[主分支 CI](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39120086204)、[标签 CI](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39120483982)、[发行 CI](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39120483845)全部通过 |
+| macOS darwin/arm64 公开包运行验收 | 直链和 `gh-proxy.org` 完整安装、bash/zsh 注册、PATH 幂等、重复安装及数据保护均通过；每次安装响应执行前均与已验签输入逐字比较 |
+| 真实旧版自更新 | 使用已验签正式 v0.7.0 程序，在两种链路下升级到 v0.8.0；检查更新、失败保留、同版本离线跳过、拒绝降级和输出程序逐字比对均通过，无伪旧版本夹具 |
+| Conda / pip CLI | 两种链路升级后的公开程序均通过 `conda-cli-isolation.sh`，覆盖持久 default、原生目录修改、环境加载及配置和数据保护 |
+| 真实 Conda / pip | 公开 darwin/arm64 程序通过 Conda 26.1.1 的标准及自定义 CONDARC 离线验收，以及 agent Python 3.12 / pip 26.2.1 的 default、原生缓存、证书代理、权限及 reset 保留验收 |
+| Linux linux/amd64 公开包运行验收 | macOS 宿主上的 Docker amd64 仿真中，直链与加速安装、重复安装、bash 注册、真实 v0.7.0 升级、失败保护、同版跳过、拒绝降级及 Conda CLI 隔离套件全部通过；只读 root、普通 UID 10001、私有临时 HOME 与软件根 |
+
+本次公网执行覆盖 darwin/arm64 原生与 linux/amd64 仿真，不等同于原生 Linux 或其他架构的实际上游验收。其他平台保留四平台构建、静态校验与签名核验结果。真实 Conda/pip 查询另在 macOS 临时配置中完成，不访问镜像、不安装包；验收结束后临时安装根自动清理。
+
+发行后的记录补充与隔离入口修正仅涉及文档、测试脚本，不改变上述冻结提交的发行程序。Docker 入口向普通 UID 开放的是已公开资产的测试副本，原始验签目录保持私有权限。
 
 公开包与签名的校验规则见 [构建与发行](go-ci-release.md#发行校验)。安装客户端核对 SHA-256，当前不验证 Sigstore；工作流签名不能代替客户端下载时的真实性验证。发行和临时目录验收均不表示已经在真实机器部署或改写其 Conda/pip 配置。
 
