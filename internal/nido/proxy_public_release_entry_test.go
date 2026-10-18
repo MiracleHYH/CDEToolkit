@@ -1,0 +1,417 @@
+package nido
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
+// Exercise the actual generated curl bridge with an inert transport. Responses
+// must be checked after fetching; rejected requests must never reach transport.
+func TestProxyPublicReleaseCurlBridgeRequiresExactRequestAndResponse(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "tests", "proxy-public-release-isolation.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, bridge, ok := strings.Cut(string(data), "cat > /work/guard/curl <<'CURL'\n")
+	if !ok {
+		t.Fatal("public release curl bridge missing")
+	}
+	bridge, _, ok = strings.Cut(bridge, "\nCURL\n")
+	if !ok {
+		t.Fatal("public release curl bridge unterminated")
+	}
+	for _, test := range []struct {
+		mode  string
+		ok    bool
+		fetch bool
+	}{
+		{"exact-package", true, true}, {"latest-checksum", true, true}, {"dedicated-socks", true, true},
+		{"wrong-response", false, true}, {"http-url", false, false}, {"foreign-url", false, false},
+		{"wrong-version", false, false}, {"other-asset", false, false}, {"extra-arg", false, false},
+		{"missing-q", false, false}, {"weakened-proto", false, false}, {"missing-proto", false, false},
+		{"foreign-output", false, false},
+	} {
+		t.Run(test.mode, func(t *testing.T) {
+			root := t.TempDir()
+			inputs, evidence := filepath.Join(root, "inputs"), filepath.Join(root, "evidence")
+			for _, dir := range []string{inputs, evidence} {
+				if err := os.Mkdir(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, name := range []string{"nido-linux-amd64.tar.gz", "nido-linux-amd64.tar.gz.sha256"} {
+				if err := os.WriteFile(filepath.Join(inputs, name), []byte("verified "+name+"\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fetcher := filepath.Join(root, "inert-curl")
+			if err := os.WriteFile(fetcher, []byte(proxyPublicReleaseCurlMock), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "sha256sum"), []byte("#!/bin/sh\nprintf '%064d  %s\\n' 0 \"$1\"\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			calls := filepath.Join(evidence, "transport-args")
+			script := filepath.Join(root, "curl")
+			body := strings.NewReplacer("/usr/bin/curl", strconv.Quote(fetcher), "/inputs/", inputs+"/", "/work/evidence/", evidence+"/").Replace(bridge)
+			if err := os.WriteFile(script, []byte(body), 0700); err != nil {
+				t.Fatal(err)
+			}
+			// This path deliberately matches the bootstrap's narrow output rule.
+			installTemp, err := os.MkdirTemp("/tmp", "nido-install.")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(installTemp) })
+			url := "https://github.com/MiracleHYH/CDEToolkit/releases/download/v0.6.0/nido-linux-amd64.tar.gz"
+			output := filepath.Join(installTemp, "nido-linux-amd64.tar.gz")
+			socks := ""
+			switch test.mode {
+			case "latest-checksum":
+				url = "https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/nido-linux-amd64.tar.gz.sha256"
+				output = filepath.Join(installTemp, "checksum")
+			case "dedicated-socks":
+				socks = "socks5h://127.0.0.1:18443"
+			case "http-url":
+				url = strings.Replace(url, "https:", "http:", 1)
+			case "foreign-url":
+				url = strings.Replace(url, "github.com", "external.invalid", 1)
+			case "wrong-version":
+				url = strings.Replace(url, "v0.6.0", "v0.5.0", 1)
+			case "other-asset":
+				url = strings.Replace(url, "nido-linux-amd64", "gds-linux-amd64", 1)
+			case "foreign-output":
+				output = filepath.Join(root, "foreign-output")
+			}
+			args := []string{"-q", "--http1.1", "--fail", "--silent", "--show-error", "--location", "--proto", "=https", "--proto-redir", "=https", "--tlsv1.2", "--retry", "2", "--connect-timeout", "15", "--max-time", "300", "--max-filesize", "268435456", "--output", output, url}
+			switch test.mode {
+			case "extra-arg":
+				args = append(args, "--insecure")
+			case "missing-q":
+				args = args[1:]
+			case "weakened-proto":
+				args[7] = "=http,https"
+			case "missing-proto":
+				args = append(args[:6], args[8:]...)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "/bin/bash", append([]string{script}, args...)...)
+			cmd.WaitDelay = time.Second
+			cmd.Env = []string{"PATH=" + root + ":/usr/bin:/bin", "LANG=C", "LC_ALL=C", "NIDO_TEST_PROXY_RELEASE_VERSION=0.6.0", "NIDO_TEST_PROXY_RELEASE_SOCKS=" + socks, "NIDO_PUBLIC_CURL_MODE=" + test.mode, "NIDO_PUBLIC_CURL_INPUTS=" + inputs, "NIDO_PUBLIC_CURL_CALLS=" + calls}
+			out, err := cmd.CombinedOutput()
+			if (err == nil) != test.ok || ctx.Err() != nil {
+				t.Fatalf("success=%v, want %v: %v, deadline=%v\n%s", err == nil, test.ok, err, ctx.Err(), out)
+			}
+			transport, readErr := os.ReadFile(calls)
+			if (readErr == nil) != test.fetch {
+				t.Fatalf("transport reached=%v, want %v: %v\n%s", readErr == nil, test.fetch, readErr, out)
+			}
+			if test.mode == "dedicated-socks" && !strings.HasPrefix(string(transport), "-q\n--proxy\n"+socks+"\n") {
+				t.Fatalf("transport did not disable curl config before the dedicated proxy: %s", transport)
+			}
+			_, logErr := os.Stat(filepath.Join(evidence, "public-downloads.log"))
+			if (logErr == nil) != test.ok {
+				t.Fatalf("a rejected response was recorded as verified: %v", logErr)
+			}
+		})
+	}
+}
+
+const proxyPublicReleaseCurlMock = `#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$@" > "$NIDO_PUBLIC_CURL_CALLS"
+previous=''; output=''
+for arg in "$@"; do
+  if [[ "$previous" == --output ]]; then output="$arg"; break; fi
+  previous="$arg"
+done
+[[ -n "$output" ]] || exit 91
+if [[ "$NIDO_PUBLIC_CURL_MODE" == wrong-response ]]; then printf 'wrong public response\n' > "$output"
+else
+  case "${!#}" in
+    *.sha256) cp "$NIDO_PUBLIC_CURL_INPUTS/nido-linux-amd64.tar.gz.sha256" "$output";;
+    *) cp "$NIDO_PUBLIC_CURL_INPUTS/nido-linux-amd64.tar.gz" "$output";;
+  esac
+fi
+`
+
+// The public entry runs with inert platform and namespace commands here. This
+// contract test never downloads, installs a release, or starts a real core.
+func TestProxyPublicReleaseEntryRequiresActualEvidence(t *testing.T) {
+	for _, test := range []struct {
+		mode string
+		ok   bool
+	}{
+		{"pass", true}, {"previous", true}, {"socks", true},
+		{"wrong-os", false}, {"wrong-arch", false}, {"root-user", false},
+		{"bad-version", false}, {"bad-socks", false}, {"bad-socks-port", false},
+		{"checksum-mismatch", false}, {"checksum-malformed", false}, {"extra-member", false},
+		{"linked-core", false}, {"missing-input", false},
+		{"previous-package-only", false}, {"previous-version-only", false},
+		{"previous-same-version", false}, {"previous-not-upgraded", false},
+		{"existing-output", false}, {"linked-output", false},
+		{"namespace-fail", false}, {"command-fail-after-evidence", false},
+		{"missing-result", false}, {"missing-downloads", false}, {"missing-cli-pass", false},
+		{"invalid-result", false}, {"wrong-count", false}, {"wrong-url", false},
+		{"missing-sha", false}, {"wrong-sha", false},
+		{"missing-pass", false}, {"forbidden-command", false},
+	} {
+		t.Run(test.mode, func(t *testing.T) {
+			out, state, output, err := runProxyPublicReleaseEntryFixture(t, test.mode)
+			if (err == nil) != test.ok {
+				t.Fatalf("success=%v, want %v: %v\n%s", err == nil, test.ok, err, out)
+			}
+			if strings.Contains(out, "unexpected fixture command") || strings.Contains(out, "PASS: 普通用户 Linux amd64") != test.ok {
+				t.Fatalf("inaccurate entry result:\n%s", out)
+			}
+			calls, _ := os.ReadFile(filepath.Join(state, "bwrap-args"))
+			if len(calls) != 0 {
+				for _, required := range []string{"--unshare-all\n", "--share-net\n", "--clearenv\n", "--cap-drop\nALL\n", "--setenv\nHOME\n/work/home\n", "--setenv\nNIDO_TEST_PROXY_RELEASE_VERSION\n0.6.0\n"} {
+					if !strings.Contains(string(calls), required) {
+						t.Fatalf("missing isolation flag %q: %s", required, calls)
+					}
+				}
+				for _, forbidden := range []string{"--share-pid\n", "--setenv\nHTTP_PROXY\n", "--setenv\nALL_PROXY\n", "--setenv\nNIDO_TEST_MIHOMO\n"} {
+					if strings.Contains(string(calls), forbidden) {
+						t.Fatalf("entry forwarded ambient state %q: %s", forbidden, calls)
+					}
+				}
+				data, err := os.ReadFile(filepath.Join(state, "scratch-path"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				scratch := strings.TrimSpace(string(data))
+				if !strings.HasPrefix(filepath.Base(scratch), "nido-proxy-public-release.") {
+					t.Fatalf("unexpected scratch %q", scratch)
+				}
+				if _, err := os.Lstat(scratch); !os.IsNotExist(err) {
+					t.Fatalf("entry did not remove its own scratch: %v", err)
+				}
+				if test.mode == "socks" && !strings.Contains(string(calls), "--setenv\nNIDO_TEST_PROXY_RELEASE_SOCKS\nsocks5h://127.0.0.1:18443\n") {
+					t.Fatal("dedicated loopback SOCKS was not explicitly passed")
+				}
+			}
+			if test.ok {
+				for _, name := range []string{"inputs.sha256", "environment.txt", "namespace.txt", "public-result.json", "public-downloads.log", "public-downloads.sha256", "quickstart-cli.log", "run.log", "result.txt"} {
+					data, err := os.ReadFile(filepath.Join(output, name))
+					if err != nil || len(data) == 0 {
+						t.Fatalf("missing evidence %s: %v", name, err)
+					}
+				}
+				data, _ := os.ReadFile(filepath.Join(output, "result.txt"))
+				if string(data) != "exit_status=0\n" {
+					t.Fatalf("wrong final status: %q", data)
+				}
+			}
+			if test.mode == "existing-output" || test.mode == "linked-output" {
+				data, err := os.ReadFile(filepath.Join(state, "preserved", "sentinel"))
+				if err != nil || string(data) != "PRESERVED\n" || len(calls) != 0 {
+					t.Fatalf("existing output was changed or namespace ran: %v %q %s", err, data, calls)
+				}
+			}
+		})
+	}
+}
+
+func runProxyPublicReleaseEntryFixture(t *testing.T, mode string) (string, string, string, error) {
+	t.Helper()
+	if _, err := os.Stat("/bin/bash"); err != nil {
+		t.Skip("entry fixture requires existing /bin/bash")
+	}
+	script, err := filepath.Abs(filepath.Join("..", "..", "tests", "proxy-public-release-isolation.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	state, bin, inputs := filepath.Join(root, "state"), filepath.Join(root, "bin"), filepath.Join(root, "inputs")
+	for _, dir := range []string{state, bin, inputs, filepath.Join(root, "home")} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"uname", "id", "readlink", "sha256sum", "timeout", "bwrap"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(proxyPublicReleaseEntryMock), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"install.sh", "fake-mihomo", "proxy-quickstart-cli-isolation.sh"} {
+		if err := os.WriteFile(filepath.Join(inputs, name), []byte("inert public fixture; never execute\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var archive bytes.Buffer
+	gz := gzip.NewWriter(&archive)
+	tw := tar.NewWriter(gz)
+	for _, name := range []string{"nido", "extra"} {
+		if name == "extra" && mode != "extra-member" {
+			continue
+		}
+		data := []byte("inert archive fixture\n")
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0700, Size: int64(len(data))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(inputs, "nido-linux-amd64.tar.gz"), archive.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	checksum := fmt.Sprintf("%064d  nido-linux-amd64.tar.gz\n", 0)
+	if mode == "checksum-mismatch" {
+		checksum = fmt.Sprintf("%064d  nido-linux-amd64.tar.gz\n", 1)
+	} else if mode == "checksum-malformed" {
+		checksum += checksum
+	}
+	if err := os.WriteFile(filepath.Join(inputs, "nido-linux-amd64.tar.gz.sha256"), []byte(checksum), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := ""
+	if mode == "previous" || mode == "previous-package-only" || mode == "previous-not-upgraded" || mode == "previous-same-version" {
+		if err := os.WriteFile(filepath.Join(inputs, "nido-previous.tar.gz"), archive.Bytes(), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if mode == "previous" || mode == "previous-version-only" || mode == "previous-not-upgraded" {
+		previous = "0.5.0"
+	} else if mode == "previous-same-version" {
+		previous = "0.6.0"
+	}
+	if mode == "linked-core" {
+		if err := os.Remove(filepath.Join(inputs, "fake-mihomo")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(inputs, "install.sh"), filepath.Join(inputs, "fake-mihomo")); err != nil {
+			t.Fatal(err)
+		}
+	} else if mode == "missing-input" {
+		if err := os.Remove(filepath.Join(inputs, "install.sh")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	output := filepath.Join(root, "evidence")
+	if mode == "existing-output" || mode == "linked-output" {
+		preserved := filepath.Join(state, "preserved")
+		if err := os.Mkdir(preserved, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(preserved, "sentinel"), []byte("PRESERVED\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if mode == "existing-output" {
+			output = preserved
+		} else if err := os.Symlink(preserved, output); err != nil {
+			t.Fatal(err)
+		}
+	}
+	version, socks := "0.6.0", ""
+	switch mode {
+	case "bad-version":
+		version = "0.6.0-pre"
+	case "socks":
+		socks = "socks5h://127.0.0.1:18443"
+	case "bad-socks":
+		socks = "socks5h://user:pass@external.invalid:18443"
+	case "bad-socks-port":
+		socks = "socks5h://127.0.0.1:65536"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/bash", script)
+	cmd.WaitDelay = time.Second
+	cmd.Env = []string{
+		"PATH=" + bin + ":/usr/bin:/bin", "HOME=" + filepath.Join(root, "home"), "LANG=C", "LC_ALL=C", "TZ=UTC",
+		"NIDO_TEST_PROXY_RELEASE_INPUTS=" + inputs, "NIDO_TEST_PROXY_RELEASE_OUTPUT=" + output,
+		"NIDO_TEST_PROXY_RELEASE_VERSION=" + version, "NIDO_TEST_PROXY_PREVIOUS_VERSION=" + previous,
+		"NIDO_TEST_PROXY_RELEASE_SOCKS=" + socks, "NIDO_PUBLIC_ENTRY_STATE=" + state, "NIDO_PUBLIC_ENTRY_MODE=" + mode,
+		"HTTP_PROXY=http://poison.invalid:1", "ALL_PROXY=socks5://poison.invalid:1", "NIDO_TEST_MIHOMO=/poison/never-forward",
+	}
+	out, runErr := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("fixture exceeded deadline: %v\n%s", ctx.Err(), out)
+	}
+	return string(out), state, output, runErr
+}
+
+const proxyPublicReleaseEntryMock = `#!/bin/bash
+set -euo pipefail
+tool="${0##*/}"
+mode="$NIDO_PUBLIC_ENTRY_MODE"
+unexpected() { printf 'unexpected fixture command: %s\n' "$tool" >&2; exit 91; }
+case "$tool" in
+  uname)
+    case "$*" in
+      -s) if [[ "$mode" == wrong-os ]]; then echo Darwin; else echo Linux; fi;;
+      -m) if [[ "$mode" == wrong-arch ]]; then echo aarch64; else echo x86_64; fi;;
+      -r) echo fixture-kernel;; *) unexpected;;
+    esac; exit 0;;
+  id) [[ "$*" == -u ]] || unexpected; if [[ "$mode" == root-user ]]; then echo 0; else echo 1000; fi; exit 0;;
+  readlink) [[ "$1" == -f && "$#" == 2 ]] || unexpected; printf '%s\n' "$2"; exit 0;;
+  sha256sum) for arg in "$@"; do printf '%064d  %s\n' 0 "$arg"; done; exit 0;;
+  timeout) [[ "$1 $2" == '--kill-after=5s 30m' ]] || unexpected; shift 2; exec "$@";;
+  bwrap) ;;
+  *) unexpected;;
+esac
+printf '%s\n' "$@" > "$NIDO_PUBLIC_ENTRY_STATE/bwrap-args"
+previous=''; work=''; runner=''
+for arg in "$@"; do
+  if [[ "$previous" == --bind ]]; then work="$arg"; break; fi
+  previous="$arg"
+done
+[[ -d "$work" && "${work##*/}" == work ]] || unexpected
+scratch="${work%/work}"
+printf '%s\n' "$scratch" > "$NIDO_PUBLIC_ENTRY_STATE/scratch-path"
+cp "$scratch/runner.sh" "$NIDO_PUBLIC_ENTRY_STATE/runner.sh"
+[[ "$mode" != namespace-fail ]] || { echo 'namespace setup refused' >&2; exit 73; }
+mkdir "$work/evidence"
+echo namespace-fixture > "$work/evidence/namespace.txt"
+downloads=8; upgrade=false
+if [[ "$mode" == previous || "$mode" == previous-not-upgraded ]]; then downloads=10; upgrade=true; fi
+if [[ "$mode" != missing-result ]]; then
+  if [[ "$mode" == invalid-result ]]; then echo '{"fixture":true}' > "$work/evidence/public-result.json"
+  else
+    result_upgrade="$upgrade"
+    [[ "$mode" != previous-not-upgraded ]] || result_upgrade=false
+    printf '{"version":"0.6.0","public_downloads":%s,"previous_upgrade":%s,"private_home":true,"preserved_sentinels":true,"real_mihomo":false,"system_service":false}\n' "$downloads" "$result_upgrade" > "$work/evidence/public-result.json"
+  fi
+fi
+if [[ "$mode" != missing-downloads ]]; then
+  base=https://github.com/MiracleHYH/CDEToolkit/releases
+  for route in latest/download download/v0.6.0 latest/download download/v0.6.0; do
+    printf '%s/%s/nido-linux-amd64.tar.gz\n%s/%s/nido-linux-amd64.tar.gz.sha256\n' "$base" "$route" "$base" "$route"
+  done > "$work/evidence/public-downloads.log"
+  if [[ "$upgrade" == true ]]; then
+    printf '%s/download/v0.6.0/nido-linux-amd64.tar.gz\n%s/download/v0.6.0/nido-linux-amd64.tar.gz.sha256\n' "$base" "$base" >> "$work/evidence/public-downloads.log"
+  fi
+  [[ "$mode" != wrong-count ]] || echo extra >> "$work/evidence/public-downloads.log"
+  [[ "$mode" != wrong-url ]] || echo 'https://external.invalid/asset' > "$work/evidence/public-downloads.log"
+fi
+if [[ "$mode" != missing-sha ]]; then
+  digest=0
+  [[ "$mode" != wrong-sha ]] || digest=1
+  for ((index=0; index < downloads/2; index++)); do
+    printf '%064d  /tmp/nido-install.fixture/nido-linux-amd64.tar.gz\n%064d  /tmp/nido-install.fixture/checksum\n' "$digest" "$digest"
+  done > "$work/evidence/public-downloads.sha256"
+fi
+if [[ "$mode" != missing-cli-pass ]]; then echo 'Proxy quick start CLI 隔离验证通过' > "$work/evidence/quickstart-cli.log"; fi
+[[ "$mode" != forbidden-command ]] || echo forbidden > "$work/evidence/forbidden-commands.log"
+[[ "$mode" != command-fail-after-evidence ]] || exit 19
+[[ "$mode" == missing-pass ]] || echo 'PASS: official Nido package, public install, editable quick start and category/tool binding; inert core only.'
+`

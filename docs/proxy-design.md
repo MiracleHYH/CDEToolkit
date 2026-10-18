@@ -1,6 +1,6 @@
 # Proxy 组件实现说明
 
-Proxy 是 Nido 内置的本地显式代理组件。实现位于 `internal/components/proxy`：Nido 管理 Mihomo 程序、原生配置、精确进程和本地端点；Mihomo 管理节点协议、规则、provider、连接与缓存。组件自 v0.4.0 提供；本文新增的 quick start、节点链接解析、类别/单工具绑定仍是**未发布源码功能**，现有 v0.4.0 / v0.5.0 发行包不含新流程。基线及本次修复见[审查记录](proxy-audit.md)，历史真实核心结果与新流程验证分开记录。
+Proxy 是 Nido 内置的本地显式代理组件。实现位于 `internal/components/proxy`：Nido 管理 Mihomo 程序、原生配置、精确进程和本地端点；Mihomo 管理节点协议、规则、provider、连接与缓存。组件自 v0.4.0 提供；quick start、节点链接解析、类别/单工具绑定自 v0.6.0 提供，v0.4.0 / v0.5.0 发行包不含新流程。基线及本次修复见[审查记录](proxy-audit.md)，历史真实核心结果与新流程验证分开记录。
 
 ## 职责与目录
 
@@ -148,6 +148,23 @@ Nido 不调用 `/upgrade`。官方热更新会管理自身工作目录、覆盖�
 `--dry-run` 只做静态和本地预检，不执行核心、不下载、不启动、不写锁或配置；核心验证和远端版本明确保留为未知。JSON 与普通输出共用业务结果，诊断不混入敏感核心原文。
 
 常规隔离测试使用临时根、假核心、发布 HTTP 夹具和回环辅助进程，覆盖配置策略、文件边界、候选快照、进程身份、握手、监听与失败处理。
+
+### Linux amd64 公网发行包与安装验证
+
+发布后的显式验收使用现成的普通用户 Linux amd64、bubblewrap、curl、tar 及校验工具，不安装工具或系统服务。事先独立核验并将以下五个公开输入放入同一目录：该版本的 `install.sh`、`nido-linux-amd64.tar.gz` 与同名 `.sha256`、从对应源码构建的 `tests/fixtures/proxy-core` 假核心（命名为 `fake-mihomo`），以及同一源码的 `tests/proxy-quickstart-cli-isolation.sh`。
+
+```sh
+NIDO_TEST_PROXY_RELEASE_INPUTS=/absolute/verified-public-inputs \
+NIDO_TEST_PROXY_RELEASE_VERSION=0.6.0 \
+NIDO_TEST_PROXY_RELEASE_OUTPUT=/absolute/new-evidence-directory \
+bash tests/proxy-public-release-isolation.sh
+```
+
+可选输入 `nido-previous.tar.gz` 与 `NIDO_TEST_PROXY_PREVIOUS_VERSION=0.5.0` 必须同时提供；旧包同样应先独立核验大小与摘要。入口只流提取其中唯一的 `nido` 成员，在临时旧根初始化后添加配置注释与未知文件，再验证公网升级逐字节保留配置、环境文件与未知数据。需要出网代理时，只接受为本轮测试创建的 `NIDO_TEST_PROXY_RELEASE_SOCKS=socks5h://127.0.0.1:PORT`，不继承用户代理环境。
+
+脚本使用私有 HOME、文件系统、PID/user namespace、清空环境并删除 capabilities；不挂载宿主 HOME、凭据、会话、数据库、GPU 或服务 socket。该公网验收显式共享网络以取得真实 HTTPS 响应，不宣称网络隔离。curl 桥只允许官方仓库该精确版本与 latest 的 Linux amd64 Nido 包及其校验文件，限制输出到本次安装临时目录，并将每份真实响应与预先核验的输入逐字节比较，不用本地内容代替公网响应。latest 必须指向受验版本。
+
+验证包含默认目录首次安装、重复安装、latest、含空格的自定义目录、可选旧版升级，以及发行包 CLI 的版本、摘要、help、只读 Proxy 状态/端点和安装预览。最后用发行包 CLI 运行 quick start、节点解析和类别/单工具配置夹具；其核心只接受版本/配置验证并拒绝启动，**不计作真实 Mihomo 兼容性或转发证据**。所有认证、会话、数据库、外部代理、Git 与 shell 模拟数据需逐字节保留。新证据目录必须不存在；成功或失败保留输入摘要、环境、真实下载清单、安装与 CLI 日志，仅清理本轮私有临时目录。真实核心验收使用下方独立入口。
 
 ### Quick start 的 Linux amd64 离线隔离验证
 

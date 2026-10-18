@@ -9,7 +9,7 @@ BINARY = build/$(TARGET_OS)-$(TARGET_ARCH)/nido
 PACKAGE = dist/nido-$(TARGET_OS)-$(TARGET_ARCH).tar.gz
 RELEASE_PLATFORMS = linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
-.PHONY: build test fmt-check check dist smoke release verify-release release-check gds-release gds-release-check gds-verify-release check-gds check-gds-linux-native check-gds-legacy build-gds check-proxy-real check-proxy-linux check-proxy-linux-race check-proxy-linux-native check-proxy-quickstart-linux-native check-proxy-quickstart-real-linux
+.PHONY: build test fmt-check check dist smoke release verify-release release-check gds-release gds-release-check gds-verify-release check-gds check-gds-linux-native check-gds-legacy build-gds check-proxy-real check-proxy-linux check-proxy-linux-race check-proxy-linux-native check-proxy-quickstart-linux-native check-proxy-quickstart-real-linux check-proxy-public-release
 build:
 	CGO_ENABLED=0 GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) "$(GO)" build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w -X=github.com/MiracleHYH/CDEToolkit/internal/nido.Version=$(VERSION)' -o "$(BINARY)" ./cmd/nido
 
@@ -30,6 +30,7 @@ fmt-check:
 	sh -n scripts/gds-release-build.sh
 	bash -n tests/proxy-linux-isolation.sh tests/proxy-linux-bwrap.sh tests/gds-linux-native-isolation.sh tests/gds-public-release-isolation.sh
 	bash -n tests/proxy-quickstart-linux-native.sh tests/proxy-quickstart-cli-isolation.sh tests/proxy-quickstart-real-linux.sh
+	bash -n tests/proxy-public-release-isolation.sh
 
 check: fmt-check
 	"$(GO)" vet ./...
@@ -121,3 +122,8 @@ check-proxy-quickstart-linux-native:
 # Private filesystem/PID/network; no source, host HOME, libraries or downloads.
 check-proxy-quickstart-real-linux:
 	GO="$(GO)" bash tests/proxy-quickstart-real-linux.sh
+
+# Explicit public HTTPS acceptance; verified assets, private HOME/PID namespace,
+# and an inert core only. Never part of the offline check/release targets.
+check-proxy-public-release:
+	bash tests/proxy-public-release-isolation.sh

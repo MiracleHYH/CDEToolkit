@@ -13,12 +13,13 @@ Nido: Lightweight Development Environment Manager。开发中的命令为 `nido`
 | `make dist TARGET_OS=linux TARGET_ARCH=amd64` | 构建、打包并校验指定平台 |
 | `make release` | 仅在本地构建四个平台包、摘要与 POSIX 下载器 |
 | `make verify-release` | 复核四个平台包与下载器源码一致性 |
+| `make check-proxy-public-release` | 显式在 Linux amd64 临时 HOME 中验证已验签的公开 Nido 包、安装器和 Proxy quick start；需提供核验输入及已有 bwrap |
 | `make check-gds` | 显式运行假 GPU、假 CUDA 和 CPU worker 的 GDS 隔离测试 |
 | `make check-gds-linux-native` | 普通用户 Linux amd64 的离线 namespace 验证，需要已有 SDK、GCC、bwrap 和 vendor |
 | `make gds-release` | 固定 Go SDK 与 Bullseye 编译环境，两次离线构建独立 GDS 并比较字节 |
 | `make gds-verify-release` | GDS ELF、ABI 基线、程序身份、摘要和只读元数据校验 |
 
-这些目标不会上传、安装或启动真实组件。安装器测试使用临时 HOME、合成 Release、本地 curl 夹具及禁止执行的组件命令；验证外部 Codex 配置、认证、会话、数据库、代理文件和 Shell 配置保持原样。
+普通离线检查目标不会上传、安装或启动真实组件。安装器测试使用临时 HOME、合成 Release、本地 curl 夹具及禁止执行的组件命令；验证外部 Codex 配置、认证、会话、数据库、代理文件和 Shell 配置保持原样。显式公网验收目标则真实下载官方 Nido 包到临时根，Proxy 核心始终使用拒绝启动的夹具，详情见下文。
 
 `VERSION` 是软件版本来源，`.go-version` 固定发行工具链，`go.mod` 声明最低 Go 版本。`NIDO_RELEASE_TAG=vX.Y.Z make release-check` 还会核验 Git 工作树干净、标签等于 VERSION 且指向当前 HEAD；它不会替用户创建标签或推送。
 
@@ -74,5 +75,7 @@ GDS 发布明确使用 `--latest=false`，Nido 发布明确使用 `--latest`。N
 原生冒烟只运行 `version` 与 `status --json`；验证 Codex 分类为外部集成，Proxy、GDS 分类为内置组件，且空环境不配置任何组件、不创建软件目录。跨平台包只做静态校验，不尝试执行。
 
 发布测试只调用假的 cosign 与 gh，覆盖签名或验签失败后停止上传，以及发布白名单。测试本身不产生标签、发布、推送或真实服务操作。
+
+`tests/proxy-public-release-isolation.sh` 是 Linux amd64 的显式公网验收入口，独立于离线 CI。先在外部核验发布 API 元数据、资产摘要和 Sigstore 身份，再提供固定输入。它用已有 bubblewrap 隔离 HOME、文件系统和 PID，共享网络仅用于官方 HTTPS 下载；真实下载必须与核验输入逐字一致。覆盖 latest 首装和重复安装、固定版本和含空格的临时软件根，以及可选的旧版本升级；随后对公开包内 CLI 运行 quick start 和类别/单工具配置夹具。惰性核心只接受版本与配置检查，拒绝启动；这项包验收不冒称真实 Mihomo 转发复验。输入、输出和执行方式见 [Proxy 设计](proxy-design.md)。
 
 `tests/gds-public-release-isolation.sh` 是显式的公开发行验收入口，独立于离线 CI。它在普通用户的临时 HOME、软件根、PID 和设备 namespace 中共享公网，只下载并安装官方程序到临时根，覆盖 Nido 旧版升级、重复安装及 GDS 安装、检查更新、更新和移除。只执行 GDS 元数据查询，不运行探针、monitor、worker 或真实服务；配置、认证、会话和数据哨兵必须逐字保留。

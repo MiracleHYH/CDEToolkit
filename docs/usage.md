@@ -4,7 +4,7 @@ GDS 保持可选。Nido v0.5.0 起支持独立 Linux amd64 组件的官方下载
 
 从 v0.3.0 起，Nido 使用单目录设计和 `nido` 命令。旧 `cdet` 版本不会被自动迁移；本指南描述 Nido 的安装和使用。
 
-独立 Proxy 组件自 v0.4.0 提供。本指南中的新版 quick start、节点链接解析和类别/单工具绑定是**尚未发布的源码功能**，现有 v0.4.0 / v0.5.0 安装包不含新流程；使用发行版时请查看对应标签文档与命令帮助。安装 Nido 不会自动安装或启动 Mihomo，也不会切换已有组件入口。
+独立 Proxy 组件自 v0.4.0 提供；本指南中的 quick start、节点链接解析和类别/单工具绑定自 **v0.6.0** 提供。安装 Nido 不会自动安装或启动 Mihomo，也不会切换已有组件入口。
 
 ## 初始化与 Shell 环境
 
@@ -15,7 +15,7 @@ curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/do
 nido version
 ```
 
-需要固定版本或自定义目录时，可使用 `curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/download/v0.4.0/install.sh | sh -s -- --version 0.4.0 --root /absolute/path/to/nido`，再加载该目录下的 `env.sh`。源码构建方式见 [README](../README.md#开发)。
+需要固定版本或自定义目录时，可使用 `curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/download/v0.6.0/install.sh | sh -s -- --version 0.6.0 --root /absolute/path/to/nido`，再加载该目录下的 `env.sh`。源码构建方式见 [README](../README.md#开发)。
 
 也可以通过 `NIDO_HOME` 指定目录；显式 `--root` 优先。首次初始化只接受不存在或空目录，不把普通数据目录或旧 toolkit 目录变成 Nido。重复初始化保留配置，并刷新自己的程序和环境文件；用户修改过的 `env.sh` 不被静默覆盖。
 
