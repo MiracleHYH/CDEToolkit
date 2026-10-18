@@ -18,7 +18,9 @@ env:
 
 jobs:
   release:
-    runs-on: ubuntu-24.04
+    # Keep the full user/network namespace boundary without changing Ubuntu
+    # 24.04's AppArmor policy. Ubuntu 22.04 remains available until 2027-04-17.
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     permissions:
       contents: write

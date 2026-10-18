@@ -37,7 +37,9 @@ sh install.sh --version 0.5.0 --root /absolute/software/nido --yes
 
 CI 使用固定 Go SDK、固定 Bullseye 编译镜像和离线 vendor，两次全新构建必须字节相同。静态核验要求 Linux amd64、GOAMD64 v1、正确 loader、允许的动态依赖、无 RPATH，以及不高于 GLIBC 2.31 的所需符号。仅运行 `--version --json` 验证加载与身份，不加载真实驱动。发布工作流先签名再逐项验签，只上传上述白名单。
 
-GitHub 的一次性 Ubuntu runner 会先安装 `bubblewrap` 测试工具，再以普通 runner 用户执行 namespace 自检及完整隔离测试。使用系统包已有的 AppArmor profile；不关闭全局限制，不回退到 root 或未隔离的宿主测试。该准备步骤仅属于 CI，不在用户机器上安装工具或修改配置。
+GitHub 的两个 GDS job 使用一次性 `ubuntu-22.04` runner，先安装 `bubblewrap` 测试工具，再以普通 runner 用户执行完整 user、network、PID、mount namespace 自检及隔离测试。Ubuntu 24.04 的默认策略会阻止当前 bubblewrap 初始化私有 loopback，因此此处选择兼容 runner；不修改 AppArmor 策略、不关闭全局限制，也不回退到 root 或未隔离的宿主测试。其他 Nido 测试仍覆盖 Ubuntu 24.04。该准备步骤仅属于 CI，不在用户机器上安装工具或修改配置。
+
+`ubuntu-22.04` 目前仍可用，GitHub 公告的退役日期为 2027-04-17；届时需改用经相同 namespace 自检验证的 runner。[GitHub runner 退役公告](https://github.com/actions/runner-images/issues/14254)
 
 客户端自动检查 HTTPS、API 摘要与 sidecar；当前不自动验证 Sigstore bundle。需要签名验证时，应单独使用 cosign，并将证书身份绑定到本仓库 `gds-release.yml@refs/tags/gds-vX.Y.Z`、issuer 绑定到 `https://token.actions.githubusercontent.com`。
 

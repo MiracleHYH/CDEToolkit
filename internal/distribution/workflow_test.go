@@ -178,11 +178,15 @@ func TestGDSWorkflowsPrepareOrdinaryRunnerNamespaces(t *testing.T) {
 		}
 		var workflow struct {
 			Jobs map[string]struct {
-				Steps []struct{ Run string }
+				RunsOn string `yaml:"runs-on"`
+				Steps  []struct{ Run string }
 			}
 		}
 		if err = yaml.Unmarshal(data, &workflow); err != nil {
 			t.Fatal(err)
+		}
+		if workflow.Jobs[item.job].RunsOn != "ubuntu-22.04" {
+			t.Fatal("GDS namespace jobs require the verified compatible runner without changing host AppArmor policy", item.file)
 		}
 		prepared, isolation := -1, -1
 		for index, step := range workflow.Jobs[item.job].Steps {
