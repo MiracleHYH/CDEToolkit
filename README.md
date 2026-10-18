@@ -59,31 +59,42 @@ nido codex update
 
 ## 使用内置 Proxy
 
-以下独立 Proxy 组件及命令自 v0.4.0 提供；早期发行版以其 `--help` 为准。Nido 安装包只包含 CLI，Mihomo 仍需显式安装。
+独立 Proxy 组件自 v0.4.0 提供。下述 quick start、节点链接解析和类别/单工具代理绑定属于**尚未发布的源码功能**，现有 v0.4.0 / v0.5.0 安装包不含这套新流程；发行版以对应标签文档和 `--help` 为准。Nido 安装包只包含 CLI，Mihomo 需显式安装。
 
 Proxy 的服务器验证目标为 Linux amd64，已完成原生 race 和指定版本对的真实停机更新；各平台的历史证据与验证边界见 [Proxy 发布前审计](docs/proxy-audit.md#跨版本验证后的最终发布审计2026-10-18)。其他平台的验证缺口不作为该部署目标的发布阻塞项。
 
 ```sh
 nido proxy install
-nido proxy configure
 nido proxy validate
 nido proxy start
 nido proxy status
-nido proxy endpoint
+nido proxy endpoints --json
 ```
 
-`configure` 首次交互隐藏订阅 URL，生成原生 Mihomo provider 配置；已有配置时只显示路径。也可用 `nido proxy configure --file /absolute/config.yaml` 导入私有 YAML 文件，文件须禁止 group/other 访问。安装和配置均不自动启动；主配置固定为 **`$NIDO_HOME/proxy/config.yaml`**。
+交互 `install` 安装后首次直接进入 quick start：填写 provider URL、日常 filter/端口，再选择独立下载和 ISP；ISP 接受一行节点链接，可配置测试地址及 provider 前置节点 filter。输入正常显示，完整 YAML 预览后验证保存；各代理组使用 `url-test`。`install --yes` 只安装，不猜测配置；随后可用 `proxy configure` 补齐首次引导，已有配置时只显示路径。也可用 `nido proxy configure --file /absolute/config.yaml` 导入私有原生 YAML。安装和配置不启动；主配置固定为 **`$NIDO_HOME/proxy/config.yaml`**。
 
-默认只接受本地回环 HTTP/SOCKS 代理。端点优先选择名为 `common` 的入口，否则要求唯一；多个入口用 `nido proxy endpoint NAME` 显式选择。`status` 只做本地文件与进程观察，`validate` 执行核心检查，显式 `probe` 才测试指定网络目标：
+默认只生成回环 listeners，不启用传统通用端口，规则仅 `MATCH,DIRECT`，各 listener 明确指定出站。用户可以修改全部 listener 名称和原生配置；快捷绑定只从 listeners 读取候选，始终允许自定义代理地址。按类别或单工具分别选择：
+
+```sh
+nido proxy bind ai               # 当前为 Codex
+nido proxy bind daily            # 当前为 Git
+nido proxy bind --tool codex
+nido proxy bind --tool git --proxy http://127.0.0.1:7890 --yes
+```
+
+类别配置一次应用到类别内所有工具，单工具配置只影响自身；下载类别目前没有可配置工具。Codex 只写关联 HOME 的受管 `.env` 块，Git 只写用户级 `[http] proxy` 受管块；不处理 Git SSH 远端。未安装 Proxy 或没有 listener 时仍可选自定义地址。
+
+`status` 只做本地文件与进程观察，`validate` 执行核心检查，显式 `probe` 才测试指定网络目标；多入口需明确名称：
 
 ```sh
 nido proxy logs --tail 100
-nido proxy probe --url https://example.com
+nido proxy endpoint endpoint-proxy
+nido proxy probe --endpoint endpoint-proxy --url https://example.com
 nido proxy restart
 nido codex proxy builtin
 ```
 
-`restart` 先验证新配置，失败时保留旧进程。最后一条只把默认无认证端点写入已关联 Codex 的代理块，不会启动组件。Proxy 不依赖 Codex，也不配置全局代理。
+`restart` 先验证新配置，失败时保留旧进程。最后一条沿用 listener 选择与自定义地址流程；端口改变后需显式重新绑定，不会后台覆盖工具配置。Proxy 不依赖 Codex，也不配置全局代理。
 
 更新先显式停止，替换完成后仍保持停止：
 
@@ -135,6 +146,8 @@ make dist TARGET_OS=linux TARGET_ARCH=amd64
 已有 Linux Docker engine 时，可用已核验的 Linux 核心执行 `NIDO_TEST_MIHOMO=/absolute/path/to/linux-mihomo make check-proxy-linux`。它在无外部网络、无宿主挂载的临时同架构容器中原生运行，不安装系统服务。
 
 原生 Linux 主机已有 bubblewrap 时，可用 `make check-proxy-linux-native` 运行同样的四产物隔离检查；race 模式要求 CLI 和两份测试程序全部启用检测。预构建输入、静态链接和两种入口的用法见 [Proxy 验证说明](docs/proxy-design.md#linux-race-与原生主机入口)。
+
+本次 quick start 改动另有不使用真实核心的 Linux amd64 原生入口 `make check-proxy-quickstart-linux-native`，使用已有 SDK/GCC/bubblewrap 与离线 vendor，覆盖节点解析、配置生成、类别/单工具绑定及 CLI race；准备方式见[说明](docs/proxy-design.md#quick-start-的-linux-amd64-离线隔离验证)。新流程的真实 Mihomo 专项使用 `make check-proxy-quickstart-real-linux`，在独立网络空间内验证 provider、url-test、SS ISP 前置链及类别/单工具配置；输入、已执行场景和协议边界分别见[入口说明](docs/proxy-design.md#quick-start-的-linux-amd64-真实核心隔离验证)与[审计记录](docs/proxy-audit.md)。
 
 - [使用指南](docs/usage.md)：目录、代理、官方安装更新与数据边界。
 - [设计说明](docs/go-design.md)：外部集成与内置组件的职责及扩展方式。

@@ -17,6 +17,7 @@ import (
 	"github.com/MiracleHYH/CDEToolkit/internal/components/gds"
 	"github.com/MiracleHYH/CDEToolkit/internal/components/proxy"
 	"github.com/MiracleHYH/CDEToolkit/internal/integrations/codex"
+	"github.com/MiracleHYH/CDEToolkit/internal/integrations/gitproxy"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -30,8 +31,9 @@ type Config struct {
 	Product string `toml:"product"`
 	// Only our generated shell file has an ownership receipt. This is not an
 	// application checksum, installation inventory or history.
-	EnvDigest string       `toml:"env_digest,omitempty"`
-	Codex     codex.Config `toml:"codex"`
+	EnvDigest string          `toml:"env_digest,omitempty"`
+	Codex     codex.Config    `toml:"codex"`
+	Git       gitproxy.Config `toml:"git"`
 }
 
 type Manager struct {
@@ -39,6 +41,7 @@ type Manager struct {
 	Config                     Config
 	Env                        []string
 	Codex                      codex.Service
+	Git                        gitproxy.Service
 	GDS                        gds.Service
 	Proxy                      proxy.Service
 	configBytes                []byte
@@ -99,6 +102,7 @@ func New(root string) (*Manager, error) {
 		return nil, e
 	}
 	m.Codex = codex.Service{Root: root, UserHome: home, Env: m.Env}
+	m.Git = gitproxy.Service{Root: root, UserHome: home, Env: m.Env}
 	m.GDS = gds.Service{Root: root, Env: m.Env}
 	m.Proxy = proxy.Service{Root: root, Env: m.Env, Launcher: exe}
 	b, err := readFile(filepath.Join(root, "config.toml"), 1<<20)
@@ -115,6 +119,9 @@ func New(root string) (*Manager, error) {
 		}
 		if e := m.Codex.ValidateConfig(config.Codex); e != nil {
 			return nil, fmt.Errorf("Codex 关联配置无效: %w", e)
+		}
+		if e := m.Git.ValidateConfig(config.Git); e != nil {
+			return nil, fmt.Errorf("Git 代理归属配置无效: %w", e)
 		}
 		m.Config = config
 		m.configBytes = b
@@ -313,6 +320,14 @@ func (m *Manager) save() error {
 	if err != nil {
 		return err
 	}
+	// Receipts can contain user-supplied proxy URLs. Reject an oversized
+	// intent before publishing either file, including the final digest field.
+	finalConfig := m.Config
+	finalConfig.EnvDigest = digest([]byte(m.Environment()))
+	finalBytes, err := toml.Marshal(finalConfig)
+	if err != nil || len(b) > 1<<20 || len(finalBytes) > 1<<20 {
+		return fmt.Errorf("Nido 配置序列化后超过 1 MiB；未保存")
+	}
 	if err = replaceFile(configPath, b, 0600, func() error {
 		if err := m.checkRoot(); err != nil {
 			return err
@@ -510,6 +525,9 @@ func (m *Manager) ConfigureProxy(endpoint string, detach bool) error {
 // ConfigureBuiltinProxy keeps the selected component snapshot valid across
 // confirmation and the external .env edit, without coupling either component.
 func (m *Manager) ConfigureBuiltinProxy(expected proxy.Endpoint) error {
+	if expected.Authentication {
+		return fmt.Errorf("该入口要求认证，请提供完整代理地址")
+	}
 	return m.configureProxy(expected.URL(), false, &expected)
 }
 
@@ -518,7 +536,7 @@ func (m *Manager) checkBuiltinEndpoint(expected *proxy.Endpoint) error {
 		return nil
 	}
 	current, err := m.Proxy.Endpoint(expected.Name)
-	if err != nil || current != *expected || current.Authentication {
+	if err != nil || current != *expected {
 		return fmt.Errorf("内置 Proxy 端点在操作期间发生变化；未保存过期代理地址")
 	}
 	return nil

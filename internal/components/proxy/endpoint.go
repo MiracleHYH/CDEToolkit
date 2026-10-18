@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // Endpoint is a configuration snapshot. It does not assert that a process is
@@ -23,7 +25,8 @@ func (e Endpoint) URL() string {
 	return e.Scheme + "://" + net.JoinHostPort(e.Host, strconv.Itoa(e.Port))
 }
 
-// Endpoint selects common, or the sole endpoint. It never chooses arbitrarily
+// Endpoint selects the sole endpoint when no name is supplied. Names are user
+// data, not an API contract. It never chooses arbitrarily
 // among multiple listeners and never embeds authentication in its result.
 func (c Config) Endpoint(name string) (Endpoint, error) {
 	if name != "" {
@@ -34,11 +37,6 @@ func (c Config) Endpoint(name string) (Endpoint, error) {
 		}
 		return Endpoint{}, fmt.Errorf("未找到指定 Proxy 端点")
 	}
-	for _, endpoint := range c.Endpoints {
-		if endpoint.Name == "common" {
-			return endpoint, nil
-		}
-	}
 	if len(c.Endpoints) == 1 {
 		return c.Endpoints[0], nil
 	}
@@ -46,6 +44,41 @@ func (c Config) Endpoint(name string) (Endpoint, error) {
 		return Endpoint{}, fmt.Errorf("Proxy 没有可导出的端点")
 	}
 	return Endpoint{}, fmt.Errorf("Proxy 有多个端点；请显式指定名称")
+}
+
+// ListenerEndpoints exports only explicitly named listeners for application
+// configuration. Traditional ports remain available to runtime ownership checks.
+func (c Config) ListenerEndpoints() []Endpoint {
+	var document yaml.Node
+	if yaml.Unmarshal(c.Data, &document) != nil || len(document.Content) != 1 {
+		return nil
+	}
+	listeners := field(document.Content[0], "listeners")
+	if listeners == nil || listeners.Kind != yaml.SequenceNode {
+		return []Endpoint{}
+	}
+	names := make(map[string]bool)
+	for _, listener := range listeners.Content {
+		name, err := stringValue(field(listener, "name"), "")
+		if err == nil {
+			names[name] = true
+		}
+	}
+	result := []Endpoint{}
+	for _, endpoint := range c.Endpoints {
+		if names[endpoint.Name] {
+			result = append(result, endpoint)
+		}
+	}
+	return result
+}
+
+func (s *Service) ListenerEndpoints() ([]Endpoint, error) {
+	config, err := s.ReadConfig()
+	if err != nil {
+		return nil, err
+	}
+	return config.ListenerEndpoints(), nil
 }
 
 func (s *Service) Endpoint(name string) (Endpoint, error) {

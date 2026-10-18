@@ -191,7 +191,7 @@ func TestProxyCLIReadOnlyAndOptionValidation(t *testing.T) {
 	}
 }
 
-func TestProxyCLIValidationFailureAndSecretInput(t *testing.T) {
+func TestProxyCLIValidationFailureAndVisibleInput(t *testing.T) {
 	m, home := fixture(t)
 	if err := m.Init(); err != nil {
 		t.Fatal(err)
@@ -202,8 +202,8 @@ func TestProxyCLIValidationFailureAndSecretInput(t *testing.T) {
 		t.Fatal(stderr)
 	}
 	secret := "https://subscription.invalid/provider?token=never-print"
-	code, out, stderr := proxyCLI(t, m, r, "y\n"+secret+"\n", "proxy", "configure", "--json")
-	if code != 0 || !json.Valid([]byte(out)) || strings.Contains(out+stderr, "never-print") {
+	code, out, stderr := proxyCLI(t, m, r, secret+"\n.*\n\nn\nn\n", "proxy", "configure", "--json")
+	if code != 0 || !json.Valid([]byte(out)) || !strings.Contains(stderr, "never-print") {
 		t.Fatalf("configure %d %s %s", code, out, stderr)
 	}
 	t.Setenv("CLASH_CONFIG_STRING", "do-not-validate-this")
@@ -359,8 +359,8 @@ func (r *beforeRead) Read(p []byte) (int, error) {
 
 func TestCodexBuiltinRejectsEndpointChangeDuringConfirmation(t *testing.T) {
 	for _, replacement := range []string{
-		"mixed-port: 17891\n",
-		"mixed-port: 17890\nauthentication: ['user:never-print']\n",
+		"listeners: [{name: any-name, type: mixed, listen: 127.0.0.1, port: 17891}]\n",
+		"listeners: [{name: any-name, type: mixed, listen: 127.0.0.1, port: 17890}]\nauthentication: ['user:never-print']\n",
 	} {
 		t.Run(fmt.Sprintf("config-%d", len(replacement)), func(t *testing.T) {
 			m, home := fixture(t)
@@ -390,12 +390,12 @@ func TestCodexBuiltinRejectsEndpointChangeDuringConfirmation(t *testing.T) {
 				t.Fatal(err)
 			}
 			path := filepath.Join(dir, "config.yaml")
-			if err := os.WriteFile(path, []byte("mixed-port: 17890\n"), 0600); err != nil {
+			if err := os.WriteFile(path, []byte("listeners: [{name: any-name, type: mixed, listen: 127.0.0.1, port: 17890}]\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			runner := &cliProxyRunner{}
 			var out, stderr bytes.Buffer
-			reader := &beforeRead{reader: strings.NewReader("y\n"), before: func() {
+			reader := &beforeRead{reader: strings.NewReader("any-name\ny\n"), before: func() {
 				if err := os.WriteFile(path, []byte(replacement), 0600); err != nil {
 					t.Fatal(err)
 				}

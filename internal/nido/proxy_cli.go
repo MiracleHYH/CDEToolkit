@@ -1,17 +1,12 @@
 package nido
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
-	"os/signal"
 	"strconv"
-	"strings"
-	"syscall"
 
 	"github.com/MiracleHYH/CDEToolkit/internal/components/proxy"
 	"github.com/MiracleHYH/CDEToolkit/internal/integrations/codex"
@@ -35,6 +30,12 @@ func (c *CLI) proxy(m *Manager, o cliOptions, args []string) int {
 		args = args[1:]
 	}
 	fail := func(err error) int { return c.proxyError(o, err) }
+	if action == "bind" {
+		return c.proxyBind(m, o, args)
+	}
+	if o.tool != "" || o.endpoint != "" && action != "probe" {
+		return fail(fmt.Errorf("--tool 仅用于 proxy bind，--endpoint 用于 bind 或 probe"))
+	}
 	if o.home != "" {
 		return fail(fmt.Errorf("Proxy 不接受 --home"))
 	}
@@ -67,6 +68,13 @@ func (c *CLI) proxy(m *Manager, o cliOptions, args []string) int {
 		name = args[0]
 	}
 	switch action {
+	case "endpoints":
+		endpoints, err := m.Proxy.ListenerEndpoints()
+		if err != nil {
+			fmt.Fprintln(c.Err, "没有可用的 listener 端点：", err)
+			endpoints = []proxy.Endpoint{}
+		}
+		return c.output(o, endpoints)
 	case "status":
 		return c.output(o, m.Proxy.Status())
 	case "config-path":
@@ -121,12 +129,12 @@ func (c *CLI) proxy(m *Manager, o cliOptions, args []string) int {
 			return fail(fmt.Errorf("probe 需要 --url 指定 HTTP 或 HTTPS 目标"))
 		}
 		if o.dry {
-			if _, err := m.Proxy.CheckProbe("", o.url); err != nil {
+			if _, err := m.Proxy.CheckProbe(o.endpoint, o.url); err != nil {
 				return fail(err)
 			}
 			return c.output(o, map[string]string{"operation": "probe", "detail": "仅检查目标与本地端点；未联网"})
 		}
-		result, err := m.Proxy.Probe("", o.url)
+		result, err := m.Proxy.Probe(o.endpoint, o.url)
 		if err != nil {
 			return fail(err)
 		}
@@ -187,18 +195,15 @@ func (c *CLI) proxy(m *Manager, o cliOptions, args []string) int {
 			return fail(err)
 		}
 	}
-	if action != "validate" {
+	if action != "validate" && action != "install" && !(action == "configure" && o.file == "") {
 		if err := c.confirm(o, action+" 内置 Proxy"); err != nil {
 			return fail(err)
 		}
 	}
 	var generated []byte
 	if action == "configure" && o.file == "" {
-		subscription, err := c.askSecret("Mihomo provider 订阅地址")
-		if err != nil {
-			return fail(err)
-		}
-		generated, err = proxy.Template(subscription)
+		var err error
+		generated, err = c.proxyQuickStart()
 		if err != nil {
 			return fail(err)
 		}
@@ -213,7 +218,7 @@ func (c *CLI) proxy(m *Manager, o cliOptions, args []string) int {
 			if o.file != "" {
 				return m.Proxy.Configure(o.file)
 			}
-			return m.Proxy.ConfigureBytes(generated)
+			return m.Proxy.ConfigureInitialBytes(generated)
 		case "validate":
 			return m.Proxy.Validate()
 		case "start":
@@ -230,74 +235,22 @@ func (c *CLI) proxy(m *Manager, o cliOptions, args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	return c.output(o, map[string]string{"component": "proxy", "operation": action, "detail": "操作完成；配置、安装和更新不自动启动，卸载保留配置与数据。"})
-}
-
-// A test-provided reader never echoes. A real interactive terminal temporarily
-// disables echo and restores its exact prior mode even on input failure.
-func (c *CLI) askSecret(label string) (string, error) {
-	if c.reader == nil {
-		if c.In != nil {
-			c.reader = bufio.NewReader(c.In)
-			c.promptOut = c.Err
-		} else {
-			f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-			if err != nil {
-				return "", fmt.Errorf("需要交互终端，或使用 --file 私有配置文件")
-			}
-			c.tty = f
-			c.reader = bufio.NewReader(f)
-			c.promptOut = f
-		}
-	}
-	var interrupt chan os.Signal
-	if c.tty != nil {
-		interrupt = make(chan os.Signal, 1)
-		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
-		defer signal.Stop(interrupt)
-		state := exec.Command("/bin/stty", "-g")
-		state.Stdin = c.tty
-		mode, err := state.Output()
+	if action == "install" && !o.yes {
+		path, err := m.Proxy.ConfigPath()
 		if err != nil {
-			return "", fmt.Errorf("无法安全读取终端模式")
+			return fail(err)
 		}
-		defer func() {
-			restore := exec.Command("/bin/stty", strings.TrimSpace(string(mode)))
-			restore.Stdin = c.tty
-			_ = restore.Run()
-			fmt.Fprintln(c.promptOut)
-		}()
-		disable := exec.Command("/bin/stty", "-echo")
-		disable.Stdin = c.tty
-		if disable.Run() != nil {
-			return "", fmt.Errorf("无法隐藏终端输入")
+		if _, err = os.Lstat(path); os.IsNotExist(err) {
+			generated, err := c.proxyQuickStart()
+			if err != nil {
+				return fail(fmt.Errorf("Mihomo 已安装，quick start 未完成；可运行 proxy configure 重试：%w", err))
+			}
+			if err = m.mutate(false, func() error { return m.Proxy.ConfigureInitialBytes(generated) }); err != nil {
+				return fail(err)
+			}
+		} else if err != nil {
+			return fail(err)
 		}
 	}
-	fmt.Fprint(c.promptOut, label+"：")
-	var value string
-	var err error
-	if c.tty != nil {
-		type input struct {
-			value string
-			err   error
-		}
-		result := make(chan input, 1)
-		go func() { value, err := c.reader.ReadString('\n'); result <- input{value, err} }()
-		select {
-		case <-interrupt:
-			return "", fmt.Errorf("配置输入已取消")
-		case read := <-result:
-			value, err = read.value, read.err
-		}
-	} else {
-		value, err = c.reader.ReadString('\n')
-	}
-	if err != nil && value == "" {
-		return "", fmt.Errorf("配置输入未完成")
-	}
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "", fmt.Errorf("配置输入不能为空")
-	}
-	return value, nil
+	return c.output(o, map[string]string{"component": "proxy", "operation": action, "detail": "操作完成；配置、安装和更新不自动启动，卸载保留配置与数据。"})
 }

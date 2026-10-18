@@ -1,0 +1,189 @@
+package proxy
+
+import (
+	"bytes"
+	"fmt"
+	"net/netip"
+	"net/url"
+	"strconv"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	"go.yaml.in/yaml/v3"
+)
+
+// DefaultTestURL is the ordinary connectivity target used by generated groups
+// and provider health checks. ISP can use a separately supplied test URL.
+const DefaultTestURL = "https://www.gstatic.com/generate_204"
+
+type QuickStartRoute struct {
+	Filter string
+	Port   int
+}
+
+type QuickStartISP struct {
+	NodeURL     string
+	Port        int
+	TestURL     string
+	RelayFilter string
+}
+
+type QuickStartOptions struct {
+	ProviderURL string
+	ProxyFilter string
+	ProxyPort   int
+	Download    *QuickStartRoute
+	ISP         *QuickStartISP
+}
+
+// QuickStart creates one native Mihomo configuration without reading files,
+// fetching subscriptions, or executing the core. Filters retain Mihomo's own
+// regular-expression syntax; the core performs their final validation.
+func QuickStart(o QuickStartOptions) ([]byte, error) {
+	if err := quickStartHTTPURL(o.ProviderURL); err != nil {
+		return nil, fmt.Errorf("provider 地址必须是有效的 HTTP 或 HTTPS URL")
+	}
+	ports := make(map[int]bool)
+	checkRoute := func(name, filter string, port int) error {
+		if !utf8.ValidString(filter) || strings.TrimSpace(filter) == "" || strings.ContainsFunc(filter, unicode.IsControl) {
+			return fmt.Errorf("%s filter 必须是非空的单行表达式；匹配全部节点请填写 .*", name)
+		}
+		if port < 1 || port > 65535 || ports[port] {
+			return fmt.Errorf("%s 端口必须是 1 至 65535 的整数，且不能与其他入口重复", name)
+		}
+		ports[port] = true
+		return nil
+	}
+	if err := checkRoute("日常代理", o.ProxyFilter, o.ProxyPort); err != nil {
+		return nil, err
+	}
+	groups := []map[string]any{quickStartProviderGroup("proxy", o.ProxyFilter)}
+	listeners := []map[string]any{quickStartListener("endpoint-proxy", "proxy", o.ProxyPort)}
+	if o.Download != nil {
+		if err := checkRoute("下载代理", o.Download.Filter, o.Download.Port); err != nil {
+			return nil, err
+		}
+		groups = append(groups, quickStartProviderGroup("download", o.Download.Filter))
+		listeners = append(listeners, quickStartListener("endpoint-download", "download", o.Download.Port))
+	}
+	config := map[string]any{
+		"allow-lan": false,
+		"mode":      "rule",
+		"log-level": "info",
+		"proxy-providers": map[string]any{
+			"subscription": map[string]any{
+				"type":     "http",
+				"url":      o.ProviderURL,
+				"path":     "providers/subscription.yaml",
+				"proxy":    "DIRECT",
+				"interval": 3600,
+				"health-check": map[string]any{
+					"enable":   true,
+					"url":      DefaultTestURL,
+					"interval": 300,
+				},
+			},
+		},
+		"rules": []string{"MATCH,DIRECT"},
+	}
+	if o.ISP != nil {
+		// The ISP group always contains a concrete node, so use the ordinary
+		// expression only to share port validation with the provider routes.
+		if err := checkRoute("ISP 代理", ".*", o.ISP.Port); err != nil {
+			return nil, err
+		}
+		testURL := o.ISP.TestURL
+		if testURL == "" {
+			testURL = DefaultTestURL
+		}
+		if err := quickStartHTTPURL(testURL); err != nil {
+			return nil, fmt.Errorf("ISP 测试地址必须是有效的 HTTP 或 HTTPS URL")
+		}
+		node, err := ParseNodeURL(o.ISP.NodeURL)
+		if err != nil {
+			return nil, fmt.Errorf("ISP 节点链接无效: %w", err)
+		}
+		node["name"] = "isp-node"
+		if o.ISP.RelayFilter != "" {
+			if !utf8.ValidString(o.ISP.RelayFilter) || strings.TrimSpace(o.ISP.RelayFilter) == "" || strings.ContainsFunc(o.ISP.RelayFilter, unicode.IsControl) {
+				return nil, fmt.Errorf("ISP 前置 filter 必须是非空的单行表达式；匹配全部节点请填写 .*")
+			}
+			groups = append(groups, quickStartProviderGroup("isp-relay", o.ISP.RelayFilter))
+			node["dialer-proxy"] = "isp-relay"
+		}
+		config["proxies"] = []map[string]any{node}
+		groups = append(groups, map[string]any{
+			"name":           "isp",
+			"type":           "url-test",
+			"proxies":        []string{"isp-node"},
+			"url":            testURL,
+			"interval":       300,
+			"empty-fallback": "REJECT",
+		})
+		listeners = append(listeners, quickStartListener("endpoint-isp", "isp", o.ISP.Port))
+	}
+	config["proxy-groups"] = groups
+	config["listeners"] = listeners
+	var encoded bytes.Buffer
+	encoder := yaml.NewEncoder(&encoded)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(config); err != nil {
+		return nil, fmt.Errorf("无法生成 Proxy quick start 配置: %w", err)
+	}
+	if err := encoder.Close(); err != nil {
+		return nil, fmt.Errorf("无法生成 Proxy quick start 配置: %w", err)
+	}
+	if encoded.Len() > maxConfig {
+		return nil, fmt.Errorf("Proxy quick start 配置超过大小限制")
+	}
+	return encoded.Bytes(), nil
+}
+
+func quickStartProviderGroup(name, filter string) map[string]any {
+	return map[string]any{
+		"name":           name,
+		"type":           "url-test",
+		"use":            []string{"subscription"},
+		"filter":         filter,
+		"url":            DefaultTestURL,
+		"interval":       300,
+		"empty-fallback": "REJECT",
+	}
+}
+
+func quickStartListener(name, group string, port int) map[string]any {
+	return map[string]any{
+		"name":   name,
+		"type":   "mixed",
+		"listen": "127.0.0.1",
+		"port":   port,
+		"proxy":  group,
+	}
+}
+
+func quickStartHTTPURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || !utf8.ValidString(raw) || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.Opaque != "" || strings.ContainsFunc(raw, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r)
+	}) {
+		return fmt.Errorf("无效的 HTTP 或 HTTPS URL")
+	}
+	// A URL parser permits an empty trailing port and bracketed non-IP hosts.
+	// Neither is a meaningful endpoint for the generated HTTP client.
+	if strings.HasSuffix(u.Host, ":") {
+		return fmt.Errorf("URL 端口为空")
+	}
+	if strings.Contains(u.Hostname(), ":") || strings.HasPrefix(u.Host, "[") {
+		if _, err := netip.ParseAddr(u.Hostname()); err != nil || !strings.HasPrefix(u.Host, "[") {
+			return fmt.Errorf("URL IP 地址无效")
+		}
+	}
+	if u.Port() != "" {
+		port, err := strconv.Atoi(u.Port())
+		if err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("URL 端口无效")
+		}
+	}
+	return nil
+}

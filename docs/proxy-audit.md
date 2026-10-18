@@ -2,6 +2,76 @@
 
 审查基线为 `9dd3951`，日期为 2026 年 10 月 17 日。基线结论为 Proxy 只有基本生命周期骨架，不能据此宣称组件构建完成。当前源码已改用独立的 `internal/components/proxy`，后续补充了临时 HOME 中的真实核心验证。后文保留各轮发现、修复和验证证据；审计与核心隔离验证阶段没有发布或切换入口，后续发行另行验收。
 
+## Quick start 最终提交审计（2026-10-18）
+
+本轮整理 quick start、节点链接解析、listener 导出、类别/单工具代理配置及其隔离测试，以 Linux amd64 为验收目标。重新复核配置生成、初次独占创建、共享地址校验、Git 文件归属/XDG 冲突、收据补偿、只读预览和各验证入口的判定，没有保留已确认而未修复的问题。版本仍为 `0.5.0`，这些新流程尚未发行；源码推送不创建标签，也不运行发布工作流。
+
+最终审计修复两项问题：
+
+- Git 受管块采用的字符串编码会把原始不可打印字符（例如 U+200B）写成 Git 不接受的 Go Unicode 转义，可能使整个配置无法解析。共享校验现在在写入前拒绝无效 UTF-8 和不可打印字符，既有编码与收据格式保持不变。回归覆盖 U+200B、U+FEFF、无效 UTF-8、已有/未有受管块的字节保留，以及普通中文/希腊文地址的实际临时 `git config --file` 解析；类别/单工具和 dry-run 入口也验证拒绝。
+- 真实核心入口原先仅要求父测试 PASS，同名旧测试缺少节点矩阵时可能冒充新证据。现在强制 17 个节点子项逐项精确 PASS；缺整矩阵、缺单项、父项/前缀/后缀冒充均拒绝，纯 mock 契约从 28 扩为 33 分支。此前 217.49 秒的完整真实日志通过了新增证据守卫。
+
+两套 Go 工具链的隔离回归覆盖上述修复；本机完整 `make check smoke` 包含全项目 race、vet、格式/Shell 检查、两套 CLI 夹具及只读包冒烟。源码与历史凭据扫描继续执行。推送后的自动验收使用现有 [check 工作流](https://github.com/MiracleHYH/CDEToolkit/actions/workflows/check.yml)：Linux amd64 Go 1.23.x/1.27.2、保留的 macOS 兼容检查、公开源码扫描和 GDS native 必跑项；可选 legacy 项按原条件运行，具体结论以该源码提交的检查页为准。
+
+下节的原生真实核心记录保留对应冻结输入和产物摘要。本轮唯一新增生产修复是拒绝上述异常代理地址，没有更改已验证的有效 ASCII 地址、配置生成、节点解析或 Mihomo 生命周期路径；修复后的地址处理由新回归和原生 Linux CI 检查，不把普通 CI 冒称真实核心复验。本轮未重新运行真实 Mihomo，也未发布、切换入口、安装系统服务或改动现有配置、认证、会话和数据。
+
+## Quick start 的 Linux amd64 真实 Mihomo 隔离复验（2026-10-18）
+
+按后续授权，新增独立 `TestProxyRealMihomoQuickStart`，在 J66 普通用户 UID 1001、Linux `6.8.0-124-generic` x86_64、Go 1.27.2/GCC 13.3.0 上完成新流程的真实核心验证。首轮 **215.09 秒**通过；加强 ISP 自动测速观测后的最终同场景复验 **217.49 秒**通过，17 个节点配置子项全部 PASS，无跳过、无父子进程 race 报告。本轮未发现新增生产兼容性缺陷，没有修改生产代码或增加模块依赖；只补测试、隔离入口和文档，未发布或改变版本。
+
+使用官方 [Mihomo v1.19.32](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.32) 的 `mihomo-linux-amd64-compatible-v1.19.32.gz`。下载前精确匹配官方发布 API 的名称、URL、大小和摘要：归档 **22,877,876 字节**，SHA-256 `ba3ce607747a07f948fc35780e108a4a7c7f552a38b9bd4d115f313ebcb89c20`；gzip 完整性校验和展开后静态 ELF amd64 检查通过，核心 SHA-256 `7a0d59da2e678d56c899a3db996a2ad8963286c4f3634b0451435db248f13fa1`。实际报告 v1.19.32、Go 1.26.8、`with_gvisor`；官方核心保持原字节，没有重新编译或启用其内部 race。摘要核对不等于签名验证。
+
+新增 `tests/proxy-quickstart-real-linux.sh` 和 `make check-proxy-quickstart-real-linux`。主机仅使用已有 SDK/GCC/bubblewrap，编译使用离线 vendor 和私有构建目录；执行 namespace 只挂载三份只读静态程序（race CLI、race 测试程序、官方核心）与本次空临时目录、私有 proc/dev。不挂载宿主 HOME、源码、系统库、凭据、服务 socket；清空环境和 capabilities，使用独立文件系统/PID/user/**网络**空间，全部 provider、测速、上游与目标均为临时字面 IPv4 回环地址。辅助 SS 服务端也只属于本次临时子进程，不注册系统服务。
+
+| 真实场景 | 最终结果与证据 |
+| --- | --- |
+| 交互 quick start | 实际 CLI `install` 接收 provider、三入口端口、独立 filter、复杂 SS 链接及 ISP 自定义测试 URL；保存后未启动。核对只生成 listeners、唯一规则 `MATCH,DIRECT`、四个活跃 url-test 组与原始 300 秒默认间隔 |
+| 活跃健康检查 | 不沿用旧夹具关闭健康检查的方式。仅把常规外网测速 URL 改为回环；ISP 自定义 `/isp` 单独计数，与显式 `/ready` 探测分离。核对原始默认值后，仅将测试配置中的 ISP 重试间隔缩短为非零的 1 秒，应对 provider 初始化早于首测完成的时序；生产默认值不变。最终确认 `/isp` 自动测速成功，全部健康目标请求合计 13 次 |
+| HTTP provider 与过滤 | provider 实际下载 **1** 次并写入唯一缓存。Daily/Download/Relay 各含坏首节点和可用次节点，观察到 3 次坏节点检查；独立 filter 和正确上游连接计数证明健康选点及路由，没有借用 `MATCH,DIRECT` 绕行 |
+| SS ISP 前置链 | 主核心 → provider HTTP CONNECT relay → 第二个临时 Mihomo SS AEAD 服务端 → 回环目标。密码 `%2D`、`%3A`、`%40`、字面 `+`、`%2F`、`%252D` 单次解码后完成真实认证；relay 只允许本次 SS/健康目标。关闭 relay 后 ISP 请求失败、目标计数不变，而日常转发继续可用 |
+| HTTP/SOCKS/HTTPS | 三个 mixed listener 分别完成 HTTP、SOCKS5 TCP、HTTP CONNECT HTTPS 和 SOCKS HTTPS；业务目标与健康目标采用不同端口/计数。包含后续绑定复验，业务目标共 **32** 次 |
+| 类别/单工具/custom | AI→ISP、日常→proxy、单 Codex→download、单 Git→自定义 SOCKS；从临时 `.env`/Git 文件读回真实写入 URL 并转发。确认跨类别不互改、单工具只覆盖自身、空下载类别无伪绑定、`off` 名称可明确选择，移除受管块后原文件字节恢复 |
+| 进程与保留 | 核验主核心 PID/UID/boot/birth、程序及全部监听归属；停止后原出生身份退出、端口关闭。卸载只移除核心，配置、provider 缓存、日志等既有组件文件以及外部认证、会话、数据库、Shell/外部 Mihomo 哨兵字节保持 |
+| 节点链接矩阵 | 17 项真实核心 `-t` 接受：SS percent/Base64/legacy/2022/obfs/v2ray-plugin，VMess TCP/WS TLS early data，VLESS TLS WS/gRPC/Reality TCP，Trojan WS TLS，Hy2 salamander/pin，HTTP(S)、SOCKS5/H。逐项断言百分号/字面 `+` 字段；只做配置接受，不宣称这些其他协议实际握手或转发成功 |
+
+测试夹具审查修正了两处可能的错误结论：relay 的允许列表必须另含自己的健康目标；ISP 自动 `/isp` 测速不能由显式 `/ready` 流量替代。新入口的 28 分支纯 mock 契约拒绝 namespace 失败、错误架构/非静态产物、缺少 race、旧测试 PASS 冒充、新用例跳过、缺少最终 PASS、子进程报告或报告目录缺失；既有假核心入口明确排除这个真实专项。最终 `make check`（全项目 race/vet/格式/Shell/两套 CLI 隔离）、Go 1.23.12 编译兼容、源码与历史凭据扫描（225 项候选文件）通过。
+
+最终离线 vendor 冻结源码归档 SHA-256 `424da9f1df34e9b2a82c8cd9b321a98e962e503a0fa8e4ce92bb0f46d31fd1a4`，执行后再次逐项核对构建输入与当前源码一致。原生静态 race CLI SHA-256 `38552230cd07cd3e1df2e641893a4479d90273a1489171fab61fc08148f2b08d`，测试程序 `3ed4f53a0c111d1b1393af2a4eaa3f723cd853dddddc9ff06d50e7bb1ea3ba3a`。官方输入元数据、冻结归档、逐文件摘要、构建和完整运行日志保留于本地 `build/proxy-quickstart-real-audit-20261018`，`final` 为最终结果，`attempt-1` 保留加强测速断言之前的首轮通过证据。本次临时服务器/本地源码、SDK、核心及 HOME 定向清理，不改动现有配置、认证、会话和数据。
+
+边界仍为指定核心、Linux amd64、字面 IPv4 回环及 TCP HTTP/SOCKS/HTTPS。未验证真实外部订阅、UDP/QUIC 转发、全部分享链接变体、其他版本或平台；Hy2/Reality 等配置接受不证明可经任意前置节点建立业务链。没有运行真实 Codex/Git 业务或验证其远端服务，只验证受管配置读回后的代理转发与数据保留。本轮静态 CGO 链接器对 `getaddrinfo` 给出系统库提示，实际测试不做 DNS 解析、不挂载系统库并成功执行，不扩称通用静态 CGO DNS 兼容性。
+
+## Quick start 与工具代理配置源码迭代（2026-10-18）
+
+本节记录用户确认设计后的源码与假核心验证阶段，不属于已发布的 v0.4.0 / v0.5.0。该阶段只修改源码、测试和文档，没有修改版本或发行；不切换实际入口，不安装系统服务，不使用真实 Mihomo，也不读取或修改宿主现有配置、认证、会话和数据库。其后的真实新流程复验见上一节；更早各轮真实核心及跨版本结果仍只对应各自历史冻结实现。
+
+新增与调整：
+
+- 安装成功且无配置时直接进行普通可见输入的 quick start；`--yes` 仅安装。完整原生 YAML 预览写 stderr，结构化结果保留独立 stdout。首次引导以独占创建提交，交互期间新出现的配置不会被覆盖。
+- 单 provider、各组独立 filter；日常、下载、ISP 前置使用 `url-test` 和常规测试地址，ISP 独立组检测解析后节点的完整出站，允许自定义测试地址。生成器仅启用回环 listeners，所有入口显式指定出站，默认规则唯一为 `MATCH,DIRECT`。
+- 纯解析器支持 SS SIP002/旧式 Base64/SS2022、VMess、VLESS、Trojan、Hy2、HTTP(S) 和 SOCKS5(H) 的已实现变体。按组件单次百分号解码、保留字面 `+`，拒绝未知或无法正确映射的参数，无新增第三方依赖。
+- listener 名称没有保留契约，快捷配置只枚举 listeners。类别与单工具分别选择，自定义地址始终可用；AI 当前为 Codex，日常为 Git，下载为空。无后台继承、自动启动或端口同步。
+- 独立 Git 集成只管理用户级 `[http] proxy` 尾部块。路径位于 Nido 根内、外部已有代理、include、归属不明、并发 XDG 变化均拒绝；收据保存失败时安全补偿。Nido 序列化配置在写入前检查 1 MiB 上限，避免超大代理收据导致下次不可读。
+- 显式选择认证 listener 的 `--dry-run` 同样禁止读取凭据，要求使用完整自定义地址；交互选择使用序号或 `listener:名称`，避免 `off`、`keep`、`custom` 或纯数字名称与菜单动作产生歧义。
+
+本机 Go 1.27.2 `make check` 已通过全项目 race、vet、格式与 shell 语法检查、既有 CLI 隔离及新增假核心 CLI 全流程。Go 1.23.12 的 Proxy、Git 集成及 Nido 包普通回归通过。解析器两轮短时 fuzz 合计 87,615 次执行无失败。公开源码及历史凭据扫描通过。
+
+新增 `tests/proxy-quickstart-linux-native.sh` 使用已有 bubblewrap、GCC、原生 SDK 和离线 vendor；构建源码、SDK 只读挂载，HOME/PID/文件系统隔离，网络命名空间共享但夹具仅使用临时回环端口。入口禁止宿主回退，要求指定测试与两份 CLI 夹具实际 PASS；仅允许两项明确记录为未覆盖的 IPv6 环境跳过，其他跳过、失败或缺失结果均拒绝。实际 CLI 只安装接受 `-v/-t`、拒绝启动的假核心，服务管理与下载命令均由禁止调用哨兵守卫。
+
+Linux 首轮在模拟 Runner 的启动测试触发 1 秒期限：原夹具为模拟执行也复制并反复哈希大型 race 测试程序。修复为模拟 Runner 仅使用不可执行的极小原生格式夹具，真实 OS 辅助进程仍使用完整测试程序；没有放宽启动期限。修复后在 J66 普通用户 UID 1001、Linux `6.8.0-124-generic` x86_64、Go 1.27.2/GCC 13.3.0 实际复验通过：
+
+| 本轮 Linux amd64 原生检查 | 实际结果 |
+| --- | --- |
+| Proxy 全包 race | 153.038 秒通过；原超时的 Probe 测试 0.15 秒通过，16 轮启动授权/exec/停止 85.91 秒通过 |
+| 独立 Git 集成 race | 2.197 秒通过，无跳过 |
+| Nido 的 Proxy/绑定定向 race | 45.054 秒通过，无跳过；真实核心专项在选择阶段明确排除 |
+| 实际 race CLI | 构建元数据确认 Linux amd64、CGO=1、race=true；既有 CLI 隔离与新增 quick start、类别/单工具/自定义配置全流程均通过 |
+| 数据保留 | 临时 Codex `.env` 受管块与 Git 受管块可配置、替换及移除；原认证、会话、数据库、外部 Mihomo 配置及 Shell 哨兵字节保留；未调用真实核心、下载器或服务管理器 |
+| IPv6 边界 | 仅 `TestLinuxKernelIPv6AndWildcardOwnership/IPv6_loopback` 和 `/IPv6_wildcard` 因 `bind: cannot assign requested address` 未覆盖，不计为 PASS；输出、JSON、环境元数据及 `environment-skips.txt` 均记录，没有其他跳过或失败，不修改宿主网络 |
+
+本轮离线 vendor 源码归档 SHA-256 为 `7926ca6f11033a6e56e3ba22af3511843fe459905624a779f5f4825ce0758ded`；本轮 Proxy 源码、构建依赖与相关夹具在执行后再次核对，与冻结输入一致。原生 race CLI SHA-256 为 `d6e1490a85b73add3cc630043d6a8539f0415c18f4d2821e0f397d0862761023`，只验证配置、拒绝启动的假核心为 `650749ce7906973ca51df8d234336b758aa6d02a6afcdf2c29e11729d5e3aee7`。最终日志、逐文件摘要及冻结归档保存在本地 `build/proxy-quickstart-audit-20261018/final`；首次失败证据另存 `attempt-1`。收尾定向清理本次服务器及本地临时源码、SDK、程序和 HOME，保留构建缓存与上述证据，不涉及任何现有用户数据。
+
+最后修复后，本机再次完整通过 `make check`、Go 1.23.12 三包兼容回归，以及公开源码/历史凭据扫描（221 项候选文件）。该阶段没有新增模块依赖。假核心结果不证明真实协议或业务兼容性；新流程的真实核心专项由上一节单独记录，不能借用下方更早历史结果代替。
+
 ## v0.4.0 发行范围（2026-10-18）
 
 独立 Proxy、审计修复和验证入口已纳入 [Nido v0.4.0](https://github.com/MiracleHYH/CDEToolkit/releases/tag/v0.4.0)，Linux amd64 为服务器验收目标。发行包仍只含 `nido`，不附带或自动安装 Mihomo，不注册服务或切换已有组件入口。下文“未发布”“版本保持 0.3.1”等说明记录对应历史阶段，不代表 v0.4.0 的发行状态。

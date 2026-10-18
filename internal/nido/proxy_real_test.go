@@ -104,13 +104,14 @@ func TestProxyRealMihomo(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := document.Content[0]
+	realQuickStartLocalHealth(root, origin.URL)
 	listener := realYAMLField(root, "listeners").Content[0]
 	realYAMLField(listener, "port").Value = strconv.Itoa(port)
 	config := realYAMLBytes(t, &document)
 	cli.configure(config)
 	release()
 	cli.must("proxy", "start", "--yes", "--json")
-	endpoint := cli.endpoint("common")
+	endpoint := cli.endpoint("endpoint-proxy")
 	cachePath := filepath.Join(cli.root, "proxy", "providers", "subscription.yaml")
 	realAwaitProviderCache(t, cachePath, &providerDownloads)
 	realProxyTraffic(t, endpoint.URL(), endpoint.URL(), origin, tlsOrigin, &originRequests, &upstreamTunnels)
@@ -133,6 +134,9 @@ func TestProxyRealMihomo(t *testing.T) {
 	realYAMLField(providerNode, "type").Value = "file"
 	realYAMLDrop(providerNode, "url", "interval")
 	realYAMLDrop(root, "listeners")
+	// This legacy-port branch intentionally returns to global routing after
+	// removing the listener that normally pins its own outbound group.
+	realYAMLField(root, "rules").Content[0].Value = "MATCH,proxy"
 	port, release = realProxyPort(t)
 	root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "mixed-port"}, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.Itoa(port)})
 	fileConfig := realYAMLBytes(t, &document)
@@ -215,13 +219,14 @@ func TestProxyRealMihomo(t *testing.T) {
 		t.Fatal(err)
 	}
 	root = document.Content[0]
+	realQuickStartLocalHealth(root, origin.URL)
 	port, release = realProxyPort(t)
 	realYAMLField(realYAMLField(root, "listeners").Content[0], "port").Value = strconv.Itoa(port)
 	realYAMLField(realYAMLField(realYAMLField(root, "proxy-providers"), "subscription"), "path").Value = "providers/unavailable-e2e.yaml"
 	cli.configure(realYAMLBytes(t, &document))
 	release()
 	cli.must("proxy", "start", "--yes", "--json")
-	endpoint = cli.endpoint("common")
+	endpoint = cli.endpoint("endpoint-proxy")
 	realProxyRejectsUnavailable(t, endpoint, origin.URL, &originRequests, &upstreamTunnels)
 	cli.must("proxy", "stop", "--yes", "--json")
 	realAssertClosed(t, endpoint)
@@ -732,6 +737,21 @@ func realYAMLField(mapping *yaml.Node, name string) *yaml.Node {
 		}
 	}
 	panic("missing fixture YAML field: " + name)
+}
+
+// Keep these lifecycle/traffic fixtures deterministic and loopback-only.
+// Their counters measure explicit traffic, not automatic health probes.
+func realQuickStartLocalHealth(root *yaml.Node, target string) {
+	providers := realYAMLField(root, "proxy-providers")
+	for i := 1; i < len(providers.Content); i += 2 {
+		health := realYAMLField(providers.Content[i], "health-check")
+		realYAMLField(health, "url").Value = target
+		realYAMLField(health, "enable").Value = "false"
+	}
+	for _, group := range realYAMLField(root, "proxy-groups").Content {
+		realYAMLField(group, "url").Value = target
+		realYAMLField(group, "interval").Value = "0"
+	}
 }
 
 func realYAMLDrop(mapping *yaml.Node, names ...string) {

@@ -38,7 +38,7 @@ func TestParseConfigEndpoints(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			endpoint, err := config.Endpoint("")
+			endpoint, err := config.Endpoint(tt.selected)
 			if err != nil || endpoint.Name != tt.selected || endpoint.URL() != tt.address || endpoint.Authentication != tt.auth {
 				t.Fatalf("endpoint = %+v, err = %v", endpoint, err)
 			}
@@ -300,8 +300,8 @@ func TestTemplateRoundTripAndSensitiveDiagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 	endpoint, err := config.Endpoint("")
-	if err != nil || endpoint.Name != "common" || endpoint.URL() != "http://127.0.0.1:7890" {
-		t.Fatal("template did not create common local mixed endpoint")
+	if err != nil || endpoint.Name != "endpoint-proxy" || endpoint.URL() != "http://127.0.0.1:7890" {
+		t.Fatal("template did not create its initial local mixed endpoint")
 	}
 	if bytes.Contains(data, []byte("external-controller")) || bytes.Contains(data, []byte("secret:")) {
 		t.Fatal("template should not enable controller")
@@ -351,8 +351,8 @@ func TestTemplateRoutesThroughSubscriptionAndRejectsEmptyGroup(t *testing.T) {
 	if config.Providers["subscription"].Proxy != "DIRECT" {
 		t.Fatal("subscription download must bootstrap independently of its own nodes")
 	}
-	if len(config.Groups) != 1 || config.Groups[0].Name != "PROXY" || config.Groups[0].Type != "select" || len(config.Groups[0].Use) != 1 || config.Groups[0].Use[0] != "subscription" {
-		t.Fatal("template must select nodes from its subscription provider")
+	if len(config.Groups) != 1 || config.Groups[0].Name != "proxy" || config.Groups[0].Type != "url-test" || len(config.Groups[0].Use) != 1 || config.Groups[0].Use[0] != "subscription" {
+		t.Fatal("template must test nodes from its subscription provider")
 	}
 	// Mihomo prepends explicit proxies before provider nodes, and defaults an
 	// empty group to COMPATIBLE (direct). Both would silently bypass the user's
@@ -360,7 +360,7 @@ func TestTemplateRoutesThroughSubscriptionAndRejectsEmptyGroup(t *testing.T) {
 	if len(config.Groups[0].Proxies) != 0 || config.Groups[0].EmptyFallback != "REJECT" {
 		t.Fatal("template must neither prefer direct nor fall back to it")
 	}
-	if len(config.Rules) != 1 || config.Rules[0] != "MATCH,PROXY" {
-		t.Fatal("template traffic must use the subscription group without geodata rules")
+	if len(config.Rules) != 1 || config.Rules[0] != "MATCH,DIRECT" {
+		t.Fatal("template must use listener-specific outbound and a direct default rule")
 	}
 }

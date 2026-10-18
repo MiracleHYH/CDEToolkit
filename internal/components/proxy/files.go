@@ -331,7 +331,16 @@ func atomicWriteSnapshotExpected(path string, data []byte, mode os.FileMode, bef
 			return fileSnapshot{}, err
 		}
 	}
-	if err = os.Rename(tmp, path); err != nil {
+	if before.info == nil {
+		// Missing-file snapshots authorize exclusive creation, never replacing
+		// an editor's file appearing after the final snapshot check.
+		if err = os.Link(tmp, path); err != nil {
+			return fileSnapshot{}, err
+		}
+		if err = os.Remove(tmp); err != nil {
+			return fileSnapshot{}, err
+		}
+	} else if err = os.Rename(tmp, path); err != nil {
 		return fileSnapshot{}, err
 	}
 	installed, err := capture(path, before.max, false)

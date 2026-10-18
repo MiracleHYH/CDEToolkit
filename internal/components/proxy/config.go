@@ -6,7 +6,6 @@ import (
 	"io"
 	"net"
 	"net/netip"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -563,34 +562,8 @@ func checkYAML(node *yaml.Node, depth int) error {
 	return nil
 }
 
-// Template creates an ordinary Mihomo provider configuration. Sensitive URL
-// input is encoded as YAML data and is never copied into diagnostic messages.
+// Template is the minimal quick-start profile for callers without optional
+// routes. Interactive configuration collects filters and ports explicitly.
 func Template(subscription string) ([]byte, error) {
-	address, err := url.Parse(subscription)
-	if err != nil || (address.Scheme != "https" && address.Scheme != "http") || address.Hostname() == "" || address.Opaque != "" || strings.ContainsFunc(subscription, unicode.IsControl) {
-		return nil, fmt.Errorf("订阅地址必须是有效的 HTTP 或 HTTPS URL")
-	}
-	if address.Port() != "" {
-		port, err := strconv.Atoi(address.Port())
-		if err != nil || port < 1 || port > 65535 {
-			return nil, fmt.Errorf("订阅地址端口无效")
-		}
-	}
-	var urlNode yaml.Node
-	if err := urlNode.Encode(subscription); err != nil {
-		return nil, fmt.Errorf("无法生成订阅配置")
-	}
-	// A quoted scalar is inserted only after the YAML encoder has escaped it.
-	urlNode.Style = yaml.DoubleQuotedStyle
-	encoded, err := yaml.Marshal(&urlNode)
-	if err != nil {
-		return nil, fmt.Errorf("无法生成订阅配置")
-	}
-	return []byte("# Nido 本地显式代理；订阅需提供 Mihomo provider 格式。\n" +
-		"allow-lan: false\nmode: rule\nlog-level: info\n" +
-		"listeners:\n  - name: common\n    type: mixed\n    listen: 127.0.0.1\n    port: 7890\n" +
-		"proxy-providers:\n  subscription:\n    type: http\n    url: " + strings.TrimSpace(string(encoded)) + "\n" +
-		"    path: providers/subscription.yaml\n    proxy: DIRECT\n    interval: 3600\n" +
-		"proxy-groups:\n  - name: PROXY\n    type: select\n    use: [subscription]\n    empty-fallback: REJECT\n" +
-		"rules:\n  - MATCH,PROXY\n"), nil
+	return QuickStart(QuickStartOptions{ProviderURL: subscription, ProxyFilter: ".*", ProxyPort: 7890})
 }

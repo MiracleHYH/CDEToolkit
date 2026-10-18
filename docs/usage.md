@@ -4,7 +4,7 @@ GDS 保持可选。Nido v0.5.0 起支持独立 Linux amd64 组件的官方下载
 
 从 v0.3.0 起，Nido 使用单目录设计和 `nido` 命令。旧 `cdet` 版本不会被自动迁移；本指南描述 Nido 的安装和使用。
 
-独立 Proxy 组件及本章命令自 v0.4.0 提供，早期发行版以其命令帮助为准。安装 Nido 不会自动安装或启动 Mihomo，也不会切换已有组件入口。
+独立 Proxy 组件自 v0.4.0 提供。本指南中的新版 quick start、节点链接解析和类别/单工具绑定是**尚未发布的源码功能**，现有 v0.4.0 / v0.5.0 安装包不含新流程；使用发行版时请查看对应标签文档与命令帮助。安装 Nido 不会自动安装或启动 Mihomo，也不会切换已有组件入口。
 
 ## 初始化与 Shell 环境
 
@@ -118,7 +118,7 @@ nido codex proxy http://127.0.0.1:7890
 nido codex proxy builtin
 ```
 
-这通过 Proxy 组件读取默认端点，不证明可以联网，也不会启动服务；停止时仍可绑定并提示运行状态。默认优先使用名为 `common` 的入口，否则必须只有一个入口。多个入口有歧义或入口配置了认证时，请改用显式代理 URL。端口变更后重新绑定，已写入 Codex 的地址不会自动跟随。
+这只从原生配置的 listeners 读取候选，不证明可以联网，也不会启动服务；停止时仍可绑定。多个 listener 可交互选择，始终提供自定义地址；缺少核心、配置或 listener 时同样可以自定义。带认证的 listener 会询问用户名和密码，输入正常显示；非交互调用须提供完整自定义 URL。唯一无认证 listener 可用 `nido codex proxy builtin --yes` 直接绑定。端口变更后需重新绑定，已写入 Codex 的地址不会自动跟随。
 
 仅清理 Nido 的代理块：
 
@@ -136,19 +136,68 @@ nido codex update --proxy http://127.0.0.1:7890
 
 进程代理变量的小写形式优先于大写形式，显式空值也会覆盖 `.env`，并同步到安装子进程的两种大小写变量。本次 `--proxy` 只覆盖代理端点，保留 `NO_PROXY`。对于变量展开、转义或冲突的 `.env` 代理表达式，Nido 明确报错，不尝试执行或完整解释 dotenv。
 
+## 类别与单工具快捷代理配置
+
+从 listeners 选择一次地址，再应用到一个类别中的全部工具；每个类别独立选择，不隐式复用前一类别的选择：
+
+```sh
+nido proxy bind                 # 逐类选择
+nido proxy bind ai              # AI：目前为 Codex
+nido proxy bind daily           # 日常：目前为 Git
+nido proxy bind download        # 下载：目前返回 no_targets，不写配置
+```
+
+交互菜单按显示序号选择，也可输入 `listener:名称` 精确选择任意 listener（包括 `off`、`custom`、`keep` 或纯数字名称）。默认回车保持现状。
+
+也可独立配置单个工具：
+
+```sh
+nido proxy bind --tool codex
+nido proxy bind --tool git
+```
+
+菜单始终包含自定义、保持现状和移除 Nido 受管配置。即使 Proxy 未安装、配置不可读或 listeners 为空，也可输入 `protocol://[username:password@]host:port`；认证可省略，支持 HTTP、HTTPS、SOCKS5、SOCKS5H，IPv6 用方括号，认证中的保留字符使用百分号编码。输入和结果正常显示，不隐藏或脱敏。
+
+明确目标后可非交互配置或只读预检：
+
+```sh
+nido proxy endpoints --json
+nido proxy bind ai --endpoint endpoint-isp --yes
+nido proxy bind daily --endpoint endpoint-proxy --dry-run
+nido proxy bind --tool git --proxy 'socks5h://127.0.0.1:7892' --yes
+nido proxy bind --tool codex --proxy 'http://user:p%40ss@127.0.0.1:7890' --yes
+nido proxy bind --tool git --proxy off --yes
+```
+
+`--endpoint` 使用当前 YAML 中的 listener 名称，`--proxy` 使用自定义 URL 或 `off`，两者互斥。`--yes` / JSON 非交互模式要求明确选择；不带显式地址的 `--dry-run` 只列出候选，带地址时执行对应工具的只读路径与冲突预检，不写文件或启动服务。
+
+类别绑定是一次批量应用，单工具绑定只影响该工具；之后的显式操作生效，没有后台继承或端口同步。Codex 仍只写已关联 HOME 的 `.env` 受管块。Git 在用户级配置（默认 `~/.gitconfig`，可由 `GIT_CONFIG_GLOBAL` 指定）末尾维护自己的 `[http] proxy` 块，保留其他字节；它适用于 HTTP/HTTPS 远端，不配置 SSH。Nido 不解析仓库级、系统级配置或 include；用户级 include、已有外部代理、受管块被改动及路径安全冲突会停止写入，不强制覆盖。Git 自身的仓库/系统/环境优先级仍由 Git 决定。
+
 ## 内置 Proxy
 
 Proxy 独立管理 `<Nido 软件目录>/proxy`，不依赖 Codex，不接管外部 Mihomo 或旧 Bash 环境。从 Mihomo 官方稳定版下载当前平台程序：
 
 ```sh
 nido proxy install
-nido proxy configure
 nido proxy validate
 nido proxy start
 nido proxy status
 ```
 
-首次 `configure` 交互隐藏订阅 URL，生成一个本地 mixed 入口、一个 provider 和代理组，默认端口为 7890。订阅必须提供原生 Mihomo provider 格式；不设置转换服务。模板通过 DIRECT 取回订阅，业务流量默认使用订阅首个节点，订阅组为空时拒绝转发。已有配置时只显示路径和后续验证方式，不覆盖文件。
+交互 `install` 无额外预确认，安装成功且没有配置时直接进入 quick start；已有配置不被重建。`install --yes` 只安装核心，之后可运行 `nido proxy configure` 补齐首次配置。`configure` 无 `--file` 且配置已存在时只显示路径和验证方式，不覆盖文件。引导输入正常显示，完整 YAML 预览写入 stderr；JSON 结果单独写 stdout。
+
+引导依次询问：
+
+1. Provider URL、日常节点 filter 和端口（默认 7890）。filter 必填，`.*` 表示全部；订阅须提供原生 Mihomo provider 格式，不设置转换服务。
+2. 是否启用独立下载入口；启用后填写独立 filter 和端口（默认 7891）。
+3. 是否启用 ISP；启用后粘贴一行节点链接，填写端口（默认 7892）及测试地址，默认 `https://www.gstatic.com/generate_204`。
+4. ISP 是否需要前置代理；启用后填写 provider 的前置节点 filter。
+
+生成一个共享 HTTP provider，`proxy: DIRECT` 下载，缓存为 `providers/subscription.yaml`，启用 300 秒常规地址健康检查。`proxy`、可选 `download`、可选 `isp-relay` 分别使用自己的 filter 和 `url-test`，常规测试地址相同；空候选拒绝转发。启用 ISP 时生成 `isp-node` 和引用它的 `isp` url-test 组，后者使用用户选择的测试地址，测量 ISP 完整出站；有前置时节点通过 `dialer-proxy: isp-relay` 建链，方向是服务器 → 前置节点 → ISP → 目标。
+
+默认只生成 mixed listeners：`endpoint-proxy`、可选 `endpoint-download`、可选 `endpoint-isp`，均绑定 `127.0.0.1` 且显式指定各自出站组；端口必须有效且不同。不生成传统 `port` / `mixed-port` / `socks-port`，规则只有 `MATCH,DIRECT`，不启用 controller。用户可修改所有 listener 名称或自行调整完整 YAML，名称没有保留契约；快捷配置只读取 listeners，不从传统端口猜测候选。
+
+节点链接解析支持 SS（SIP002 与旧式 Base64，已支持的 obfs/v2ray-plugin）、VMess Base64 JSON、VLESS、Trojan、Hysteria2/Hy2、HTTP(S)、SOCKS5/SOCKS5H。VLESS 支持已实现的 TLS/Reality 与传输参数；不代表覆盖各协议所有分享链接变体。字段只解码一次，例如 `%2D` 恢复为 `-`、`%252D` 恢复为 `%2D`，字面 `+` 保留；未知、重复、冲突或当前协议不支持的参数报错，不静默丢弃。解析不联网，最终由核心检查配置；UDP/QUIC ISP 节点还要求前置链具有相应能力，不能假定 HTTP 或仅 TCP 前置可以承载它。
 
 也可显式导入完整原生 YAML：
 
@@ -158,11 +207,11 @@ nido proxy configure --file /absolute/path/to/config.yaml
 nido proxy config-path
 ```
 
-`--file` 要求绝对路径、普通文件及私有权限。配置在停止状态下经过静态和核心验证后原子保存为 `proxy/config.yaml`；不复制外部缓存或资源。缺少程序、空配置、重复键、多文档、非法端口或核心验证失败时不提交配置。安装、配置和更新均不自动启动。
+`--file` 要求绝对路径、普通文件及私有权限。配置在停止状态下经过静态和核心验证后原子保存为 `proxy/config.yaml`；不复制外部缓存或资源。首次 quick start 只允许原子新建，交互期间若出现其他配置则保留它并报错。缺少程序、空配置、重复键、多文档、非法端口或核心验证失败时不提交配置。安装、配置和更新均不自动启动。
 
 配置策略限定为回环显式代理：
 
-- 支持传统 `mixed-port`、`port`、`socks-port` 和 `listeners` 的 mixed/http/socks；至少需要一个有效入口。
+- 支持手工配置的传统 `mixed-port`、`port`、`socks-port` 和 `listeners` 的 mixed/http/socks；运行至少需要一个有效入口。传统端口仍参与进程和监听归属检查，但不作为快捷绑定候选。
 - 独立 `listeners` 必须显式设置字面回环 IP，不能依赖 `allow-lan: false` 限制它；传统端口在 `allow-lan: false` 时使用 `127.0.0.1`。传统 IPv6 在启用 `allow-lan` 后使用带方括号的 `bind-address: '[::1]'`。
 - HTTP/file provider 必须显式指定组件根内的相对 `path`。provider、规则及已支持的顶层 TLS 文件资源不能覆盖受管文件或核心固定缓存、数据库；链接与共享硬链接会被拒绝。`tls.custom-certifactes` 使用内联证书字符串列表。完整节点与规则语义继续交给核心，这些检查不能隔离任意 outbound 扩展或不可信配置。
 - 策略字段使用规范的小写连字符名称。传统端口使用 YAML 整数，端口整数不能带前导零；listeners 另支持引号包围的十进制端口。
@@ -176,17 +225,17 @@ nido proxy config-path
 
 ```sh
 nido proxy restart
-nido proxy endpoint
-nido proxy endpoint common
+nido proxy endpoints --json
+nido proxy endpoint endpoint-proxy
 nido proxy logs --tail 100
-nido proxy probe --url https://example.com
+nido proxy probe --endpoint endpoint-proxy --url https://example.com
 ```
 
 `restart` 先验证新配置，失败时保持旧进程；停止后重新启动失败会明确报错。当前不提供热 reload。运行期间手工改动主配置后，状态通过 `config_changed` 提醒磁盘与受管启动快照不同。
 
-`endpoint` 只导出配置意图，优先 `common`，否则要求唯一；传统入口名为 `mixed`、`http`、`socks`。混合入口输出 HTTP URL，SOCKS 输出 `socks5h` URL，均不含凭据。配置了认证时，端点命令、自动绑定和无凭据探测会拒绝；按来源地址豁免认证时仍保守报告已配置认证。
+`endpoints` 只列出 listeners；`endpoint [NAME]` 查询配置中的单个端点，不指定名称时必须唯一，不再优先 `common`。传统入口名仍为 `mixed`、`http`、`socks`，可用于明确查询和运行检查。混合入口输出 HTTP URL，SOCKS 输出 `socks5h` URL，均不含凭据。配置认证时，单个端点导出与无凭据探测会拒绝，绑定可交互提供认证或使用完整自定义 URL；按来源地址豁免认证时仍保守报告已配置认证。
 
-`logs` 有界读取普通日志文件，不执行日志内容。日志保留核心原文，分享前自行检查其中的订阅或节点信息。`probe` 明确通过已就绪的默认端点测试指定 HTTP/HTTPS 目标，不跟随重定向；请求前后复核同一受管实例，记录、配置、程序或监听变化时拒绝成功。检查和连接并非原子操作，结果只说明该目标在当时的响应。状态、端点和 dry-run 均不联网或启动核心。
+`logs` 有界读取普通日志文件，不执行日志内容。日志保留核心原文。`probe` 用 `--endpoint NAME` 选择已就绪端点，无名称时要求唯一，测试指定 HTTP/HTTPS 目标且不跟随重定向；请求前后复核同一受管实例，记录、配置、程序或监听变化时拒绝成功。检查和连接并非原子操作，结果只说明该目标在当时的响应。状态、端点和 dry-run 均不联网或启动核心。
 
 查看当前和最新版本，再在停止状态更新：
 
@@ -208,6 +257,19 @@ nido proxy update --artifact /absolute/path/to/mihomo.gz --sha256 SHA256_HEX
 `--sha256` 接受 64 位十六进制摘要；在线下载也检查官方资产摘要、平台与展开大小。摘要验证不等于签名验证。下载继承当前终端代理，或使用本次 `--proxy URL`，不为了下载自动启动 Proxy。若下载需要当前 Proxy，先另行获取本地包，再停止并使用 `--artifact` 更新。
 
 常规隔离测试使用临时根、假核心及回环辅助程序。真实核心兼容测试可通过 `NIDO_TEST_MIHOMO=/absolute/path/to/verified/mihomo make check-proxy-real` 显式执行，不自动下载核心，仅使用临时 HOME、软件根及回环 provider、HTTP/SOCKS/HTTPS 夹具。已执行的版本、结果和范围见[审计记录](proxy-audit.md)；本地夹具不能替代真实订阅、全部节点协议及其他平台的验证。
+
+本次新流程的普通用户 Linux amd64 隔离入口只使用已有 SDK/GCC/bubblewrap 和预先 vendor 的源码，不使用真实 Mihomo 或外网：
+
+```sh
+NIDO_TEST_QUICKSTART_SOURCE=/absolute/offline-vendored-source \
+NIDO_TEST_QUICKSTART_GO=/absolute/go/bin/go \
+NIDO_TEST_QUICKSTART_OUTPUT=/absolute/new-evidence-directory \
+make check-proxy-quickstart-linux-native
+```
+
+该入口使用临时 HOME、软件根和构建缓存，私有文件系统/PID，网络与宿主共享但测试只用临时回环端口；清空真实核心环境和代理环境、关闭模块下载。Proxy/Git 包、Nido 定向 race、新 CLI 与拒绝启动的假核心夹具须实际通过。仅允许 `TestLinuxKernelIPv6AndWildcardOwnership/IPv6_loopback` 与 `/IPv6_wildcard` 两项有明确地址族、回环地址或路由不可用证据的环境跳过；输出、环境元数据和 `environment-skips.txt` 保留理由及完整跳过记录，不计为 IPv6 通过，也不修改宿主网络。其他跳过、缺少环境理由、任何失败、缺工具或 namespace 失败均直接失败，不回退宿主执行。假核心与真实核心的证据分别记录。
+
+新版 quick start 的真实 Mihomo 验证另用 `make check-proxy-quickstart-real-linux`，只接受已核验核心和预建静态 race CLI/测试程序，在独立网络 namespace 的临时 HOME、回环端口运行。所需输入与可重复命令见[设计中的真实核心隔离入口](proxy-design.md#quick-start-的-linux-amd64-真实核心隔离验证)，执行结果及协议边界见[审计记录](proxy-audit.md)。
 
 ## 状态与预览
 

@@ -23,6 +23,10 @@ func fixture(t *testing.T) (*Manager, string) {
 	t.Setenv("HOME", home)
 	t.Setenv("NIDO_HOME", "")
 	t.Setenv("CODEX_HOME", "")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, ".gitconfig"))
+	t.Setenv("GIT_CONFIG_COUNT", "0")
+	t.Setenv("GIT_CONFIG_PARAMETERS", "")
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("PATH", "/usr/bin:/bin")
 	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"} {
 		t.Setenv(key, "")

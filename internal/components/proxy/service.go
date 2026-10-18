@@ -283,7 +283,7 @@ func (s *Service) Configure(file string) error {
 	if err = privateConfigInput(source); err != nil {
 		return err
 	}
-	return s.withLock(func(directory directorySnapshot) error { return s.configure(source.data, &source, directory) })
+	return s.withLock(func(directory directorySnapshot) error { return s.configure(source.data, &source, directory, false) })
 }
 
 func privateConfigInput(source fileSnapshot) error {
@@ -296,10 +296,17 @@ func privateConfigInput(source fileSnapshot) error {
 
 func (s *Service) ConfigureBytes(data []byte) error {
 	data = append([]byte(nil), data...)
-	return s.withLock(func(directory directorySnapshot) error { return s.configure(data, nil, directory) })
+	return s.withLock(func(directory directorySnapshot) error { return s.configure(data, nil, directory, false) })
 }
 
-func (s *Service) configure(data []byte, source *fileSnapshot, directory directorySnapshot) error {
+// ConfigureInitialBytes is for the first interactive quick start. A file that
+// appeared while collecting input belongs to its writer and must be preserved.
+func (s *Service) ConfigureInitialBytes(data []byte) error {
+	data = append([]byte(nil), data...)
+	return s.withLock(func(directory directorySnapshot) error { return s.configure(data, nil, directory, true) })
+}
+
+func (s *Service) configure(data []byte, source *fileSnapshot, directory directorySnapshot, initial bool) error {
 	dir, program, err := s.paths()
 	if err != nil {
 		return err
@@ -314,6 +321,9 @@ func (s *Service) configure(data []byte, source *fileSnapshot, directory directo
 	before, err := capture(path, maxConfig, true)
 	if err != nil {
 		return err
+	}
+	if initial && before.info != nil {
+		return fmt.Errorf("quick start 期间配置已创建；保留现有配置，请查看 config-path")
 	}
 	core, err := s.programSnapshot()
 	if err != nil {

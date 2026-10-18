@@ -1,0 +1,277 @@
+package proxy
+
+import (
+	"reflect"
+	"strings"
+	"testing"
+
+	"go.yaml.in/yaml/v3"
+)
+
+const quickStartTestNode = "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@192.0.2.9:8388#ISP%2Dname"
+
+type quickStartTestGroup struct {
+	Name          string   `yaml:"name"`
+	Type          string   `yaml:"type"`
+	Use           []string `yaml:"use"`
+	Proxies       []string `yaml:"proxies"`
+	Filter        string   `yaml:"filter"`
+	URL           string   `yaml:"url"`
+	Interval      int      `yaml:"interval"`
+	EmptyFallback string   `yaml:"empty-fallback"`
+}
+
+type quickStartTestListener struct {
+	Name   string `yaml:"name"`
+	Type   string `yaml:"type"`
+	Listen string `yaml:"listen"`
+	Port   int    `yaml:"port"`
+	Proxy  string `yaml:"proxy"`
+}
+
+type quickStartTestDocument struct {
+	AllowLAN bool   `yaml:"allow-lan"`
+	Mode     string `yaml:"mode"`
+	LogLevel string `yaml:"log-level"`
+	Provider map[string]struct {
+		Type        string `yaml:"type"`
+		URL         string `yaml:"url"`
+		Path        string `yaml:"path"`
+		Proxy       string `yaml:"proxy"`
+		Interval    int    `yaml:"interval"`
+		HealthCheck struct {
+			Enable   bool   `yaml:"enable"`
+			URL      string `yaml:"url"`
+			Interval int    `yaml:"interval"`
+		} `yaml:"health-check"`
+	} `yaml:"proxy-providers"`
+	Proxies   []map[string]any         `yaml:"proxies"`
+	Groups    []quickStartTestGroup    `yaml:"proxy-groups"`
+	Listeners []quickStartTestListener `yaml:"listeners"`
+	Rules     []string                 `yaml:"rules"`
+}
+
+func TestQuickStartOptionalRoutes(t *testing.T) {
+	for _, download := range []bool{false, true} {
+		for _, isp := range []string{"disabled", "direct", "relay"} {
+			name := isp
+			if download {
+				name += "/download"
+			}
+			t.Run(name, func(t *testing.T) {
+				o := QuickStartOptions{ProviderURL: "https://provider.invalid/sub", ProxyFilter: "(?i)daily", ProxyPort: 17890}
+				expectedGroups := map[string]string{"proxy": o.ProxyFilter}
+				expectedListeners := []quickStartTestListener{{Name: "endpoint-proxy", Type: "mixed", Listen: "127.0.0.1", Port: 17890, Proxy: "proxy"}}
+				if download {
+					o.Download = &QuickStartRoute{Filter: "download.*", Port: 17891}
+					expectedGroups["download"] = o.Download.Filter
+					expectedListeners = append(expectedListeners, quickStartTestListener{Name: "endpoint-download", Type: "mixed", Listen: "127.0.0.1", Port: 17891, Proxy: "download"})
+				}
+				if isp != "disabled" {
+					o.ISP = &QuickStartISP{NodeURL: quickStartTestNode, Port: 17892}
+					expectedListeners = append(expectedListeners, quickStartTestListener{Name: "endpoint-isp", Type: "mixed", Listen: "127.0.0.1", Port: 17892, Proxy: "isp"})
+					if isp == "relay" {
+						o.ISP.RelayFilter = "relay.*"
+						expectedGroups["isp-relay"] = o.ISP.RelayFilter
+					}
+				}
+				data, err := QuickStart(o)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var config quickStartTestDocument
+				if err := yaml.Unmarshal(data, &config); err != nil {
+					t.Fatal(err)
+				}
+				if config.AllowLAN || config.Mode != "rule" || config.LogLevel != "info" || !reflect.DeepEqual(config.Rules, []string{"MATCH,DIRECT"}) {
+					t.Fatalf("unexpected defaults: %+v", config)
+				}
+				provider, ok := config.Provider["subscription"]
+				if !ok || len(config.Provider) != 1 || provider.Type != "http" || provider.URL != o.ProviderURL || provider.Path != "providers/subscription.yaml" || provider.Proxy != "DIRECT" || provider.Interval != 3600 || !provider.HealthCheck.Enable || provider.HealthCheck.URL != DefaultTestURL || provider.HealthCheck.Interval != 300 {
+					t.Fatalf("unexpected provider: %+v", config.Provider)
+				}
+				if !reflect.DeepEqual(config.Listeners, expectedListeners) {
+					t.Fatalf("listeners = %+v, want %+v", config.Listeners, expectedListeners)
+				}
+				groups := make(map[string]quickStartTestGroup)
+				for _, group := range config.Groups {
+					if _, duplicate := groups[group.Name]; duplicate {
+						t.Fatalf("duplicate group %s", group.Name)
+					}
+					groups[group.Name] = group
+				}
+				wantGroupCount := len(expectedGroups)
+				if o.ISP != nil {
+					wantGroupCount++
+				}
+				if len(groups) != wantGroupCount {
+					t.Fatalf("unexpected group count: %+v", groups)
+				}
+				for groupName, filter := range expectedGroups {
+					group := groups[groupName]
+					if group.Type != "url-test" || group.Filter != filter || group.URL != DefaultTestURL || group.Interval != 300 || group.EmptyFallback != "REJECT" || !reflect.DeepEqual(group.Use, []string{"subscription"}) || len(group.Proxies) != 0 {
+						t.Fatalf("unexpected provider group: %+v", group)
+					}
+				}
+				if o.ISP == nil {
+					if len(config.Proxies) != 0 {
+						t.Fatalf("unrequested ISP node: %+v", config.Proxies)
+					}
+				} else {
+					if len(config.Proxies) != 1 {
+						t.Fatalf("unexpected ISP nodes: %+v", config.Proxies)
+					}
+					node := config.Proxies[0]
+					if node["name"] != "isp-node" || node["type"] != "ss" || node["server"] != "192.0.2.9" || node["port"] != 8388 || node["cipher"] != "aes-128-gcm" || node["password"] != "password" {
+						t.Fatalf("ISP node parsing lost fields: %+v", node)
+					}
+					if isp == "relay" {
+						if node["dialer-proxy"] != "isp-relay" {
+							t.Fatalf("ISP relay chain is missing: %+v", node)
+						}
+					} else if _, exists := node["dialer-proxy"]; exists {
+						t.Fatalf("unrequested ISP relay: %+v", node)
+					}
+					group := groups["isp"]
+					if group.Type != "url-test" || group.URL != DefaultTestURL || group.Interval != 300 || !reflect.DeepEqual(group.Proxies, []string{"isp-node"}) || len(group.Use) != 0 || group.Filter != "" {
+						t.Fatalf("ISP test must use the whole ISP outbound: %+v", group)
+					}
+				}
+				var keys map[string]any
+				if err := yaml.Unmarshal(data, &keys); err != nil {
+					t.Fatal(err)
+				}
+				for _, key := range []string{"port", "socks-port", "mixed-port", "external-controller", "tun", "dns", "authentication"} {
+					if _, exists := keys[key]; exists {
+						t.Fatalf("generated unexpected global setting %s", key)
+					}
+				}
+				parsed, err := ParseConfig(data, t.TempDir())
+				if err != nil || len(parsed.Endpoints) != len(expectedListeners) {
+					t.Fatalf("generated config fails local policy: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestQuickStartPreservesScalarInput(t *testing.T) {
+	o := QuickStartOptions{
+		ProviderURL: "https://user:p%40ss@provider.invalid:443/sub%2Dpath?token=a%2Bb%252Dc&literal=%23frag#name",
+		ProxyFilter: `(?i)^(?!.*download).*['":#].*$`,
+		ProxyPort:   7890,
+		Download:    &QuickStartRoute{Filter: `.*`, Port: 7891},
+		ISP: &QuickStartISP{
+			NodeURL:     quickStartTestNode,
+			Port:        7892,
+			TestURL:     "https://isp-check.invalid:8443/path%2Dpart?q=%252D&label=%23test",
+			RelayFilter: `^(?=.*relay)(?!.*isp).*$`,
+		},
+	}
+	data, err := QuickStart(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config quickStartTestDocument
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	if config.Provider["subscription"].URL != o.ProviderURL {
+		t.Fatal("provider URL was decoded, altered, or interpreted as YAML")
+	}
+	for _, group := range config.Groups {
+		switch group.Name {
+		case "proxy":
+			if group.Filter != o.ProxyFilter {
+				t.Fatal("Mihomo filter was rewritten or interpreted as YAML")
+			}
+		case "isp-relay":
+			if group.Filter != o.ISP.RelayFilter {
+				t.Fatal("relay filter was not preserved")
+			}
+		case "isp":
+			if group.URL != o.ISP.TestURL {
+				t.Fatal("ISP test URL was replaced by the ordinary health-check URL")
+			}
+		}
+	}
+	if _, err := ParseConfig(data, t.TempDir()); err != nil {
+		t.Fatalf("escaped values damaged the generated document: %v", err)
+	}
+}
+
+func TestQuickStartRejectsInvalidInput(t *testing.T) {
+	tests := map[string]func(*QuickStartOptions){
+		"provider missing":          func(o *QuickStartOptions) { o.ProviderURL = "" },
+		"provider relative":         func(o *QuickStartOptions) { o.ProviderURL = "/provider" },
+		"provider opaque":           func(o *QuickStartOptions) { o.ProviderURL = "https:provider.invalid" },
+		"provider file":             func(o *QuickStartOptions) { o.ProviderURL = "file:///etc/passwd" },
+		"provider absent host":      func(o *QuickStartOptions) { o.ProviderURL = "https:///provider" },
+		"provider control":          func(o *QuickStartOptions) { o.ProviderURL += "\nport: 1" },
+		"provider invalid UTF8":     func(o *QuickStartOptions) { o.ProviderURL += "\xff" },
+		"provider space":            func(o *QuickStartOptions) { o.ProviderURL += " a" },
+		"provider port empty":       func(o *QuickStartOptions) { o.ProviderURL = "https://provider.invalid:/sub" },
+		"provider port invalid":     func(o *QuickStartOptions) { o.ProviderURL = "https://provider.invalid:abc/sub" },
+		"provider port zero":        func(o *QuickStartOptions) { o.ProviderURL = "https://provider.invalid:0/sub" },
+		"provider port overflow":    func(o *QuickStartOptions) { o.ProviderURL = "https://provider.invalid:65536/sub" },
+		"provider bracket hostname": func(o *QuickStartOptions) { o.ProviderURL = "https://[provider.invalid]/sub" },
+		"provider unbracketed IPv6": func(o *QuickStartOptions) { o.ProviderURL = "http://::1:8000/sub" },
+		"filter missing":            func(o *QuickStartOptions) { o.ProxyFilter = "" },
+		"filter whitespace":         func(o *QuickStartOptions) { o.ProxyFilter = " \t " },
+		"filter control":            func(o *QuickStartOptions) { o.ProxyFilter += "\x00" },
+		"filter invalid UTF8":       func(o *QuickStartOptions) { o.ProxyFilter += "\xff" },
+		"proxy port zero":           func(o *QuickStartOptions) { o.ProxyPort = 0 },
+		"proxy port negative":       func(o *QuickStartOptions) { o.ProxyPort = -1 },
+		"proxy port overflow":       func(o *QuickStartOptions) { o.ProxyPort = 65536 },
+		"download filter empty":     func(o *QuickStartOptions) { o.Download = &QuickStartRoute{Port: 7891} },
+		"download filter control":   func(o *QuickStartOptions) { o.Download = &QuickStartRoute{Filter: "a\nb", Port: 7891} },
+		"download port invalid":     func(o *QuickStartOptions) { o.Download = &QuickStartRoute{Filter: ".*", Port: 0} },
+		"duplicate proxy download":  func(o *QuickStartOptions) { o.Download = &QuickStartRoute{Filter: ".*", Port: o.ProxyPort} },
+		"ISP port invalid":          func(o *QuickStartOptions) { o.ISP = &QuickStartISP{NodeURL: quickStartTestNode, Port: 65536} },
+		"duplicate proxy ISP":       func(o *QuickStartOptions) { o.ISP = &QuickStartISP{NodeURL: quickStartTestNode, Port: o.ProxyPort} },
+		"duplicate download ISP": func(o *QuickStartOptions) {
+			o.Download = &QuickStartRoute{Filter: ".*", Port: 7891}
+			o.ISP = &QuickStartISP{NodeURL: quickStartTestNode, Port: 7891}
+		},
+		"ISP node absent":      func(o *QuickStartOptions) { o.ISP = &QuickStartISP{Port: 7892} },
+		"ISP node unsupported": func(o *QuickStartOptions) { o.ISP = &QuickStartISP{NodeURL: "file:///etc/passwd", Port: 7892} },
+		"ISP test URL invalid": func(o *QuickStartOptions) {
+			o.ISP = &QuickStartISP{NodeURL: quickStartTestNode, Port: 7892, TestURL: "file:///etc/passwd"}
+		},
+		"ISP test URL whitespace": func(o *QuickStartOptions) {
+			o.ISP = &QuickStartISP{NodeURL: quickStartTestNode, Port: 7892, TestURL: " "}
+		},
+		"ISP relay whitespace": func(o *QuickStartOptions) {
+			o.ISP = &QuickStartISP{NodeURL: quickStartTestNode, Port: 7892, RelayFilter: " "}
+		},
+		"ISP relay control": func(o *QuickStartOptions) {
+			o.ISP = &QuickStartISP{NodeURL: quickStartTestNode, Port: 7892, RelayFilter: "relay\r"}
+		},
+		"oversize generated input": func(o *QuickStartOptions) { o.ProxyFilter = strings.Repeat("x", maxConfig) },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			o := QuickStartOptions{ProviderURL: "https://provider.invalid/sub", ProxyFilter: ".*", ProxyPort: 7890}
+			mutate(&o)
+			if data, err := QuickStart(o); err == nil || len(data) != 0 {
+				t.Fatal("accepted invalid quick start input")
+			}
+		})
+	}
+}
+
+func TestQuickStartAllowsIPv6ProviderAndTestURL(t *testing.T) {
+	o := QuickStartOptions{
+		ProviderURL: "http://[::1]:8000/provider",
+		ProxyFilter: ".*",
+		ProxyPort:   1,
+		ISP: &QuickStartISP{
+			NodeURL: quickStartTestNode,
+			Port:    65535,
+			TestURL: "http://[2001:db8::1]:8080/check",
+		},
+	}
+	if _, err := QuickStart(o); err != nil {
+		t.Fatal(err)
+	}
+}

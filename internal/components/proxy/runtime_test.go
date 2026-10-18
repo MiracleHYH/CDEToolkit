@@ -220,9 +220,15 @@ func runtimeService(t *testing.T, runner Runner) *Service {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(executable)
-	if err != nil {
-		t.Fatal(err)
+	// Mock runners never execute the program. Keep their fixture small so
+	// hashing a race test binary cannot consume the simulated readiness deadline.
+	// OSRunner tests still launch the real, isolated helper executable.
+	data := coreNativeFixture(runtime.GOOS, runtime.GOARCH)
+	if runner == nil {
+		data, err = os.ReadFile(executable)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(dir, "mihomo"), data, 0700); err != nil {
 		t.Fatal(err)

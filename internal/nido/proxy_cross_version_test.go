@@ -102,11 +102,12 @@ func TestProxyRealMihomoCrossVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := document.Content[0]
+	realQuickStartLocalHealth(root, origin.URL)
 	realYAMLField(realYAMLField(root, "listeners").Content[0], "port").Value = strconv.Itoa(port)
 	cli.configure(realYAMLBytes(t, &document))
 	release()
 	cli.must("proxy", "start", "--yes", "--json")
-	endpoint := cli.endpoint("common")
+	endpoint := cli.endpoint("endpoint-proxy")
 	cachePath := filepath.Join(cli.root, "proxy", "providers", "subscription.yaml")
 	realAwaitProviderCache(t, cachePath, &downloads)
 	realProxyTraffic(t, endpoint.URL(), endpoint.URL(), origin, tlsOrigin, &origins, &tunnels)

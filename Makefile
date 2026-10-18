@@ -9,7 +9,7 @@ BINARY = build/$(TARGET_OS)-$(TARGET_ARCH)/nido
 PACKAGE = dist/nido-$(TARGET_OS)-$(TARGET_ARCH).tar.gz
 RELEASE_PLATFORMS = linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
-.PHONY: build test fmt-check check dist smoke release verify-release release-check gds-release gds-release-check gds-verify-release check-gds check-gds-linux-native check-gds-legacy build-gds check-proxy-real check-proxy-linux check-proxy-linux-race check-proxy-linux-native
+.PHONY: build test fmt-check check dist smoke release verify-release release-check gds-release gds-release-check gds-verify-release check-gds check-gds-linux-native check-gds-legacy build-gds check-proxy-real check-proxy-linux check-proxy-linux-race check-proxy-linux-native check-proxy-quickstart-linux-native check-proxy-quickstart-real-linux
 build:
 	CGO_ENABLED=0 GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) "$(GO)" build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w -X=github.com/MiracleHYH/CDEToolkit/internal/nido.Version=$(VERSION)' -o "$(BINARY)" ./cmd/nido
 
@@ -25,16 +25,20 @@ test:
 	"$(GO)" test ./...
 
 fmt-check:
-	@nido_unformatted=$$("$(shell "$(GO)" env GOROOT)/bin/gofmt" -l cmd internal); test -z "$$nido_unformatted" || { printf 'gofmt required:\n%s\n' "$$nido_unformatted"; exit 1; }
+	@nido_unformatted=$$("$(shell "$(GO)" env GOROOT)/bin/gofmt" -l cmd internal tests/fixtures/proxy-core); test -z "$$nido_unformatted" || { printf 'gofmt required:\n%s\n' "$$nido_unformatted"; exit 1; }
 	sh -n scripts/install.sh
 	sh -n scripts/gds-release-build.sh
 	bash -n tests/proxy-linux-isolation.sh tests/proxy-linux-bwrap.sh tests/gds-linux-native-isolation.sh tests/gds-public-release-isolation.sh
+	bash -n tests/proxy-quickstart-linux-native.sh tests/proxy-quickstart-cli-isolation.sh tests/proxy-quickstart-real-linux.sh
 
 check: fmt-check
 	"$(GO)" vet ./...
 	"$(GO)" test -race ./...
 	$(MAKE) build TARGET_OS=$(HOST_OS) TARGET_ARCH=$(HOST_ARCH)
 	bash tests/nido-cli-isolation.sh "$(CURDIR)/build/$(HOST_OS)-$(HOST_ARCH)/nido"
+	@proxy_fixture_dir=$$(mktemp -d); trap 'rm -rf -- "$$proxy_fixture_dir"' EXIT; \
+	CGO_ENABLED=0 "$(GO)" build -trimpath -buildvcs=false -o "$$proxy_fixture_dir/fake-mihomo" ./tests/fixtures/proxy-core && \
+	bash tests/proxy-quickstart-cli-isolation.sh "$(CURDIR)/build/$(HOST_OS)-$(HOST_ARCH)/nido" "$$proxy_fixture_dir/fake-mihomo"
 
 release:
 	@set -e; for platform in $(RELEASE_PLATFORMS); do $(MAKE) dist TARGET_OS="$${platform%/*}" TARGET_ARCH="$${platform#*/}"; done
@@ -107,3 +111,13 @@ check-proxy-linux-race:
 # Set NIDO_TEST_LINUX_RACE=1 for three prebuilt race programs; no host fallback.
 check-proxy-linux-native:
 	GO="$(GO)" bash tests/proxy-linux-bwrap.sh
+
+# Existing ordinary-user Linux amd64 SDK/GCC/bwrap plus a vendored source tree;
+# no real Mihomo, network downloads, system services or host user data.
+check-proxy-quickstart-linux-native:
+	bash tests/proxy-quickstart-linux-native.sh
+
+# Explicit real-core quick start E2E; existing native static race artifacts only.
+# Private filesystem/PID/network; no source, host HOME, libraries or downloads.
+check-proxy-quickstart-real-linux:
+	GO="$(GO)" bash tests/proxy-quickstart-real-linux.sh
