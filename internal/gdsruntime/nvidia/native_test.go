@@ -117,6 +117,20 @@ func TestNVMLProcessVersionFallbacks(t *testing.T) {
 	}
 }
 
+// runCUDA binds each t.Run goroutine independently. A parent test's OS-thread
+// lock does not extend to subtests; without this wrapper a postcheck rollback
+// can migrate before Free, correctly fail its thread check, and leave the fake
+// context alive for subsequent cases. The production worker already owns its
+// locked thread throughout Allocate and Free.
+func runCUDA(t *testing.T, name string, test func(*testing.T)) {
+	t.Helper()
+	t.Run(name, func(t *testing.T) {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		test(t)
+	})
+}
+
 func TestCUDAAllocationFakeDriver(t *testing.T) {
 	path := fakeLibrary(t)
 	b := fakeBackend(path)
@@ -159,7 +173,7 @@ func TestCUDAAllocationFakeDriver(t *testing.T) {
 		{"worker sees external compute", "GDS_FAKE_COMPUTE_COUNT", "1"},
 		{"worker sees external graphics", "GDS_FAKE_GRAPHICS_COUNT", "1"},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		runCUDA(t, test.name, func(t *testing.T) {
 			t.Setenv(test.key, test.value)
 			if a, err := b.Allocate(testUUID, 1<<30, 1<<30); err == nil {
 				_ = a.Free()
@@ -167,7 +181,7 @@ func TestCUDAAllocationFakeDriver(t *testing.T) {
 			}
 		})
 	}
-	t.Run("missing symbol", func(t *testing.T) {
+	runCUDA(t, "missing symbol", func(t *testing.T) {
 		bad := fakeBackend(fakeLibrary(t, "-DOMIT_CUDA_ALLOC"))
 		if _, err := bad.Allocate(testUUID, 1<<30, 1<<30); err == nil {
 			t.Fatal("incomplete CUDA ABI accepted")
@@ -181,7 +195,7 @@ func TestCUDAAllocationFakeDriver(t *testing.T) {
 		{"allocation rollback context failure", "GDS_FAKE_DESTROY_RET", []string{"cuCtxDestroy cleanup failed (999)"}},
 		{"allocation rollback both failures", "both", []string{"cuMemFree cleanup failed (999)", "cuCtxDestroy cleanup failed (999)"}},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		runCUDA(t, test.name, func(t *testing.T) {
 			log := filepath.Join(t.TempDir(), "allocation-rollback.log")
 			t.Setenv("GDS_FAKE_LOG", log)
 			t.Setenv("GDS_FAKE_AFTER_FREE_BYTES", "0")
@@ -218,7 +232,7 @@ func TestCUDAAllocationFakeDriver(t *testing.T) {
 		{"concurrent graphics", "GDS_FAKE_AFTER_GRAPHICS_COUNT", "1"},
 		{"MPS acquired context", "GDS_FAKE_AFTER_MPS_COUNT", "1"},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		runCUDA(t, test.name, func(t *testing.T) {
 			log := filepath.Join(t.TempDir(), "postcheck.log")
 			t.Setenv("GDS_FAKE_LOG", log)
 			t.Setenv(test.key, test.value)
@@ -237,7 +251,7 @@ func TestCUDAAllocationFakeDriver(t *testing.T) {
 			}
 		})
 	}
-	t.Run("postcheck cleanup failure is preserved", func(t *testing.T) {
+	runCUDA(t, "postcheck cleanup failure is preserved", func(t *testing.T) {
 		log := filepath.Join(t.TempDir(), "failed-cleanup.log")
 		t.Setenv("GDS_FAKE_LOG", log)
 		t.Setenv("GDS_FAKE_AFTER_MPS_COUNT", "1")
@@ -250,9 +264,7 @@ func TestCUDAAllocationFakeDriver(t *testing.T) {
 			t.Fatalf("postcheck cleanup must attempt free and destroy: %s %v", calls, err)
 		}
 	})
-	t.Run("free error preserved", func(t *testing.T) {
-		runtime.LockOSThread()
-		defer runtime.UnlockOSThread()
+	runCUDA(t, "free error preserved", func(t *testing.T) {
 		a, err := b.Allocate(testUUID, 1<<30, 1<<30)
 		if err != nil {
 			t.Fatal(err)
@@ -265,20 +277,43 @@ func TestCUDAAllocationFakeDriver(t *testing.T) {
 			t.Fatal("retry incorrectly acknowledged failed driver cleanup")
 		}
 	})
-	t.Run("wrong cleanup thread is rejected", func(t *testing.T) {
-		runtime.LockOSThread()
-		defer runtime.UnlockOSThread()
+	runCUDA(t, "wrong cleanup thread is rejected", func(t *testing.T) {
 		a, err := b.Allocate(testUUID, 1<<30, 1<<30)
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Keep the owner thread responsible for cleanup even if an assertion
+		// fails after the deliberately rejected cross-thread operation.
+		defer func() {
+			if err := a.Free(); err != nil {
+				t.Errorf("owner-thread deferred cleanup: %v", err)
+			}
+		}()
 		wrongThread := make(chan error, 1)
 		go func() { runtime.LockOSThread(); defer runtime.UnlockOSThread(); wrongThread <- a.Free() }()
 		if err := <-wrongThread; err == nil || !strings.Contains(err.Error(), "original OS thread") {
 			t.Fatalf("wrong-thread cleanup: %v", err)
 		}
+		// A rejected Free must leave ownership and the allocation intact.
+		// This deterministically models the leak behind the CI contamination,
+		// without depending on the scheduler to migrate a test by chance.
+		sample, err := b.Probe(testUUID)
+		if err != nil || len(sample.ComputePIDs) != 1 || sample.ComputePIDs[0] != os.Getpid() {
+			t.Fatalf("wrong-thread Free lost the live context: %+v %v", sample, err)
+		}
 		if err := a.Free(); err != nil {
 			t.Fatal("original-thread cleanup:", err)
+		}
+		sample, err = b.Probe(testUUID)
+		if err != nil || len(sample.ComputePIDs) != 0 {
+			t.Fatalf("owner-thread cleanup left a context for the next case: %+v %v", sample, err)
+		}
+		next, err := b.Allocate(testUUID, 1<<30, 1<<30)
+		if err != nil {
+			t.Fatalf("allocation after owner cleanup: %v", err)
+		}
+		if err := next.Free(); err != nil {
+			t.Fatal("subsequent allocation cleanup:", err)
 		}
 	})
 }

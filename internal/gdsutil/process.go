@@ -40,11 +40,11 @@ func Stop(p gdsapi.Process) error {
 	return fmt.Errorf("GDS 进程尚未确认退出；保留身份记录")
 }
 func processMetadataError(directory string, cause error) error {
-	if !errors.Is(cause, os.ErrNotExist) {
+	if !errors.Is(cause, os.ErrNotExist) && !errors.Is(cause, syscall.ESRCH) {
 		return cause
 	}
 	info, err := os.Stat(directory)
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
 		return os.ErrNotExist
 	}
 	if err != nil {
@@ -53,7 +53,7 @@ func processMetadataError(directory string, cause error) error {
 	if !info.IsDir() {
 		return fmt.Errorf("进程目录无效")
 	}
-	// Never retain ENOENT in this error chain: a missing exe/stat/status is
+	// Never retain ENOENT/ESRCH in this error chain: a missing exe/stat/status is
 	// insufficient to conclude that the entire thread group has disappeared.
 	return fmt.Errorf("进程子项暂不可读 (%v): %w", cause, errProcessTransition)
 }

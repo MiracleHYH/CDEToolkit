@@ -67,13 +67,23 @@ func linuxProcessState(base string, p Process) (string, error) {
 	}
 	info, err := os.Stat(base)
 	if err != nil {
-		return "", err
+		return "", linuxProcessDirectoryError(err)
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || stat.Uid != p.UID || fields[19] != p.Started {
 		return "", fmt.Errorf("进程检查期间出生或用户信息发生变化")
 	}
 	return fields[0], nil
+}
+
+// Only a whole PID-directory lookup can directly confirm disappearance. An
+// ESRCH from reading a procfs child still requires the metadata recheck above:
+// the leader may be exiting while other threads remain alive.
+func linuxProcessDirectoryError(err error) error {
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+		return os.ErrNotExist
+	}
+	return err
 }
 
 func inspectLinuxProcess(pid int) (Process, error) {
@@ -83,7 +93,7 @@ func inspectLinuxProcess(pid int) (Process, error) {
 	base := filepath.Join("/proc", strconv.Itoa(pid))
 	info, err := os.Stat(base)
 	if err != nil {
-		return Process{}, err
+		return Process{}, linuxProcessDirectoryError(err)
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || stat.Uid != uint32(os.Geteuid()) {
