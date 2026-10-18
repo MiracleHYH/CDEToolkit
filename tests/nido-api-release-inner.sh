@@ -27,7 +27,7 @@ unset NIDO_GITHUB_PROXY CONDARC PIP_CONFIG_FILE SSL_CERT_FILE SSL_CERT_DIR
 mkdir -p "$HOME" "$TMPDIR" "$case_root/package" "$case_root/guard" "$case_root/before"
 nido() { "$NIDO_HOME/bin/nido" --root "$NIDO_HOME" "$@"; }
 cleanup() {
-  local status=$? cleanup_status=0 passed=false
+  local status=$? cleanup_status=0 passed=false evidence_exported=false
   trap - EXIT
   set +e
   if [[ $core_active = true ]]; then
@@ -39,10 +39,28 @@ cleanup() {
     wait "$origin_pid" 2>/dev/null
   fi
   [[ $cleanup_status = 0 ]] || status=1
-  if [[ $status = 0 && $checks_complete = true ]]; then passed=true; fi
-  printf '{"scope":"nido-linux-amd64-release-api-contract","nido_input_scope":"%s","version":"%s","passed":%s,"checks_complete":%s,"disabled_online_calls":%s,"positive_api_queries":%s,"api_metadata":"private-loopback-TLS-fixture","core":"test-only-API-CONNECT-fixture","public_api_network_tested":false,"real_mihomo_tested":false,"source_nido_binary_used":%s,"cleanup_verified":%s}\n' \
-    "$input_scope" "$version" "$passed" "$checks_complete" "$disabled_cases" "$positive_queries" "$([[ $input_scope = pre-release-local ]] && printf true || printf false)" "$([[ $cleanup_status = 0 ]] && printf true || printf false)" > "$output/result.json"
-  printf '%s\n' "$status" > "$output/inner-exit.txt"
+  write_result() {
+    passed=false
+    if [[ $status = 0 && $checks_complete = true ]]; then passed=true; fi
+    printf '{"scope":"nido-linux-amd64-release-api-contract","nido_input_scope":"%s","version":"%s","passed":%s,"checks_complete":%s,"disabled_online_calls":%s,"positive_api_queries":%s,"api_metadata":"private-loopback-TLS-fixture","core":"test-only-API-CONNECT-fixture","public_api_network_tested":false,"real_mihomo_tested":false,"source_nido_binary_used":%s,"cleanup_verified":%s,"evidence_exported":%s}\n' \
+      "$input_scope" "$version" "$passed" "$checks_complete" "$disabled_cases" "$positive_queries" "$([[ $input_scope = pre-release-local ]] && printf true || printf false)" "$([[ $cleanup_status = 0 ]] && printf true || printf false)" "$evidence_exported" > "$output/result.json" || return 1
+    printf '%s\n' "$status" > "$output/inner-exit.txt"
+  }
+  write_result || status=1
+  # Only this run's dedicated evidence mount is exported for the host runner
+  # and artifact uploader. Product/configuration files remain private in /case.
+  # The mount root belongs to the host uid; only child directories are chmodded.
+  if find "$output" -mindepth 1 -type f -exec chmod 0644 -- {} + &&
+      find "$output" -mindepth 1 -type d -exec chmod 0755 -- {} +; then
+    evidence_exported=true
+  else
+    status=1
+    printf 'FAIL: cannot export this run evidence permissions\n' >&2
+  fi
+  write_result || status=1
+  # A failed export is still a failure. Make its summary readable when possible
+  # without treating unreadable or incomplete evidence as a passing run.
+  chmod 0644 -- "$output/result.json" "$output/inner-exit.txt" || status=1
   rm -rf -- "$case_root"
   exit "$status"
 }
