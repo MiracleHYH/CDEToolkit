@@ -225,8 +225,6 @@ func (s Service) ValidateConfig(c Config) error {
 }
 
 func (s Service) Discover() ([]Candidate, error) {
-	var candidates []Candidate
-	seen := map[string]bool{}
 	for _, c := range []Candidate{{envValue(s.environment(), "CODEX_HOME"), "CODEX_HOME"}, {filepath.Join(s.UserHome, ".codex"), "default"}} {
 		if c.Home == "" {
 			continue
@@ -235,12 +233,9 @@ func (s Service) Discover() ([]Candidate, error) {
 		if err != nil {
 			continue
 		}
-		if !seen[home] {
-			seen[home] = true
-			candidates = append(candidates, Candidate{home, c.Source})
-		}
+		return []Candidate{{Home: home, Source: c.Source}}, nil
 	}
-	return candidates, nil
+	return nil, nil
 }
 
 func executable(path string) bool {

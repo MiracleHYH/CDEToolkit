@@ -32,7 +32,7 @@ nido status
 nido codex setup
 ```
 
-自定义目录可直接使用 `nido codex setup --home /path/to/.codex`。没有安装时，明确选择外部 HOME，由官方脚本安装：
+自动发现顺序为 `CODEX_HOME` → 默认 `~/.codex` → 询问自定义路径，找到首个有效目录即停止。自定义目录也可直接使用 `nido codex setup --home /path/to/.codex`。没有安装时，明确选择外部 HOME，由官方脚本安装：
 
 ```sh
 nido codex install --home "$HOME/.codex"

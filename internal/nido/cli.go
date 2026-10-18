@@ -414,17 +414,14 @@ func (c *CLI) codex(m *Manager, o cliOptions, args []string) int {
 			if e != nil {
 				return c.fail(e)
 			}
-			if len(candidates) == 1 {
+			if len(candidates) > 0 {
 				home = candidates[0].Home
 			} else {
 				if o.yes {
-					return c.fail(fmt.Errorf("未找到唯一 Codex 目录，请用 --home 指定已有目录；新装请使用 codex install"))
-				}
-				for _, p := range candidates {
-					fmt.Fprintf(c.Err, "候选: %s (%s)\n", p.Home, p.Source)
+					return c.fail(fmt.Errorf("未发现可用 Codex 目录，请用 --home 指定已有目录；新装请使用 codex install"))
 				}
 				var e error
-				home, e = c.ask("已有 CODEX_HOME（不搬目录）；没有则输入 install，跳过输入 skip", "skip")
+				home, e = c.ask("未发现已有 CODEX_HOME，请输入自定义目录；没有则输入 install，跳过输入 skip", "skip")
 				if e != nil {
 					return c.fail(e)
 				}
