@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+trap 'printf "FAIL: public acceptance at line %s\n" "$LINENO" >&2' ERR
 umask 077
 version=${NIDO_ACCEPT_VERSION:?}
 old_version=${NIDO_ACCEPT_OLD_VERSION:?}
@@ -36,7 +37,17 @@ asset="nido-${platform//\//-}.tar.gz"
 temporary_base=${NIDO_ACCEPT_TEMP_BASE:-/tmp}
 case_root=$(mktemp -d "$temporary_base/nido-public-release.XXXXXX")
 case_root=$(cd "$case_root" && pwd -P)
-cleanup() { local status=$?; rm -rf -- "$case_root"; [[ $status = 0 ]] || printf 'FAIL: public acceptance exited %s\n' "$status" >&2; }
+cleanup() {
+  local status=$?
+  trap - EXIT
+  # Only this run's synthetic evidence is exposed to the ordinary runner uid.
+  # Preserve it after failure as well; private HOME is removed separately.
+  find "$output" -type f -exec chmod 0644 {} + || status=1
+  find "$output" -type d -exec chmod 0755 {} + || status=1
+  rm -rf -- "$case_root" || status=1
+  [[ $status = 0 ]] || printf 'FAIL: public acceptance exited %s\n' "$status" >&2
+  exit "$status"
+}
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -195,18 +206,25 @@ assert_shell_activation() {
   for shell in /bin/bash /bin/zsh; do
     [[ $platform = darwin/* || $shell = /bin/bash ]] || continue
     [[ -x $shell ]]
-    env -i PATH="$base_path" HOME="$HOME" NIDO_HOME="$NIDO_HOME" CODEX_HOME="$CODEX_HOME" \
+    if ! env -i PATH="$base_path" HOME="$HOME" NIDO_HOME="$NIDO_HOME" CODEX_HOME="$CODEX_HOME" \
       TMPDIR="$TMPDIR" ZDOTDIR="$HOME" BASH_ENV=/dev/null ENV=/dev/null \
       "$shell" -f -c '
         set -eu
+        printf "CHECK generated environment source\n"
         . "$1/env.sh"
-        [ "$(command -v nido)" = "$1/bin/nido" ]
-        [ "$(nido version)" = "nido $2" ]
+        printf "CHECK command registration\n"
+        actual_command=$(command -v nido) || { printf "FAIL nido command missing\n" >&2; exit 1; }
+        [ "$actual_command" = "$1/bin/nido" ] || { printf "FAIL command path: %s\n" "$actual_command" >&2; exit 1; }
+        actual_version=$(nido version) || { printf "FAIL version command\n" >&2; exit 1; }
+        [ "$actual_version" = "nido $2" ] || { printf "FAIL version: %s\n" "$actual_version" >&2; exit 1; }
         previous_path=$PATH
         . "$1/env.sh"
-        [ "$PATH" = "$previous_path" ]
+        [ "$PATH" = "$previous_path" ] || { printf "FAIL PATH changed on repeated source\n" >&2; exit 1; }
         printf "PASS %s command registration and idempotent PATH\n" "$3"
-      ' public-accept "$NIDO_HOME" "$version" "${shell##*/}" > "$output/$label-${shell##*/}-activation.log"
+      ' public-accept "$NIDO_HOME" "$version" "${shell##*/}" > "$output/$label-${shell##*/}-activation.log" 2>&1; then
+      cat "$output/$label-${shell##*/}-activation.log" >&2
+      return 1
+    fi
   done
 }
 assert_transport_requests() {
