@@ -267,7 +267,11 @@ for transport in "${transports[@]}"; do
   assert_shell_activation "$transport"
   fresh_components "$transport-install"
   nido download show --json > "$output/$transport-policy.json"
-  grep -Fq "$policy" "$output/$transport-policy.json"
+  if [[ $transport = direct ]]; then
+    grep -Eq '"github_accelerate"[[:space:]]*:[[:space:]]*"none"' "$output/$transport-policy.json"
+  else
+    grep -Fq "$policy" "$output/$transport-policy.json"
+  fi
   cp "$NIDO_HOME/config.toml" "$case_root/$transport-config-before"
   cp "$NIDO_HOME/env.sh" "$case_root/$transport-env-before"
   curl --http1.1 -fsSL "$outer" | sh -s -- "${install_options[@]}"
