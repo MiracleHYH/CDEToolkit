@@ -4,7 +4,7 @@
 
 Nido 是用户级的 Go 命令行工具：管理内置 Mihomo Proxy；为外部 Codex 提供目录关联、PATH、代理和官方安装更新入口；快捷修改 Conda/pip 镜像、缓存与环境目录。它不管理云平台、镜像、CUDA/驱动或 Python/Conda 环境内部，也不搬迁外部数据。
 
-> 当前源码已改为统一方向键界面、独立的 GitHub Accelerate / Proxy 设置与原生 Proxy 管理，**尚未发布**。下面的公开安装链接仍指向公开发行版，其交互和网络行为见 [v0.9.1 发行记录](docs/nido-v0.9.1-release.md)。当前源码说明不代表公开版本已包含这些改动。
+> v0.10.0 使用统一方向键界面、独立的 GitHub Accelerate / Proxy 设置与原生 Proxy 管理。下面的两条安装命令均使用最新正式版本，详见 [v0.10.0 发行说明](docs/nido-v0.10.0-release.md)。
 
 ## 安装
 
@@ -22,7 +22,7 @@ GitHub 访问困难时，使用自己信任的加速入口：
 curl -fsSL https://gh-proxy.org/https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh
 ```
 
-两条命令均无需额外参数。当前源码生成的安装脚本自带压缩的 Go 程序，不再二次下载；解包校验后，在统一界面选择安装目录、GitHub Accelerate、Proxy 与可选 Bash/Zsh 自动加载，最终确认。默认软件目录是 `~/.nido`，也可选择自定义绝对路径；安装器不配置或启动组件。首次脚本下载的网络路径由上面所选 URL 决定。
+两条命令均无需额外参数。安装脚本自带压缩的 Go 程序，不再二次下载；解包校验后，在统一界面选择安装目录、GitHub Accelerate、Proxy 与可选 Bash/Zsh 自动加载，最终确认。默认软件目录是 `~/.nido`，也可选择自定义绝对路径；安装器不配置或启动组件。首次脚本下载的网络路径由上面所选 URL 决定。
 
 安装完成后，执行输出中对应**实际软件目录**的环境加载命令，然后打开菜单：
 

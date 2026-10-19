@@ -1,6 +1,6 @@
 # Go 开发、验证与发行
 
-> 本轮为未发布源码与 CI 整改，提交到 GitHub 后由原生 Linux amd64 检查验收，不打标签或发布。公开 v0.9.1 的签名、原生 CI 和隔离安装证据见 [v0.9.1 记录](nido-v0.9.1-release.md)，不能将其结果直接用于此次改动。
+> 当前发行版本为 [v0.10.0](nido-v0.10.0-release.md)。此前源码整改的原生 Linux amd64 检查见 [508b732 的 CI](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39240636725)；正式发行仍须通过精确标签检查、签名和独立的公开产物验收。旧版本证据不能直接用于新版本。
 
 ## 默认检查
 

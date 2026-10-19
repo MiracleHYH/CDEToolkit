@@ -24,7 +24,7 @@ test:
 	"$(GO)" test ./...
 
 fmt-check:
-	@nido_unformatted=$$("$(shell "$(GO)" env GOROOT)/bin/gofmt" -l cmd internal tests/fixtures/proxy-core tests/fixtures/nido-api-release); test -z "$$nido_unformatted" || { printf 'gofmt required:\n%s\n' "$$nido_unformatted"; exit 1; }
+	@nido_unformatted=$$("$(shell "$(GO)" env GOROOT)/bin/gofmt" -l cmd internal tests/fixtures/proxy-core tests/fixtures/nido-api-release tests/fixtures/nido-public-install); test -z "$$nido_unformatted" || { printf 'gofmt required:\n%s\n' "$$nido_unformatted"; exit 1; }
 	sh -n scripts/install.sh
 	bash -n tests/proxy-linux-isolation.sh tests/proxy-linux-bwrap.sh
 	bash -n tests/proxy-quickstart-linux-native.sh tests/proxy-quickstart-cli-isolation.sh tests/proxy-quickstart-real-linux.sh
@@ -33,6 +33,7 @@ fmt-check:
 	bash -n tests/conda-p0-isolation.sh
 	sh -n tests/fixtures/conda-p0-runtime/nido-p0-strace
 	bash -n tests/nido-public-release-isolation.sh tests/nido-public-release-inner.sh
+	bash -n tests/nido-public-install-isolation.sh tests/nido-public-install-inner.sh
 	bash -n tests/nido-proxy-bootstrap-isolation.sh
 	bash -n tests/nido-api-release-isolation.sh tests/nido-api-release-inner.sh
 
