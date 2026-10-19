@@ -43,7 +43,7 @@ cleanup() {
   # Only this run's synthetic evidence is exposed to the ordinary runner uid.
   # Preserve it after failure as well; private HOME is removed separately.
   find "$output" -type f -exec chmod 0644 {} + || status=1
-  find "$output" -type d -exec chmod 0755 {} + || status=1
+  find "$output" -mindepth 1 -type d -exec chmod 0755 {} + || status=1
   rm -rf -- "$case_root" || status=1
   [[ $status = 0 ]] || printf 'FAIL: public acceptance exited %s\n' "$status" >&2
   exit "$status"
