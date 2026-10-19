@@ -67,9 +67,38 @@ if [ "$yes" = 0 ] && [ "$dry_run" = 0 ] && ( : <> /dev/tty ) 2>/dev/null; then
         root=$answer
     fi
     if [ "$github_proxy_explicit" = 0 ]; then
-        ask 'GitHub 下载：auto / direct / HTTPS 前缀；回车本次用 auto，保留已保存策略' "$github_proxy"
-        github_proxy=$answer
-        if [ "$answer_supplied" = 1 ]; then github_proxy_explicit=1; fi
+        printf '%s\n' 'GitHub 下载方式：' \
+            '  1) direct：仅 GitHub 官方直连' \
+            '  2) https://gh-proxy.org' \
+            '  3) https://ghfast.top' \
+            '  4) 自定义 HTTPS 加速前缀' \
+            '  5) auto：官方失败后依次尝试内置加速地址' \
+            '第三方加速服务将接收公开 GitHub 下载 URL；仅用于 Nido 及 GitHub 组件下载。' >&3
+        while :; do
+            ask '请选择；回车本次用 auto，保留已保存策略' 5
+            if [ "$answer_supplied" = 0 ]; then
+                github_proxy=auto
+                break
+            fi
+            case "$answer" in
+                1|direct) github_proxy=direct ;;
+                2) github_proxy=https://gh-proxy.org ;;
+                3) github_proxy=https://ghfast.top ;;
+                4)
+                    while :; do
+                        ask '自定义 GitHub 加速 HTTPS 前缀（必填）' ''
+                        case "$answer" in
+                            https://*) github_proxy=$answer; break ;;
+                            *) printf '请输入 HTTPS 加速前缀，或输入 q 退出。\n' >&3 ;;
+                        esac
+                    done ;;
+                5|auto) github_proxy=auto ;;
+                https://*) github_proxy=$answer ;;
+                *) printf '请选择 1–5，或输入 q 退出。\n' >&3; continue ;;
+            esac
+            github_proxy_explicit=1
+            break
+        done
     fi
     detected_shell=${SHELL:-}
     detected_shell=${detected_shell##*/}

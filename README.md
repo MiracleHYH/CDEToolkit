@@ -4,7 +4,7 @@
 
 Nido 为 Codex 提供目录关联、环境与代理配置，以及官方安装更新入口；Proxy（Mihomo）和可选 GDS 则由 Nido 安装和管理。自 v0.8.0 起提供 Conda / pip 镜像、缓存与环境目录配置。外部工具保留原有数据和命令入口。
 
-**[v0.9.0 已发布](https://github.com/MiracleHYH/CDEToolkit/releases/tag/v0.9.0)，仅面向 Linux amd64。**本版增加交互式安装、组件配置菜单和可选 Shell 注册。原生 CI、签名发布与独立验签已通过；README 直链和 gh-proxy.org 两条命令均通过公网 PTY 隔离验收，完成自定义目录安装、Bash 注册和重复安装。执行环境与验证边界见 [v0.9.0 发行记录](docs/nido-v0.9.0-release.md)。
+**[v0.9.0 已发布](https://github.com/MiracleHYH/CDEToolkit/releases/tag/v0.9.0)，仅面向 Linux amd64。**本版增加交互式安装、组件配置菜单和可选 Shell 注册。原生 CI、签名发布与独立验签已通过，完整范围见 [v0.9.0 发行记录](docs/nido-v0.9.0-release.md)。下述无参数加速入口也已完成[公网交互复验](docs/interactive-design.md#验证)。
 
 Nido 本身是一个 Go 可执行文件。其他平台的旧发行包保留其历史版本边界。
 
@@ -24,15 +24,17 @@ Nido 本身是一个 Go 可执行文件。其他平台的旧发行包保留其�
 curl -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh
 ```
 
-默认文件下载策略为 `auto`，官方请求失败后可能使用内置第三方加速入口。只接受官方来源时，在 `sh` 后改用 `-s -- --github-proxy direct`。
+脚本运行后，在安装引导中选择后续包下载方式；只接受官方来源时选择 `direct`。
 
 **GitHub 访问困难，使用自己信任的加速入口：**
 
 ```sh
-curl -fsSL https://gh-proxy.org/https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy https://gh-proxy.org
+curl -fsSL https://gh-proxy.org/https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh
 ```
 
-加速方式显式传入同一前缀，因为管道内的脚本无法知道外层 curl 的下载地址；私人前缀同理。该方式会执行第三方转发的脚本，仅在信任该服务时使用。安装器核对包的 SHA-256，当前客户端不会验证 Sigstore 签名；第三方也能同时替换脚本、包和摘要，因此摘要不能独立证明来源。
+外层 `curl` 只负责获取安装脚本，后续发行包的下载方式由交互选择，无需额外参数或推断外层 URL。当前 v0.9.0 可直接输入 `direct`、`https://gh-proxy.org`、其他可信 HTTPS 前缀或 `auto`；源码中的新版引导将提供直连、内置 `gh-proxy.org` / `ghfast.top`、自定义前缀和自动回退菜单，尚未发布。
+
+加速方式会执行第三方转发的脚本，仅在信任该服务时使用。安装器核对包的 SHA-256，当前客户端不会验证 Sigstore 签名；第三方也能同时替换脚本、包和摘要，因此摘要不能独立证明来源。
 
 安装成功后，执行输出中对应实际软件目录的 `. '.../env.sh'` 命令，再检查：
 

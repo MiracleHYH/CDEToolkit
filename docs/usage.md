@@ -8,7 +8,7 @@ GDS 保持可选。Nido v0.5.0 起支持独立 Linux amd64 组件的官方下载
 
 本文的 **Nido 内部 GitHub API listener 绑定及未绑定时禁用 API**已随 v0.8.2 发布，仅面向 Linux amd64，v0.8.1 尚不具备；其他已发行功能沿用各自版本说明。源码审计、原生 CI、发布工作流、独立验签、正式包 API 隔离，以及公网直链和 gh-proxy.org 加速安装自更新验收均已通过；首次加速配额失败和复验记录见 [v0.8.2 记录](nido-v0.8.2-release.md)。
 
-v0.9.0 增加交互安装、组件配置菜单和 `nido shell setup`。显式参数与既有数据保护保持有效，完整约定见[交互设计](interactive-design.md)；发布与公网隔离安装的实际进度见 [v0.9.0 发行记录](nido-v0.9.0-release.md)。
+v0.9.0 增加交互安装、组件配置菜单和 `nido shell setup`。显式参数与既有数据保护保持有效，完整约定见[交互设计](interactive-design.md)；发布与公网隔离安装记录见 [v0.9.0 发行记录](nido-v0.9.0-release.md)。源码新增安装器下载方式预设菜单，尚未发布；v0.9.0 对应问题仍接受 `direct`、HTTPS 前缀或 `auto` 的文字输入。
 
 ## 初始化与 Shell 环境
 
@@ -16,21 +16,21 @@ v0.9.0 增加交互安装、组件配置菜单和 `nido shell setup`。显式参
 
 选择一个独立软件目录，默认为 `~/.nido`，v0.9.0 可在安装引导中输入自定义绝对路径。首次安装选择官方脚本入口或第三方加速链，不能指望脚本内的回退修复外层脚本下载失败。
 
-官方脚本入口，内部下载默认使用 `auto`：
+官方脚本入口：
 
 ```sh
 curl -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh
 ```
 
-若只接受官方来源，使用 `sh -s -- --github-proxy direct`。默认 `auto` 在官方文件请求失败后可能使用内置第三方前缀。
+脚本运行后，在安装引导中选择后续包下载方式；只接受官方来源时选择 `direct`。`auto` 在官方文件请求失败后可能使用内置第三方前缀。
 
-第三方加速链，显式将相同前缀用于内部包下载：
+GitHub 直连困难时，通过自己信任的第三方入口获取脚本：
 
 ```sh
-curl -fsSL https://gh-proxy.org/https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy https://gh-proxy.org
+curl -fsSL https://gh-proxy.org/https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh
 ```
 
-管道脚本无法得知外层 curl 的 URL；使用私人文件前缀时也应传入同一 `--github-proxy`。请只使用自己信任的入口，加速脚本具有直接执行第三方内容的信任边界。
+外层 `curl` 只获取脚本；脚本运行后再交互选择包下载方式，无需额外传参，也不需要推断外层 URL。v0.9.0 可在下载问题中输入 `https://gh-proxy.org` 或自己的 HTTPS 前缀；源码新增直连、内置 `gh-proxy.org` / `ghfast.top`、自定义前缀和 `auto` 预设菜单，尚未发布。无参数加速入口已完成[公网交互复验](interactive-design.md#验证)。请只使用自己信任的入口，加速脚本具有直接执行第三方内容的信任边界。
 
 安装后，执行安装输出中指向**实际软件根**的 `. '.../env.sh'` 命令，再检查版本：
 
@@ -39,6 +39,8 @@ nido version
 ```
 
 自定义目录可在安装时选择，也可预先执行 `export NIDO_HOME=/absolute/path/to/nido` 作为引导默认值。固定版本可使用 `sh -s -- --version X.Y.Z`；脚本也可从对应 `releases/download/vX.Y.Z/install.sh` 获取。源码构建方式见 [README](../README.md#开发)。
+
+自动化或无终端环境可继续使用显式参数，例如 `sh -s -- --root /absolute/path/to/nido --github-proxy https://gh-proxy.org --yes`。这些参数不属于日常交互安装的必需步骤。
 
 安装器也接受 `--root /absolute/path/to/nido`，优先于 `NIDO_HOME`；之后必须加载该实际目录中的 `env.sh`。首次初始化只接受不存在或空目录，不把普通数据目录或旧 toolkit 目录变成 Nido。重复初始化保留配置，并刷新自己的程序和环境文件；用户修改过的 `env.sh` 不被静默覆盖。
 
@@ -92,7 +94,7 @@ nido update --version X.Y.Z --github-proxy direct
 
 `direct` 使用官方 GitHub URL；`auto` 先短时尝试官方地址，API 请求失败后只尝试 `https://gh-proxy.org`，发行包、摘要等资产请求才会继续尝试 `https://ghfast.top`，不会无限重试。自定义 HTTPS 前缀只通过该服务转发完整的公开 GitHub URL，例如 `https://gh-proxy.org/https://github.com/...`。前缀可以含路径，但不能带账号、密码、查询参数或片段，也不接受 HTTP/SOCKS 代理地址。下述 API listener 绑定生效时，API 固定使用官方 URL 经 listener 访问，不套用前缀；资产仍采用此下载策略。
 
-优先级为本次 `--github-proxy`、`NIDO_GITHUB_PROXY` 环境变量、已保存配置、默认 `auto`。显式设置空的 `NIDO_GITHUB_PROXY` 表示直连。`nido download set VALUE` 保存后续下载策略；更新命令上的选项只影响本次请求。已有 Nido 重跑安装脚本但未显式指定策略时，脚本本次使用 `auto` 下载，保留软件中的既有策略；显式 flag 或环境变量则传给 `init` 保存。安装脚本本身不会解析 TOML。自动回退只在已经执行的安装脚本内部生效，外层 `curl` 需由用户选择能访问的来源。
+优先级为本次 `--github-proxy`、`NIDO_GITHUB_PROXY` 环境变量、已保存配置、默认 `auto`。显式设置空的 `NIDO_GITHUB_PROXY` 表示直连。`nido download set VALUE` 保存后续下载策略；更新命令上的选项只影响本次请求。安装时明确选择的新值会传给 `init` 保存；下载问题直接回车或重跑时未明确选择策略，本次使用 `auto` 下载并保留既有策略。显式 flag 或环境变量也会传给 `init` 保存。安装脚本本身不会解析 TOML。自动回退只在已经执行的安装脚本内部生效，外层 `curl` 需由用户选择能访问的来源。
 
 `download show` 同时显示保存值和本次实际值；v0.8.2 另显示 `api_state`、`api_listener`、`api_proxy`。没有 sidecar 或 listener 为空时为 `disabled`，名称和地址为空；已配置非空绑定时为 `configured`。这是静态配置状态，不证明 listener 正在运行或网络可达。普通 status/doctor 不联网，未绑定是正常禁用状态，不计作 doctor 故障。错误的下载偏好只阻止使用它的联网操作，不阻止 Codex 或离线状态查看；可通过 `download set` 修正，`doctor` 会报告无效的实际策略。Go 下载不会在收到响应头后仅因传输超过 8 秒而切换到第三方；连接和响应头有短期限，整个请求仍有大小与时间上限。加速服务返回的跳转也会检查认证参数和目标域名，自定义入口不能将下载跳转到任意外部站点。
 

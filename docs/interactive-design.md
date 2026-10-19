@@ -1,6 +1,6 @@
 # Nido 配置交互
 
-v0.9.0 增加交互安装、组件配置菜单和可选 Shell 注册。本文规定交互边界；发布、独立验签与公网隔离安装的实际进度见 [v0.9.0 发行记录](nido-v0.9.0-release.md)。源码测试通过不等于公开发行包验收或真实开发机部署。
+v0.9.0 增加交互安装、组件配置菜单和可选 Shell 注册。本文规定交互边界；发布、独立验签与公网隔离安装记录见 [v0.9.0 发行记录](nido-v0.9.0-release.md)。安装器下载方式预设菜单为源码新增，尚未发布；v0.9.0 使用 `direct`、HTTPS 前缀或 `auto` 的文字输入。源码测试通过不等于公开发行包验收或真实开发机部署。
 
 ## 从明确动作开始
 
@@ -32,9 +32,11 @@ v0.9.0 增加交互安装、组件配置菜单和可选 Shell 注册。本文规
 
 有交互终端时，安装器只询问软件目录、下载方式、可选 Shell 注册和最终确认。下载问题直接回车仅让本次下载使用 `auto`，保留已保存策略；输入新值才保存。注册默认关闭；不把 Codex、Proxy、Conda、GDS 配置塞入下载脚本。
 
+源码新增的下载方式菜单提供直连 `direct`、内置 `https://gh-proxy.org`、内置 `https://ghfast.top`、自定义 HTTPS 前缀和 `auto` 有限回退。选择自定义后才询问前缀，继续使用现有 URL 校验；预设不代表对第三方服务的可用性或来源作担保。显式参数仍可跳过问题，用于自动化。
+
 管道安装通过终端读取回答，不从脚本标准输入读取，避免吞掉尚未执行的脚本。没有终端或指定 `--yes` 时保留参数模式；`--dry-run` 不交互、不下载、不安装。
 
-外层脚本下载与内层包下载分开处理。脚本无法从管道推断 curl 的原始 URL；通过私人或预设加速前缀取脚本时，仍应显式传入同一 `--github-proxy`。默认 `auto` 允许官方失败后的有限第三方回退；只有 `direct` 才表示不使用文件加速前缀。HTTPS 和摘要不替代对脚本来源的信任。
+外层脚本下载与内层包下载分开处理。README 的直链与加速入口均使用 `curl -fsSL URL | sh`；用户获取脚本后，在引导中选择后续包的下载方式，无需额外传入 `--github-proxy`，也不推断外层 curl URL。默认 `auto` 允许官方失败后的有限第三方回退；只有 `direct` 才表示不使用文件加速前缀。HTTPS 和摘要不替代对脚本来源的信任；GitHub 文件加速不配置 Codex 的通用代理，API listener 绑定仍为独立选择。
 
 安装完成后输出指向实际软件根的环境加载命令，不假设用户最终选择了 `~/.nido`。安装子进程不能修改父 Shell 的 PATH。
 
@@ -63,3 +65,11 @@ API listener 绑定门控保持 v0.8.2 的规则：未绑定时，GitHub API 功
 Proxy 配置完成后仍停止；用户另行运行 `start`，再明确选择 API listener。订阅获取若依赖尚未就绪的代理，仍须准备能完成首次连接的节点或本地配置。交互菜单不自动下载订阅、启用 API、配置其他工具或启动服务来掩盖依赖问题。
 
 GDS 配置不自动选择 GPU 或启动保留显存的工作进程；Codex 配置不控制 daemon。安装、更新、配置和代理绑定均不隐式执行 `start`、`stop` 或 `restart`。
+
+## 验证
+
+下载菜单的源码改造通过 Linux amd64 无网络隔离测试，包含 29 个真实 PTY 场景：无额外参数的直链和加速入口、各下载选项、环境和参数优先级、取消、空值、自定义目录及 Shell 注册委托。下载与 Nido 程序均使用夹具，未运行真实组件。日志为 `build/installer-menu-isolation/evidence/installer-tests.log`。
+
+已发布的 v0.9.0 另于 2026-10-19 03:25:26–03:25:39 UTC 完成无参数加速命令的公网 PTY 复验：执行 README 的 `curl -fsSL https://gh-proxy.org/https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh`，在引导中输入 `https://gh-proxy.org`，选择含空格、单引号和 `$` 的目录并注册 Bash。首装、重装、新 Bash 的 `nido 0.9.0`、输出激活命令及 12 个保护文件检查全部通过。每个真实下载响应先与独立验签的 v0.9.0 资产比较，结果为 `build/release-v0.9.0/public-simple-current-v090/container-evidence/interactive-acceptance.json`。该项验证现有版本的文字输入流程；新增编号菜单仍未发布。
+
+上述执行均为 macOS ARM 宿主上的 Linux amd64 仿真隔离容器，普通 UID、只读输入和临时 HOME，不挂载真实配置、组件数据或 GPU。没有在 Zenith-Dev 安装或启动组件，也未改动现有配置、认证、会话和数据。
