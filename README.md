@@ -4,7 +4,7 @@
 
 Nido 是用户级的 Go 命令行工具：管理内置 Mihomo Proxy；为外部 Codex 提供目录关联、PATH、代理和官方安装更新入口；快捷修改 Conda/pip 镜像、缓存与环境目录。它不管理云平台、镜像、CUDA/驱动或 Python/Conda 环境内部，也不搬迁外部数据。
 
-> v0.10.0 使用统一方向键界面、独立的 GitHub Accelerate / Proxy 设置与原生 Proxy 管理。下面的两条安装命令均使用最新正式版本，详见 [v0.10.0 发行说明](docs/nido-v0.10.0-release.md)。
+> v0.10.1 修复 SS2022 分享链接兼容、Codex 命令发现与菜单判断。下面的两条安装命令均使用最新正式版本，详见 [v0.10.1 发行说明](docs/nido-v0.10.1-release.md)。
 
 ## 安装
 
@@ -69,6 +69,8 @@ Proxy 只管理自身，不替 Codex、Git 或 Nido 设置代理。删除 Proxy 
 在 Codex 页面选择关联、代理、官方安装更新或解除关联。
 
 已有目录按 `CODEX_HOME` → `~/.codex` → 自定义路径发现，用户可跳过。Nido 不移动目录、不包装 Codex、不管理 daemon，也不解析认证、会话或数据库。解除关联保留程序和数据，只清理仍能证明归属的配置。
+
+数据目录已关联不代表程序已安装。命令从当前 `PATH`、显式 `CODEX_INSTALL_DIR`、默认 `~/.local/bin` 发现；可选择“重新发现 Codex 命令”，确认后刷新关联。缺少命令时提供官方安装，确认 standalone 入口后才提供官方更新；不覆盖 npm、Homebrew 或未知来源的程序。
 
 “配置 Codex 运行代理”只修改 Codex `.env` 中的受管块。由 Nido 发起的官方安装、更新和版本查询使用 Nido 的 Proxy 设置，不读取 Codex 运行代理，也不使用 GitHub 加速前缀。安装更新委托官方脚本；其他既有安装渠道不被静默转换。
 
