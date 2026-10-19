@@ -196,8 +196,13 @@ func parseSSNode(body string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := onlyNodeQuery(q, "plugin"); err != nil {
+	if err := onlyNodeQuery(q, "plugin", "type"); err != nil {
 		return nil, err
+	}
+	// Some exporters append a redundant TCP marker to SIP002 links. It does
+	// not select a Mihomo network or change SS UDP support or SIP003 plugins.
+	if transport, present := q["type"]; present && transport != "tcp" {
+		return nil, fmt.Errorf("SS 节点链接仅支持 type=tcp；插件传输请使用 plugin 参数")
 	}
 	// Standard Base64 userinfo may contain '/', so split at '@' before looking
 	// for the optional terminal slash. Legacy links encode the entire authority.

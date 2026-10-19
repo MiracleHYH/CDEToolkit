@@ -80,7 +80,13 @@ func TestInstallRechecksLocationsAfterDownload(t *testing.T) {
 				}
 				return []byte("mock script"), nil
 			}
-			if _, err := s.Install(c, nil); err == nil {
+			var err error
+			if target == "entry-link" {
+				_, err = s.Update(c, nil)
+			} else {
+				_, err = s.Install(c, nil)
+			}
+			if err == nil {
 				t.Fatal("accepted changed install target")
 			}
 			if calls != 1 {

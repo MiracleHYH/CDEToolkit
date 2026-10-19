@@ -41,6 +41,7 @@ type Status struct {
 	State           string `json:"state"`
 	Home            string `json:"home"`
 	Command         string `json:"command"`
+	Channel         string `json:"channel,omitempty"`
 	Version         string `json:"version"`
 	Detail          string `json:"detail"`
 	ProxyConfigured bool   `json:"proxy_configured"`
@@ -286,11 +287,32 @@ func (s Service) command() string {
 			return path
 		}
 	}
+	// CODEX_INSTALL_DIR is an explicit installer entry directory, not a data
+	// directory or a reason to search historical package versions.
+	if dir := envValue(s.environment(), "CODEX_INSTALL_DIR"); filepath.IsAbs(dir) && !invalidPath(dir) && !strings.Contains(dir, ":") {
+		if path := filepath.Join(dir, "codex"); executable(path) {
+			return path
+		}
+	}
 	path := filepath.Join(s.UserHome, ".local", "bin", "codex")
 	if executable(path) {
 		return path
 	}
 	return ""
+}
+
+// resolveCommand is a read-only view of the current entry and its source.
+// A saved entry is explicit user intent: never replace it with another PATH
+// candidate merely because the entry is missing or its link has changed.
+func (s Service) resolveCommand(c Config) Config {
+	if c.Command == "" {
+		c.Command = s.command()
+	}
+	c.Channel = ""
+	if c.Command != "" {
+		c.Channel = channel(c.Command, c.Home)
+	}
+	return c
 }
 
 func channel(path, home string) string {
@@ -318,11 +340,7 @@ func (s Service) Associate(home string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	command := s.command()
-	c := Config{Home: home, Command: command}
-	if command != "" {
-		c.Channel = channel(command, home)
-	}
+	c := s.resolveCommand(Config{Home: home})
 	if err := s.ValidateConfig(c); err != nil {
 		return Config{}, err
 	}
@@ -355,10 +373,8 @@ func (s Service) Status(c Config) Status {
 			st.ProxyConfigured = true
 		}
 	}
-	if c.Command == "" {
-		c.Command = s.command()
-		st.Command = c.Command
-	}
+	c = s.resolveCommand(c)
+	st.Command, st.Channel = c.Command, c.Channel
 	if err := s.ValidateConfig(c); err != nil {
 		st.Detail = strings.TrimSpace(st.Detail + " " + err.Error())
 		return st

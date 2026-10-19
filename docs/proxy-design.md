@@ -74,6 +74,8 @@ rules:
 
 节点链接解析器支持 SS SIP002/旧式 Base64（已支持的 obfs、v2ray-plugin）、VMess Base64 JSON、VLESS、Trojan、Hysteria2/Hy2、HTTP(S)、SOCKS5/SOCKS5H。它按协议拆分认证、地址及参数后逐字段解码一次，保留字面 `+`，例如 `%2D` → `-`、`%252D` → `%2D`；不先对整串解码。未知、重复、同义冲突或协议/传输不适用的字段明确拒绝，不静默忽略；不承诺所有协议扩展。解析不解析 DNS、不执行程序，生成后仍须核心检查。核心验证输出保留既有长度和时间限制；`output.log` 保留核心原文。
 
+SS 分享链接兼容导出器附加的顶层 `type=tcp`，将其归一化为原有 SS 配置，不新增 `network` 或关闭 UDP。SS2022 的百分号转义和冒号分隔密钥链保持原样；其他 `type` 值、空值及插件内部未知字段仍拒绝。该兼容字段不是 [SIP002](https://shadowsocks.org/doc/sip002.html) 的必需参数；密钥链遵循 [SIP023](https://shadowsocks.org/doc/sip023.html)。
+
 | 层次 | 已实现的结论 |
 | --- | --- |
 | 静态检查 | 最大 4 MiB、单一非空 mapping、无重复键、端口合法、端点名称及地址唯一、已支持入站只监听回环 |

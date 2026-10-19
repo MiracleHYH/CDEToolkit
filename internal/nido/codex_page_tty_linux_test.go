@@ -117,7 +117,7 @@ func codexPageTTY(t *testing.T, cmd *exec.Cmd, confirm, cancelChoice bool) strin
 		}
 	}
 	if confirm {
-		wait("已关联；目录未移动")
+		wait("已关联数据目录")
 	} else {
 		wait("操作已取消")
 	}

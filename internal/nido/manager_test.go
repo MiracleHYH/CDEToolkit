@@ -23,6 +23,7 @@ func fixture(t *testing.T) (*Manager, string) {
 	t.Setenv("HOME", home)
 	t.Setenv("NIDO_HOME", "")
 	t.Setenv("CODEX_HOME", "")
+	t.Setenv("CODEX_INSTALL_DIR", "")
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, ".gitconfig"))
 	t.Setenv("GIT_CONFIG_COUNT", "0")
 	t.Setenv("GIT_CONFIG_PARAMETERS", "")

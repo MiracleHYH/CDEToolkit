@@ -188,9 +188,13 @@ func TestComponentInteractiveCodexDirectoryAndProxyKeepExternalData(t *testing.T
 	m, codexHome, _ := proxyBindingFixture(t)
 	writeBindingListeners(t, m, bindingListeners)
 	before := proxyBootstrapSnapshot(t, "", codexHome)
+	rootBefore := proxyBootstrapSnapshot(t, "", m.Root)
 	code, _, stderr, _ := componentInteractiveCLI(t, m, "\n", "codex", "setup")
-	if code != 0 || strings.Contains(stderr, "是否继续") {
-		t.Fatal("unchanged linked HOME prompted a write", code, stderr)
+	if code == 0 || !strings.Contains(stderr, "操作已取消") {
+		t.Fatal("command refresh did not require explicit confirmation", code, stderr)
+	}
+	if !reflect.DeepEqual(rootBefore, proxyBootstrapSnapshot(t, "", m.Root)) || !reflect.DeepEqual(before, proxyBootstrapSnapshot(t, "", codexHome)) {
+		t.Fatal("cancelled command refresh changed configuration or external data")
 	}
 	code, _, stderr, r := componentInteractiveCLI(t, m, "3\nhttp://127.0.0.1:17999\ny\n", "codex", "proxy")
 	if code != 0 || len(r.commands) != 0 {

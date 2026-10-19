@@ -2,6 +2,7 @@ package nido
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -99,9 +100,6 @@ func (c *CLI) codex(m *Manager, o cliOptions, args []string) int {
 				}
 			}
 		}
-		if registeredDefault && c.interactive(o) {
-			return c.output(o, map[string]string{"detail": "保持 Codex 关联不变；更换关联目录请先解除关联，程序和数据保持原位。"})
-		}
 		if discovered && c.interactive(o) {
 			choice, err := c.choose("发现 "+source+"："+home, []string{"使用此目录，保持目录原位", "指定其他已有目录", "跳过，保持不变"}, 0)
 			if err != nil {
@@ -128,13 +126,25 @@ func (c *CLI) codex(m *Manager, o cliOptions, args []string) int {
 		// Repeating setup must retain our proxy ownership receipt.
 		if m.Config.Codex.Home == next.Home {
 			next.ProxyBlock = m.Config.Codex.ProxyBlock
-			if registeredDefault && m.Config.Codex.Command != "" {
-				next.Command = m.Config.Codex.Command
-				next.Channel = m.Config.Codex.Channel
+			if registeredDefault && next.Command == "" && m.Config.Codex.Command != "" {
+				// Keep an available custom entry if it is outside the current
+				// PATH. Explicit refresh may clear a missing saved entry, but
+				// never removes or replaces the external program itself.
+				if info, err := os.Stat(m.Config.Codex.Command); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0 {
+					next.Command = m.Config.Codex.Command
+					next.Channel = m.Config.Codex.Channel
+				}
 			}
 		}
 		if o.dry {
 			return c.output(o, map[string]string{"operation": "associate", "home": next.Home})
+		}
+		if c.interactive(o) {
+			if next.Command == "" {
+				fmt.Fprintln(c.Err, "未发现 Codex 命令；此次只关联数据目录，可随后选择官方安装。")
+			} else {
+				fmt.Fprintf(c.Err, "Codex 命令：%s；安装渠道：%s\n", next.Command, next.Channel)
+			}
 		}
 		if e = c.confirm(o, "关联外部 Codex 目录 "+next.Home); e != nil {
 			return c.fail(e)
@@ -143,7 +153,11 @@ func (c *CLI) codex(m *Manager, o cliOptions, args []string) int {
 		if e != nil {
 			return c.fail(e)
 		}
-		return c.output(o, map[string]string{"home": next.Home, "detail": "已关联；目录未移动。重新加载 env.sh 后直接使用 codex。"})
+		detail := "已关联；目录未移动。重新加载 env.sh 后直接使用 codex。"
+		if next.Command == "" {
+			detail = "已关联数据目录；尚未发现 Codex 命令，可选择官方安装到此目录。"
+		}
+		return c.output(o, map[string]string{"home": next.Home, "detail": detail})
 	case "install", "update":
 		cfg := m.Config.Codex
 		if action == "install" && cfg.Home == "" && o.home == "" && c.interactive(o) {

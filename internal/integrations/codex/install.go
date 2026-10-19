@@ -98,17 +98,27 @@ func (s Service) prepareInstall(c Config, update bool) (installTarget, error) {
 	if err := s.ValidateConfig(c); err != nil {
 		return fail(err)
 	}
-	if update && (c.Command == "" || c.Channel != "standalone") {
-		return fail(fmt.Errorf("仅支持通过官方脚本更新已关联的 standalone Codex；其他渠道请使用原安装方式"))
+	c = s.resolveCommand(c)
+	if err := s.ValidateConfig(c); err != nil {
+		return fail(err)
 	}
-	if c.Command == "" {
-		c.Command = s.command()
-		if c.Command != "" {
-			c.Channel = channel(c.Command, c.Home)
+	if update && c.Command == "" {
+		return fail(fmt.Errorf("已关联 CODEX_HOME，但未发现 Codex 程序入口；请使用官方安装在已关联目录安装或恢复入口，数据目录保持原位"))
+	}
+	if c.Command != "" {
+		if !executable(c.Command) {
+			return fail(fmt.Errorf("已关联的 Codex 程序入口不存在或不可执行；未改用其他命令，请重新确认入口"))
 		}
-	}
-	if c.Command != "" && c.Channel != "standalone" {
-		return fail(fmt.Errorf("现有 Codex 非已确认的 standalone 安装；请使用原安装渠道更新，未运行官方脚本"))
+		switch c.Channel {
+		case "standalone":
+		case "npm", "homebrew":
+			return fail(fmt.Errorf("已发现 %s 渠道的 Codex；请使用原安装渠道更新，未运行官方脚本", c.Channel))
+		default:
+			return fail(fmt.Errorf("已发现 Codex 程序，但安装渠道无法确认；请确认原安装方式，未运行官方脚本或覆盖入口"))
+		}
+		if !update {
+			return fail(fmt.Errorf("已发现 standalone Codex；请使用官方更新，不重复安装或覆盖现有入口"))
+		}
 	}
 	bin := filepath.Join(s.UserHome, ".local", "bin")
 	if c.Command != "" {
