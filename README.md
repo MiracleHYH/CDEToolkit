@@ -4,7 +4,7 @@
 
 Nido 为 Codex 提供目录关联、环境与代理配置，以及官方安装更新入口；Proxy（Mihomo）和可选 GDS 则由 Nido 安装和管理。自 v0.8.0 起提供 Conda / pip 镜像、缓存与环境目录配置。外部工具保留原有数据和命令入口。
 
-**本次发行版本为 v0.9.0，仅面向 Linux amd64。**本版增加交互式安装、组件配置菜单和可选 Shell 注册。发布、独立验签和公网隔离安装的实际进度见 [v0.9.0 发行记录](docs/nido-v0.9.0-release.md)；v0.8.2 的历史结果保留在其[发行记录](docs/nido-v0.8.2-release.md)。
+**[v0.9.0 已发布](https://github.com/MiracleHYH/CDEToolkit/releases/tag/v0.9.0)，仅面向 Linux amd64。**本版增加交互式安装、组件配置菜单和可选 Shell 注册。原生 CI、签名发布与独立验签已通过；README 直链和 gh-proxy.org 两条命令均通过公网 PTY 隔离验收，完成自定义目录安装、Bash 注册和重复安装。执行环境与验证边界见 [v0.9.0 发行记录](docs/nido-v0.9.0-release.md)。
 
 Nido 本身是一个 Go 可执行文件。其他平台的旧发行包保留其历史版本边界。
 
