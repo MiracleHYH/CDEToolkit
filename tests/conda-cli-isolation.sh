@@ -147,7 +147,7 @@ mirror_file() {
   run_nido conda status --json | sed -n 's/.*"mirror_file":"\([^"]*\)".*/\1/p'
 }
 file_mode() {
-  if [[ "$(/usr/bin/uname -s)" = Darwin ]]; then
+  if [[ "$(uname -s)" = Darwin ]]; then
     /usr/bin/stat -f %Lp "$1"
   else
     stat -c %a "$1"
@@ -190,7 +190,7 @@ cp "$NIDO_FIXTURE_CALLS" "$NIDO_TEST_ROOT/calls.after-all"
 run_nido conda setup all --yes > "$NIDO_TEST_ROOT/setup-all-repeat.log"
 cmp "$NIDO_FIXTURE_CALLS" "$NIDO_TEST_ROOT/calls.after-all"
 run_nido conda mirrors --json > "$NIDO_TEST_ROOT/mirrors-captured.json"
-/usr/bin/grep -Fq default "$NIDO_TEST_ROOT/mirrors-captured.json"
+grep -Fq default "$NIDO_TEST_ROOT/mirrors-captured.json"
 
 # Dry runs do not modify Nido, native files, or create data directories.
 cp -R "$root" "$NIDO_TEST_ROOT/dry.before"
@@ -209,7 +209,7 @@ cmp "$NIDO_TEST_ROOT/dry-pip.before" "$HOME/custom-pip.conf"
 
 # Before choosing a mirror, native Conda changes respect the explicit CONDARC.
 run_nido conda envs "$HOME/custom-envs" --yes > "$NIDO_TEST_ROOT/custom-envs.log"
-/usr/bin/grep -Fq "$HOME/custom-envs" "$HOME/custom.yaml"
+grep -Fq "$HOME/custom-envs" "$HOME/custom.yaml"
 cmp "$HOME/.condarc" "$NIDO_TEST_ROOT/user.before/.condarc"
 [[ "$(file_mode "$HOME/custom.yaml")" = 600 ]]
 
@@ -219,7 +219,7 @@ run_nido conda mirror pip default --yes > "$NIDO_TEST_ROOT/default-pip.log"
 default_overlay="$(mirror_file)"
 [[ "$(environment_value CONDARC)" = "$HOME/custom.yaml" ]]
 [[ "$default_overlay" = "$root"/conda/mirror-*.yaml && -f "$default_overlay" ]]
-/usr/bin/grep -Fq CONDA-BASELINE-SECRET "$default_overlay"
+grep -Fq CONDA-BASELINE-SECRET "$default_overlay"
 [[ "$(environment_value PIP_INDEX_URL)" = https://baseline:PIP-BASELINE-SECRET@original-install.invalid/simple ]]
 cp "$default_overlay" "$NIDO_TEST_ROOT/default-overlay.before"
 run_nido conda status --json > "$NIDO_TEST_ROOT/default-status.json"
@@ -231,7 +231,7 @@ run_nido conda mirror pip default --dry-run > "$NIDO_TEST_ROOT/default-pip-previ
 # Aliases choose official; built-in mirrors retain deterministic overlay paths.
 run_nido conda mirror conda conda --yes > "$NIDO_TEST_ROOT/alias-conda.log"
 official_overlay="$(mirror_file)"
-/usr/bin/grep -Fq https://repo.anaconda.com/pkgs/main "$official_overlay"
+grep -Fq https://repo.anaconda.com/pkgs/main "$official_overlay"
 run_nido conda mirror conda official --yes > "$NIDO_TEST_ROOT/official.log"
 [[ "$(mirror_file)" = "$official_overlay" && "$(environment_value CONDARC)" = "$HOME/custom.yaml" ]]
 run_nido conda mirror pip pypi --yes > "$NIDO_TEST_ROOT/alias-pypi.log"
@@ -261,28 +261,28 @@ done
 cp "$HOME/.condarc" "$NIDO_TEST_ROOT/targets-standard.before"
 cp "$HOME/custom.yaml" "$NIDO_TEST_ROOT/targets-custom.before"
 run_nido conda envs "$HOME/preview-synced-envs" --dry-run --json > "$NIDO_TEST_ROOT/native-files-preview.json"
-/usr/bin/grep -Fq "$HOME/.condarc" "$NIDO_TEST_ROOT/native-files-preview.json"
-/usr/bin/grep -Fq "$HOME/custom.yaml" "$NIDO_TEST_ROOT/native-files-preview.json"
+grep -Fq "$HOME/.condarc" "$NIDO_TEST_ROOT/native-files-preview.json"
+grep -Fq "$HOME/custom.yaml" "$NIDO_TEST_ROOT/native-files-preview.json"
 cmp "$NIDO_TEST_ROOT/targets-standard.before" "$HOME/.condarc"
 cmp "$NIDO_TEST_ROOT/targets-custom.before" "$HOME/custom.yaml"
 run_nido conda envs '~/native envs' --yes > "$NIDO_TEST_ROOT/native-envs.log"
 run_nido conda cache conda "$HOME/native pkgs" --yes > "$NIDO_TEST_ROOT/native-pkgs.log"
 run_nido conda cache pip "$HOME/native pip" --yes > "$NIDO_TEST_ROOT/native-pip.log"
-/usr/bin/grep -Fq "$HOME/native envs" "$HOME/.condarc"
-/usr/bin/grep -Fq "$HOME/native pkgs" "$HOME/.condarc"
-/usr/bin/grep -Fq "$HOME/native envs" "$HOME/custom.yaml"
-/usr/bin/grep -Fq "$HOME/native pkgs" "$HOME/custom.yaml"
-/usr/bin/grep -Fxq "cache-dir = $HOME/native pip" "$HOME/custom-pip.conf"
+grep -Fq "$HOME/native envs" "$HOME/.condarc"
+grep -Fq "$HOME/native pkgs" "$HOME/.condarc"
+grep -Fq "$HOME/native envs" "$HOME/custom.yaml"
+grep -Fq "$HOME/native pkgs" "$HOME/custom.yaml"
+grep -Fxq "cache-dir = $HOME/native pip" "$HOME/custom-pip.conf"
 cmp "$NIDO_TEST_ROOT/tuna.before" "$tuna_overlay"
 [[ "$(file_mode "$HOME/.condarc")" = 600 && "$(file_mode "$HOME/custom.yaml")" = 600 && "$(file_mode "$HOME/custom-pip.conf")" = 640 ]]
 for line in '# USER-CONDA-HEADER' '# USER-CONDA-FOOTER' 'channel_priority: strict' 'ssl_verify: true' 'https://private.invalid/team'; do
-  /usr/bin/grep -Fq "$line" "$HOME/.condarc"
+  grep -Fq "$line" "$HOME/.condarc"
 done
 sed '/^cache-dir[[:space:]]*=/d' "$HOME/custom-pip.conf" > "$NIDO_TEST_ROOT/pip-remaining.after"
 sed '/^cache-dir[[:space:]]*=/d' "$NIDO_TEST_ROOT/user.before/custom-pip.conf" > "$NIDO_TEST_ROOT/pip-remaining.before"
 cmp "$NIDO_TEST_ROOT/pip-remaining.before" "$NIDO_TEST_ROOT/pip-remaining.after"
 [[ ! -e "$HOME/native envs" && ! -e "$HOME/native pkgs" && ! -e "$HOME/native pip" ]]
-if /usr/bin/grep -Eq '^export (CONDA_ENVS_PATH|CONDA_PKGS_DIRS|PIP_CACHE_DIR)=' "$root/env.sh"; then
+if grep -Eq '^export (CONDA_ENVS_PATH|CONDA_PKGS_DIRS|PIP_CACHE_DIR)=' "$root/env.sh"; then
   printf 'native paths were exported as shell overrides\n' >&2
   exit 1
 fi
@@ -293,8 +293,8 @@ fi
   . "$root/env.sh"
   [[ "$CONDARC" = "$HOME/custom.yaml" ]]
   run_nido conda envs "$HOME/loaded-mirror-envs" --yes > "$NIDO_TEST_ROOT/loaded-native-envs.log"
-  /usr/bin/grep -Fq "$HOME/loaded-mirror-envs" "$HOME/.condarc"
-  /usr/bin/grep -Fq "$HOME/loaded-mirror-envs" "$HOME/custom.yaml"
+  grep -Fq "$HOME/loaded-mirror-envs" "$HOME/.condarc"
+  grep -Fq "$HOME/loaded-mirror-envs" "$HOME/custom.yaml"
 )
 [[ ! -e "$HOME/loaded-mirror-envs" ]]
 
@@ -381,15 +381,15 @@ run_nido conda validate --dry-run > "$NIDO_TEST_ROOT/validate-preview.log"
   run_nido conda validate --json > "$NIDO_TEST_ROOT/validate.json"
   export NIDO_FIXTURE_PIP_EXTRA=1
   expect_failure conda validate
-  /usr/bin/grep -Fq extra-index-url "$NIDO_TEST_ROOT/expected-failure.log"
+  grep -Fq extra-index-url "$NIDO_TEST_ROOT/expected-failure.log"
   unset NIDO_FIXTURE_PIP_EXTRA
   PIP_INDEX_URL=https://changed-by-user.invalid/simple
   run_nido conda reset --yes > "$NIDO_TEST_ROOT/final-reset.log"
   . "$root/env.sh"
   [[ "$PIP_INDEX_URL" = https://changed-by-user.invalid/simple ]]
 )
-/usr/bin/grep -Fq "$HOME/validate-envs" "$HOME/.condarc"
-/usr/bin/grep -Fxq "cache-dir = $HOME/validate-pip" "$HOME/custom-pip.conf"
+grep -Fq "$HOME/validate-envs" "$HOME/.condarc"
+grep -Fxq "cache-dir = $HOME/validate-pip" "$HOME/custom-pip.conf"
 [[ ! -e "$HOME/validate-envs" && ! -e "$HOME/validate-pkgs" && ! -e "$HOME/validate-pip" ]]
 
 # A separate root exercises automatic first-use capture without setup.
@@ -416,27 +416,27 @@ chmod 0600 "$CONDARC"
 run_nido init --yes > "$NIDO_TEST_ROOT/full-init.log"
 run_nido conda mirror conda tuna --yes > "$NIDO_TEST_ROOT/full-tuna.log"
 for native_file in "$HOME/.condarc" "$HOME/full-source.yaml"; do
-  /usr/bin/grep -Eq '^[[:space:]]*-[[:space:]]+conda-forge$' "$native_file"
-  if /usr/bin/grep -Fq https://original.invalid/cloud/conda-forge "$native_file"; then
+  grep -Eq '^[[:space:]]*-[[:space:]]+conda-forge$' "$native_file"
+  if grep -Fq https://original.invalid/cloud/conda-forge "$native_file"; then
     printf 'original full source survived native preset selection\n' >&2
     exit 1
   fi
 done
 run_nido conda mirror conda default --yes > "$NIDO_TEST_ROOT/full-default.log"
-/usr/bin/grep -Fq https://original.invalid/cloud/conda-forge "$HOME/.condarc"
-/usr/bin/grep -Fq https://original.invalid/cloud/conda-forge "$HOME/full-source.yaml"
+grep -Fq https://original.invalid/cloud/conda-forge "$HOME/.condarc"
+grep -Fq https://original.invalid/cloud/conda-forge "$HOME/full-source.yaml"
 run_nido conda mirror conda tuna --yes > "$NIDO_TEST_ROOT/full-tuna-repeat.log"
 cp "$HOME/full-source.yaml" "$NIDO_TEST_ROOT/full-before-reset"
 run_nido conda reset --yes > "$NIDO_TEST_ROOT/full-reset.log"
 cmp "$NIDO_TEST_ROOT/full-before-reset" "$HOME/full-source.yaml"
-/usr/bin/grep -Fq '# FULL-SOURCE-HEADER' "$HOME/full-source.yaml"
+grep -Fq '# FULL-SOURCE-HEADER' "$HOME/full-source.yaml"
 unset NIDO_FIXTURE_FULL_URL_CHANNELS
 
 # Native mutations are the only expected changes to pre-existing user files.
 for kept in .config/pip/pip.conf .pip/pip.conf .bashrc .zshrc; do
   cmp "$NIDO_TEST_ROOT/user.before/$kept" "$HOME/$kept"
 done
-if /usr/bin/grep -R -E '(CONDA|PIP)-BASELINE-SECRET' "$NIDO_TEST_ROOT/public-output" >/dev/null; then
+if grep -R -E '(CONDA|PIP)-BASELINE-SECRET' "$NIDO_TEST_ROOT/public-output" >/dev/null; then
   printf 'default mirror credentials leaked into ordinary CLI output\n' >&2
   exit 1
 fi

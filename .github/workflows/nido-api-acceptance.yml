@@ -8,6 +8,16 @@ on:
         required: true
         type: string
         default: '0.10.1'
+      public_network:
+        description: Also test the public README installers and a real previous-version upgrade
+        required: true
+        type: boolean
+        default: false
+      previous_version:
+        description: Previous signed stable version for the optional public upgrade
+        required: true
+        type: string
+        default: '0.10.0'
 
 permissions:
   contents: read
@@ -148,6 +158,91 @@ jobs:
         run: |
           set -euo pipefail
           NIDO_API_RELEASE_IMAGE="$NIDO_API_IMAGE" bash tests/nido-api-release-isolation.sh
+      - name: Check out the acceptance harness from this workflow commit
+        if: inputs.public_network
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          path: acceptance-source
+          persist-credentials: false
+      - name: Accept both parameter-free README commands using real public HTTPS
+        if: inputs.public_network
+        working-directory: tagged-source
+        env:
+          RELEASE_VERSION: ${{ steps.request.outputs.version }}
+          RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/nido-api-acceptance"
+          mkdir "$evidence/public-network"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1 go build -trimpath -buildvcs=false -o "$evidence/fixture/public-install" ./tests/fixtures/nido-public-install
+          NIDO_PUBLIC_INSTALL_INPUT="$evidence/assets" \
+          NIDO_PUBLIC_INSTALL_FIXTURE="$evidence/fixture/public-install" \
+          NIDO_PUBLIC_INSTALL_OUTPUT="$evidence/public-network/install" \
+          NIDO_PUBLIC_INSTALL_VERSION="$RELEASE_VERSION" \
+          NIDO_PUBLIC_INSTALL_COMMIT="$RELEASE_COMMIT" \
+          NIDO_PUBLIC_INSTALL_IMAGE="$NIDO_API_IMAGE" \
+          bash "$GITHUB_WORKSPACE/acceptance-source/tests/nido-public-install-isolation.sh"
+      - name: Verify the previous public release for an actual upgrade
+        if: inputs.public_network
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS_VERSION: ${{ inputs.previous_version }}
+          RELEASE_VERSION: ${{ steps.request.outputs.version }}
+        run: |
+          set -euo pipefail
+          [[ $PREVIOUS_VERSION =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ && $PREVIOUS_VERSION != "$RELEASE_VERSION" ]]
+          evidence="$RUNNER_TEMP/nido-api-acceptance/public-network"
+          repository=MiracleHYH/CDEToolkit
+          tag="v$PREVIOUS_VERSION"
+          gh api "repos/$repository/releases/tags/$tag" > "$evidence/previous-release.json"
+          gh api "repos/$repository/commits/$tag" > "$evidence/previous-commit.json"
+          commit=$(jq -er '.sha | select(test("^[0-9a-f]{40}$"))' "$evidence/previous-commit.json")
+          jq -e --arg tag "$tag" --arg repository "$repository" '
+            .tag_name == $tag and .draft == false and .prerelease == false and
+            ([.assets[] | select(.name == "nido-linux-amd64.tar.gz" or .name == "nido-linux-amd64.tar.gz.sha256" or .name == "nido-linux-amd64.tar.gz.sigstore.json" or .name == "nido-linux-amd64.tar.gz.sha256.sigstore.json")] as $a |
+              ($a | length) == 4 and ([$a[].name] | unique | length) == 4 and
+              all($a[]; .state == "uploaded" and (.id | type == "number") and .id > 0 and .id == (.id | floor) and
+                (.size | type == "number") and .size > 0 and .size == (.size | floor) and
+                (.digest | test("^sha256:[0-9a-f]{64}$")) and
+                .browser_download_url == ("https://github.com/" + $repository + "/releases/download/" + $tag + "/" + .name) and
+                (if .name == "nido-linux-amd64.tar.gz" then .size <= 134217728
+                 elif .name == "nido-linux-amd64.tar.gz.sha256" then .size <= 256
+                 else .size <= 8388608 end)))
+          ' "$evidence/previous-release.json"
+          mkdir "$evidence/previous-assets"
+          while IFS=$'\t' read -r name id size digest; do
+            gh api -H 'Accept: application/octet-stream' "repos/$repository/releases/assets/$id" > "$evidence/previous-assets/$name"
+            [[ $(wc -c < "$evidence/previous-assets/$name") = "$size" ]]
+            actual=$(sha256sum "$evidence/previous-assets/$name")
+            [[ "sha256:${actual%% *}" = "$digest" ]]
+          done < <(jq -r '.assets[] | select(.name == "nido-linux-amd64.tar.gz" or .name == "nido-linux-amd64.tar.gz.sha256" or .name == "nido-linux-amd64.tar.gz.sigstore.json" or .name == "nido-linux-amd64.tar.gz.sha256.sigstore.json") | [.name,.id,.size,.digest] | @tsv' "$evidence/previous-release.json")
+          identity="https://github.com/$repository/.github/workflows/release.yml@refs/tags/$tag"
+          for name in nido-linux-amd64.tar.gz nido-linux-amd64.tar.gz.sha256; do
+            cosign verify-blob "$evidence/previous-assets/$name" --bundle "$evidence/previous-assets/$name.sigstore.json" \
+              --certificate-identity "$identity" --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-github-workflow-repository "$repository" --certificate-github-workflow-sha "$commit" \
+              --certificate-github-workflow-ref "refs/tags/$tag" --certificate-github-workflow-trigger push \
+              --certificate-github-workflow-name release > "$evidence/cosign-previous-$name.log" 2>&1
+          done
+      - name: Accept the previous public binary updating to this signed release
+        if: inputs.public_network
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.request.outputs.version }}
+          PREVIOUS_VERSION: ${{ inputs.previous_version }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/nido-api-acceptance"
+          NIDO_ACCEPT_INPUT="$evidence/assets" \
+          NIDO_ACCEPT_OLD_INPUT="$evidence/public-network/previous-assets" \
+          NIDO_ACCEPT_OUTPUT="$evidence/public-network/upgrade" \
+          NIDO_ACCEPT_VERSION="$RELEASE_VERSION" \
+          NIDO_ACCEPT_OLD_VERSION="$PREVIOUS_VERSION" \
+          NIDO_ACCEPT_MODE=docker NIDO_ACCEPT_PLATFORM=linux/amd64 \
+          NIDO_ACCEPT_DOCKER_IMAGE="$NIDO_API_IMAGE" \
+          NIDO_ACCEPT_METADATA_AUTH=gh \
+          bash "$GITHUB_WORKSPACE/acceptance-source/tests/nido-public-release-isolation.sh"
       - name: Upload public API contract evidence even after failure
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
