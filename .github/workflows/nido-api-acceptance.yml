@@ -7,7 +7,7 @@ on:
         description: Exact public Nido stable version, without v
         required: true
         type: string
-        default: '0.8.2'
+        default: '0.9.0'
 
 permissions:
   contents: read
