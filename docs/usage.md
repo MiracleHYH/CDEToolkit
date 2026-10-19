@@ -8,7 +8,7 @@ GDS 保持可选。Nido v0.5.0 起支持独立 Linux amd64 组件的官方下载
 
 本文的 **Nido 内部 GitHub API listener 绑定及未绑定时禁用 API**已随 v0.8.2 发布，仅面向 Linux amd64，v0.8.1 尚不具备；其他已发行功能沿用各自版本说明。源码审计、原生 CI、发布工作流、独立验签、正式包 API 隔离，以及公网直链和 gh-proxy.org 加速安装自更新验收均已通过；首次加速配额失败和复验记录见 [v0.8.2 记录](nido-v0.8.2-release.md)。
 
-v0.9.0 增加交互安装、组件配置菜单和 `nido shell setup`。显式参数与既有数据保护保持有效，完整约定见[交互设计](interactive-design.md)；发布与公网隔离安装记录见 [v0.9.0 发行记录](nido-v0.9.0-release.md)。源码新增安装器下载方式预设菜单，尚未发布；v0.9.0 对应问题仍接受 `direct`、HTTPS 前缀或 `auto` 的文字输入。
+v0.9.0 增加交互安装、组件配置菜单和 `nido shell setup`。显式参数与既有数据保护保持有效，完整约定见[交互设计](interactive-design.md)。v0.9.1 发布准备中，增加安装器下载方式编号菜单；功能提交已通过原生 CI，发布与公开安装验证状态见 [v0.9.1 发行记录](nido-v0.9.1-release.md)。[v0.9.0 历史记录](nido-v0.9.0-release.md)单独保留。
 
 ## 初始化与 Shell 环境
 
@@ -30,7 +30,7 @@ GitHub 直连困难时，通过自己信任的第三方入口获取脚本：
 curl -fsSL https://gh-proxy.org/https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh
 ```
 
-外层 `curl` 只获取脚本；脚本运行后再交互选择包下载方式，无需额外传参，也不需要推断外层 URL。v0.9.0 可在下载问题中输入 `https://gh-proxy.org` 或自己的 HTTPS 前缀；源码新增直连、内置 `gh-proxy.org` / `ghfast.top`、自定义前缀和 `auto` 预设菜单，尚未发布。无参数加速入口已完成[公网交互复验](interactive-design.md#验证)。请只使用自己信任的入口，加速脚本具有直接执行第三方内容的信任边界。
+外层 `curl` 只获取脚本；脚本运行后再交互选择包下载方式，无需额外传参，也不需要推断外层 URL。v0.9.1 菜单依次为 `1` 直连、`2` `gh-proxy.org`、`3` `ghfast.top`、`4` 自定义 HTTPS 前缀、`5` `auto`；选择自定义后再输入前缀。发布完成前，当前稳定版 v0.9.0 仍接受 `direct`、HTTPS 前缀或 `auto` 的文字输入。请只使用自己信任的入口，加速脚本具有直接执行第三方内容的信任边界。
 
 安装后，执行安装输出中指向**实际软件根**的 `. '.../env.sh'` 命令，再检查版本：
 

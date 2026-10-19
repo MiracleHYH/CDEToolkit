@@ -4,7 +4,7 @@ Nido: Lightweight Development Environment Manager。命令为 `nido`，主程序
 
 从 v0.3.0 起发布 Nido Go 版。历史 cdet Release 保留原状，新版使用下述包名和安装行为，不自动迁移旧版安装。
 
-v0.9.0 增加交互安装、组件配置菜单和可选 Shell 注册，**本版发行和执行验收仅面向 Linux amd64**。发行、独立验签与公网安装链记录见 [v0.9.0 发行记录](nido-v0.9.0-release.md)，补充的无参数加速入口复验见[交互验证](interactive-design.md#验证)。源码新增的下载方式预设菜单尚未发布。v0.8.2 的内部 API 绑定、原生 CI、签名与公网安装自更新验收保留在其[历史记录](nido-v0.8.2-release.md)。
+v0.9.1 发布准备中，在 v0.9.0 的交互安装、组件配置和可选 Shell 注册上增加下载方式编号菜单，**本版发行和执行验收仅面向 Linux amd64**。功能提交已通过原生 CI，签名发布、独立验签与公开 latest 安装验证状态见 [v0.9.1 发行记录](nido-v0.9.1-release.md)。[v0.9.0 记录](nido-v0.9.0-release.md)与 [v0.8.2 记录](nido-v0.8.2-release.md)分别保留各自已执行结果。
 
 v0.8.0 增加 Conda / pip 外部配置集成，当时随四平台 Nido 包提供，不增加 Conda 安装包或独立组件资产；v0.8.1 纳入完整镜像同步及按项查询修复。其[发行记录](conda-v0.8.1-release.md)与 [v0.8.0 历史记录](conda-release.md)保留，不把历史资产范围套用到当前发行。
 
@@ -39,7 +39,7 @@ Go 检查直接使用 runner 普通权限。Codex 外部辅助集成不扫描全
 
 v0.9.0 在有终端时提供目录、下载方式、可选 Bash/Zsh 注册和最终默认取消的确认。回答从 `/dev/tty` 读取，脚本标准输入仍留给 `curl | sh`；显式参数跳过对应问题，`--yes` 或无终端继续参数模式，`--dry-run` 不进入交互。确认前不创建软件目录或下载发行包。
 
-v0.9.0 的下载问题接受 `direct`、HTTPS 前缀或 `auto` 的文字输入。源码新增编号预设菜单，提供直连、`gh-proxy.org`、`ghfast.top`、自定义 HTTPS 前缀和 `auto`，尚未发布；自定义前缀仍按相同规则校验，不从外层 curl 地址自动推断。
+v0.9.1 的编号菜单提供直连、`gh-proxy.org`、`ghfast.top`、自定义 HTTPS 前缀和 `auto`；自定义前缀仍按相同规则校验，不从外层 curl 地址自动推断。v0.9.0 使用文字输入，其历史验收不代表新版菜单已经通过公开验证。
 
 下载器通过 HTTPS 上的 HTTP/1.1 获取当前平台 Nido 包与摘要。`--github-proxy` 或 `NIDO_GITHUB_PROXY` 支持 `direct`、`auto` 和无认证信息的 HTTPS 前缀；没有显式配置时默认 `auto`。安装脚本的 `auto` 对官方地址的连接/总超时为 4/180 秒，之后依次尝试 `gh-proxy.org` 和 `ghfast.top`，每项为 5/90 秒，不额外 retry；直连或明确前缀为 10/180 秒。可达的慢速官方包不会被原来的 15 秒总期限提前中断。curl 禁止 URL globbing，前缀中的括号和花括号保持字面含义。只重写 GitHub 包与摘要地址，不注入通用网络代理，也不影响 Codex 官方脚本。
 
@@ -108,7 +108,7 @@ Linux amd64 原生冒烟只运行 `version` 与 `status --json`；验证 Codex�
 
 发布测试只调用假的 cosign 与 gh，覆盖签名或验签失败后停止上传，以及发布白名单。测试本身不产生标签、发布、推送或真实服务操作。
 
-`tests/nido-public-release-isolation.sh` 显式验证普通 Nido 的公开发行包。必须先独立核对新旧包的 API 元数据、摘要、平台及对应标签的 Sigstore 身份，再把冻结目录交给入口；公网下载响应在执行前与已验签输入逐字比较。安装器和客户端自身仍只做各自的摘要验证。通过 `NIDO_ACCEPT_VERSION`、`NIDO_ACCEPT_OLD_VERSION` 绑定新旧版本，不能把当前源码伪装成旧版来代替真实自更新。该入口使用无终端参数模式，不能单独证明交互目录选择或 Shell 注册。公开脚本还需另在真实 PTY 中分别执行无参数直链和加速命令，在引导中选择包下载方式、自定义目录和 Shell 注册，再核对新 Shell 中的命令路径及保护哨兵。v0.9.0 首次验收见[发行记录](nido-v0.9.0-release.md)，补充的无参数加速入口复验见[交互验证](interactive-design.md#验证)。编号菜单仍属于未发布源码，由离线 PTY 用例验证。
+`tests/nido-public-release-isolation.sh` 显式验证普通 Nido 的公开发行包。必须先独立核对新旧包的 API 元数据、摘要、平台及对应标签的 Sigstore 身份，再把冻结目录交给入口；公网下载响应在执行前与已验签输入逐字比较。安装器和客户端自身仍只做各自的摘要验证。通过 `NIDO_ACCEPT_VERSION`、`NIDO_ACCEPT_OLD_VERSION` 绑定新旧版本，不能把当前源码伪装成旧版来代替真实自更新。该入口使用无终端参数模式，不能单独证明交互目录选择或 Shell 注册。公开脚本还需另在真实 PTY 中分别执行 README 无额外参数的直链和加速命令，在引导中选择包下载方式、自定义目录和 Shell 注册，再核对新 Shell 中的命令路径及保护哨兵。本轮编号菜单的发行验证见 [v0.9.1 发行记录](nido-v0.9.1-release.md)；v0.9.0 的文字输入验收继续保留在其[历史记录](nido-v0.9.0-release.md)。
 
 v0.8.2 验收需分别证明：旧 v0.8.1 真实客户端升级、升级后未绑定明确禁用、具名 listener 绑定后的官方 API/文件资产分路由，以及 off 恢复禁用。新版 CLI 使用 `current`，旧发行 CLI 使用显式 `legacy`，不按失败结果自动回退。先前 141 项源码隔离通过不替代公开资产验签和真实下载结果。只在私有临时 HOME/软件根和既有 Linux amd64 隔离环境执行，不部署或修改目标机配置。
 

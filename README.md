@@ -4,7 +4,7 @@
 
 Nido 为 Codex 提供目录关联、环境与代理配置，以及官方安装更新入口；Proxy（Mihomo）和可选 GDS 则由 Nido 安装和管理。自 v0.8.0 起提供 Conda / pip 镜像、缓存与环境目录配置。外部工具保留原有数据和命令入口。
 
-**[v0.9.0 已发布](https://github.com/MiracleHYH/CDEToolkit/releases/tag/v0.9.0)，仅面向 Linux amd64。**本版增加交互式安装、组件配置菜单和可选 Shell 注册。原生 CI、签名发布与独立验签已通过，完整范围见 [v0.9.0 发行记录](docs/nido-v0.9.0-release.md)。下述无参数加速入口也已完成[公网交互复验](docs/interactive-design.md#验证)。
+**v0.9.1 发布准备中，仅面向 Linux amd64。**本版将 GitHub 下载方式改为编号菜单；交互式安装、组件配置和可选 Shell 注册沿用 v0.9.0。功能提交已通过[原生 CI](https://github.com/MiracleHYH/CDEToolkit/actions/runs/39196015980)，发布和公开安装验证进度见 [v0.9.1 发行记录](docs/nido-v0.9.1-release.md)。此前版本的结果保留在 [v0.9.0 发行记录](docs/nido-v0.9.0-release.md)。
 
 Nido 本身是一个 Go 可执行文件。其他平台的旧发行包保留其历史版本边界。
 
@@ -14,7 +14,7 @@ Nido 本身是一个 Go 可执行文件。其他平台的旧发行包保留其�
 
 ## 快速开始
 
-以下入口安装 GitHub 上的最新稳定版。v0.9.0 在终端中询问安装目录、下载方式和可选 Shell 注册，确认后安装；无需预先记住目录参数。
+以下入口安装 GitHub 上的最新稳定版。在终端中选择安装目录、下载方式和可选 Shell 注册，确认后安装；无需额外参数。
 
 需要 Linux amd64、curl、tar 和 SHA-256 工具（通常为 `sha256sum`），无需 Go。安装器只安装 Nido；组件各自配置，不自动启动服务。
 
@@ -32,7 +32,7 @@ curl -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/ins
 curl -fsSL https://gh-proxy.org/https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh
 ```
 
-外层 `curl` 只负责获取安装脚本，后续发行包的下载方式由交互选择，无需额外参数或推断外层 URL。当前 v0.9.0 可直接输入 `direct`、`https://gh-proxy.org`、其他可信 HTTPS 前缀或 `auto`；源码中的新版引导将提供直连、内置 `gh-proxy.org` / `ghfast.top`、自定义前缀和自动回退菜单，尚未发布。
+外层 `curl` 只负责获取安装脚本，后续发行包的下载方式由交互选择，无需额外参数或推断外层 URL。v0.9.1 提供直连、内置 `gh-proxy.org` / `ghfast.top`、自定义 HTTPS 前缀和自动回退菜单；发布完成前，当前稳定版 v0.9.0 仍使用 `direct`、HTTPS 前缀或 `auto` 的文字输入。
 
 加速方式会执行第三方转发的脚本，仅在信任该服务时使用。安装器核对包的 SHA-256，当前客户端不会验证 Sigstore 签名；第三方也能同时替换脚本、包和摘要，因此摘要不能独立证明来源。
 
