@@ -28,10 +28,14 @@ import (
 // Both inputs must be independently verified official native cores. Neither
 // core is downloaded by this test. Linux entry points expose the second input
 // only on explicit opt-in, in the same private namespace as the existing E2E.
+// The function and NIDO_TEST_MIHOMO_UPDATE name remain entry-point compatible;
+// this tests cross-version remove/first-install compatibility, not /upgrade.
+// Configs are injected through Service.Configure; the interactive config flow
+// and external-tool proxy configuration are outside this fixture's coverage.
 func TestProxyRealMihomoCrossVersion(t *testing.T) {
 	next := os.Getenv("NIDO_TEST_MIHOMO_UPDATE")
 	if next == "" {
-		t.Skip("设置 NIDO_TEST_MIHOMO_UPDATE 为已核验的较新官方核心，才执行跨版本隔离测试")
+		t.Skip("设置 NIDO_TEST_MIHOMO_UPDATE 为已核验的较新官方核心，才执行跨版本卸载重装兼容性测试；不验证原生更新")
 	}
 	previous := os.Getenv("NIDO_TEST_MIHOMO")
 	if !filepath.IsAbs(previous) || !filepath.IsAbs(next) {
@@ -121,7 +125,7 @@ func TestProxyRealMihomoCrossVersion(t *testing.T) {
 	}
 
 	// The same configuration is validated and run on both versions. Only its
-	// provider source changes before the upgrade, using the old HTTP cache.
+	// provider source changes before removal/reinstallation, using the old cache.
 	disabled.Store(true)
 	downloadsBefore := downloads.Load()
 	providerNode := realYAMLField(realYAMLField(root, "proxy-providers"), "subscription")
@@ -143,20 +147,27 @@ func TestProxyRealMihomoCrossVersion(t *testing.T) {
 	if err := os.WriteFile(unknown, unknownBytes, 0600); err != nil {
 		t.Fatal(err)
 	}
-	retained := realProxyFiles(t, filepath.Join(cli.root, "proxy"))
-	cli.must("proxy", "update", "--artifact", next, "--sha256", hex.EncodeToString(newHash[:]), "--yes", "--json")
+	retained := cli.rejectArtifactUpdate(next, hex.EncodeToString(newHash[:]))
+	cli.must("proxy", "remove", "--yes", "--json")
+	if _, err := os.Lstat(filepath.Join(cli.root, "proxy", "mihomo")); !os.IsNotExist(err) {
+		t.Fatalf("重装前 remove 未移除旧程序: %v", err)
+	}
+	realAssertRetainedBytes(t, retained)
+	realAssertRetainedBytes(t, cli.sentinels)
+	cli.must("proxy", "install", "--artifact", next, "--sha256", hex.EncodeToString(newHash[:]), "--yes", "--json")
 	installed, err := readFile(filepath.Join(cli.root, "proxy", "mihomo"), 256<<20)
 	if err != nil || sha256.Sum256(installed) != newHash {
-		t.Fatalf("跨版本 update 未安装目标程序字节: %v", err)
+		t.Fatalf("跨版本卸载后首次 install 未安装目标程序字节: %v", err)
 	}
 	newVersion := realInstalledMihomoVersion(t, cli)
 	if !realMihomoVersionBefore(oldVersion, newVersion) {
 		t.Fatalf("跨版本测试要求不同且升序的稳定版本: %s -> %s", oldVersion, newVersion)
 	}
 	realAssertRetainedBytes(t, retained)
+	realAssertRetainedBytes(t, cli.sentinels)
 	var stopped proxy.Status
 	if err := json.Unmarshal(cli.must("proxy", "status", "--json"), &stopped); err != nil || stopped.Runtime.State != "stopped" || stopped.Runtime.Listeners || stopped.Runtime.ConfigChanged || len(stopped.Problems) != 0 {
-		t.Fatalf("跨版本 update 未保持停止及原配置状态: %+v %v", stopped, err)
+		t.Fatalf("跨版本卸载重装未保持停止及原配置状态: %+v %v", stopped, err)
 	}
 	realAssertGone(t, oldBirth)
 	realAssertClosed(t, endpoint)
@@ -193,7 +204,7 @@ func TestProxyRealMihomoCrossVersion(t *testing.T) {
 	}
 	realAssertRetainedBytes(t, retained)
 	realAssertRetainedBytes(t, cli.sentinels)
-	t.Logf("真实跨版本停机更新: %s -> %s；旧出生=%+v，新出生=%+v；provider HTTP=%d，origin=%d，CONNECT=%d；配置、旧 provider 缓存与既有数据字节保留", oldVersion, newVersion, oldBirth, newBirth, downloads.Load(), origins.Load(), tunnels.Load())
+	t.Logf("真实跨版本卸载后首次重装兼容性: %s -> %s；旧出生=%+v，新出生=%+v；provider HTTP=%d，origin=%d，CONNECT=%d；配置、旧 provider 缓存与既有数据字节保留；未验证原生更新", oldVersion, newVersion, oldBirth, newBirth, downloads.Load(), origins.Load(), tunnels.Load())
 }
 
 var realStableMihomoVersion = regexp.MustCompile(`(?m)^Mihomo Meta (v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))(?:\s|$)`)
@@ -230,7 +241,7 @@ func realAssertRetainedBytes(t *testing.T, files map[string][]byte) {
 	for path, want := range files {
 		got, err := os.ReadFile(path)
 		if err != nil || !bytes.Equal(got, want) {
-			t.Fatalf("跨版本操作改变既有文件 %s: %v", path, err)
+			t.Fatalf("操作改变既有文件 %s: %v", path, err)
 		}
 	}
 }
@@ -243,10 +254,10 @@ func TestRealCrossVersionIdentityRejectsFalseUpgrade(t *testing.T) {
 	}
 	for _, pair := range [][2]string{{"v1.19.32", "v1.19.32"}, {"v1.19.32", "v1.19.31"}, {"v1.20.0", "v1.9.99"}} {
 		if realMihomoVersionBefore(pair[0], pair[1]) {
-			t.Fatalf("相同版本或降级被当成升级: %v", pair)
+			t.Fatalf("相同版本或降序版本被当成升序重装候选: %v", pair)
 		}
 	}
 	if !realMihomoVersionBefore("v1.19.31", "v1.19.32") || !realMihomoVersionBefore("v1.9.99", "v1.20.0") {
-		t.Fatal("有效跨版本升级被拒绝")
+		t.Fatal("有效升序版本重装候选被拒绝")
 	}
 }

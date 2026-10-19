@@ -15,6 +15,7 @@ import (
 
 	"github.com/MiracleHYH/CDEToolkit/internal/components/proxy"
 	"github.com/MiracleHYH/CDEToolkit/internal/integrations/codex"
+	"github.com/MiracleHYH/CDEToolkit/internal/terminalui"
 )
 
 type cliProxyRunner struct {
@@ -23,10 +24,14 @@ type cliProxyRunner struct {
 	starts, stops   int
 	ready           bool
 	validationError bool
+	onRun           func(proxy.Command)
 }
 
 func (r *cliProxyRunner) Run(c proxy.Command) ([]byte, error) {
 	r.commands = append(r.commands, c)
+	if r.onRun != nil {
+		r.onRun(c)
+	}
 	if len(c.Args) == 1 && c.Args[0] == "-v" {
 		return []byte("Mihomo Meta v1.2.3 darwin arm64"), nil
 	}
@@ -59,6 +64,9 @@ func (r *cliProxyRunner) Stop(p proxy.Process) error {
 	return nil
 }
 func (r *cliProxyRunner) OwnsEndpoint(proxy.Process, string) (bool, error) { return r.ready, nil }
+func (r *cliProxyRunner) RunningImageMatches(p proxy.Process, path string) (bool, error) {
+	return p == r.process && p.Executable == path && !p.ExecutableDeleted, nil
+}
 
 func proxyCLI(t *testing.T, m *Manager, r *cliProxyRunner, in string, args ...string) (int, string, string) {
 	t.Helper()
@@ -66,6 +74,15 @@ func proxyCLI(t *testing.T, m *Manager, r *cliProxyRunner, in string, args ...st
 	c := CLI{In: strings.NewReader(in), Out: &out, Err: &stderr, ProxyRunner: r}
 	code := c.Run(append([]string{"--root", m.Root}, args...))
 	return code, out.String(), stderr.String()
+}
+
+// Advanced native YAML is test setup, never a removed CLI import path.
+func configureProxyFixture(t *testing.T, m *Manager, r *cliProxyRunner, source string) {
+	t.Helper()
+	m.Proxy.Runner = r
+	if err := m.Proxy.Configure(source); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // These executable headers are only read by the native format checker. The
@@ -117,13 +134,15 @@ func TestProxyCLIIsolatedLifecycle(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"proxy", "install", "--artifact", artifact, "--yes", "--json"},
-		{"proxy", "configure", "--file", config, "--yes", "--json"},
-		{"proxy", "validate", "--json"},
 	} {
 		code, out, stderr := proxyCLI(t, m, r, "", args...)
 		if code != 0 || !json.Valid([]byte(out)) {
 			t.Fatalf("%v: code=%d out=%s err=%s", args, code, out, stderr)
 		}
+	}
+	configureProxyFixture(t, m, r, config)
+	if code, _, stderr := proxyCLI(t, m, r, "", "proxy", "validate", "--json"); code != 0 {
+		t.Fatal(stderr)
 	}
 	if r.starts != 0 {
 		t.Fatal("install/configure/validate started the component")
@@ -152,7 +171,10 @@ func TestProxyCLIIsolatedLifecycle(t *testing.T) {
 	if code, _, stderr := proxyCLI(t, m, r, "", "proxy", "stop", "--yes"); code != 0 {
 		t.Fatal(stderr)
 	}
-	for _, args := range [][]string{{"proxy", "update", "--artifact", artifact, "--yes"}, {"proxy", "remove", "--yes"}} {
+	if code, _, _ := proxyCLI(t, m, r, "", "proxy", "update", "--artifact", artifact, "--yes"); code == 0 {
+		t.Fatal("stopped component accepted obsolete local update")
+	}
+	for _, args := range [][]string{{"proxy", "remove", "--yes"}} {
 		if code, _, stderr := proxyCLI(t, m, r, "", args...); code != 0 {
 			t.Fatal(stderr)
 		}
@@ -202,7 +224,7 @@ func TestProxyCLIValidationFailureAndPrivateSummary(t *testing.T) {
 		t.Fatal(stderr)
 	}
 	secret := "https://subscription.invalid/provider?token=never-print"
-	code, out, stderr := quickStartCLI(t, m, r, secret+"\n.*\n\nn\nn\ny\n", "proxy", "configure")
+	code, out, stderr := quickStartCLI(t, m, r, secret+"\n.*\n\n1\n1\n\ny\n", "proxy", "configure")
 	if code != 0 || !strings.Contains(out, "操作完成") || strings.Contains(stderr+out, "never-print") || !strings.Contains(stderr, "Proxy 配置摘要") {
 		t.Fatalf("configure %d %s %s", code, out, stderr)
 	}
@@ -278,14 +300,14 @@ func TestProxyCLIConfigureQueryWhileRunningAndPrivateSourcePolicy(t *testing.T) 
 	if err := os.WriteFile(source, want, 0600); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{
-		{"proxy", "install", "--artifact", proxyCLIArtifact(t), "--yes"},
-		{"proxy", "configure", "--file", source, "--yes"},
-		{"proxy", "start", "--yes"},
-	} {
+	for _, args := range [][]string{{"proxy", "install", "--artifact", proxyCLIArtifact(t), "--yes"}} {
 		if code, _, stderr := proxyCLI(t, m, runner, "", args...); code != 0 {
 			t.Fatal(stderr)
 		}
+	}
+	configureProxyFixture(t, m, runner, source)
+	if code, _, stderr := proxyCLI(t, m, runner, "", "proxy", "start", "--yes"); code != 0 {
+		t.Fatal(stderr)
 	}
 	commands := len(runner.commands)
 	for _, extra := range [][]string{{"--json"}, {"--dry-run", "--json"}} {
@@ -398,12 +420,12 @@ func TestCodexBuiltinRejectsEndpointChangeDuringConfirmation(t *testing.T) {
 			}
 			runner := &cliProxyRunner{}
 			var out, stderr bytes.Buffer
-			reader := &beforeRead{reader: strings.NewReader("any-name\ny\n"), before: func() {
+			reader := &beforeRead{reader: strings.NewReader("1\ny\n"), before: func() {
 				if err := os.WriteFile(path, []byte(replacement), 0600); err != nil {
 					t.Fatal(err)
 				}
 			}}
-			cli := CLI{In: reader, Out: &out, Err: &stderr, ProxyRunner: runner}
+			cli := CLI{UI: terminalui.NewScriptDriver(reader, &stderr), Out: &out, Err: &stderr, ProxyRunner: runner}
 			code := cli.Run([]string{"--root", m.Root, "codex", "proxy", "builtin"})
 			if code == 0 || !strings.Contains(stderr.String(), "发生变化") {
 				t.Fatalf("stale binding=%d %s %s", code, out.String(), stderr.String())
@@ -434,14 +456,14 @@ func TestProxyCLIStopPreviewAllowsChangedDiskProgram(t *testing.T) {
 	if err := os.WriteFile(source, []byte("mixed-port: 17890\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{
-		{"proxy", "install", "--artifact", proxyCLIArtifact(t), "--yes"},
-		{"proxy", "configure", "--file", source, "--yes"},
-		{"proxy", "start", "--yes"},
-	} {
+	for _, args := range [][]string{{"proxy", "install", "--artifact", proxyCLIArtifact(t), "--yes"}} {
 		if code, _, stderr := proxyCLI(t, m, runner, "", args...); code != 0 {
 			t.Fatal(stderr)
 		}
+	}
+	configureProxyFixture(t, m, runner, source)
+	if code, _, stderr := proxyCLI(t, m, runner, "", "proxy", "start", "--yes"); code != 0 {
+		t.Fatal(stderr)
 	}
 	program := filepath.Join(m.Root, "proxy", "mihomo")
 	if err := os.WriteFile(program, []byte("changed disk bytes; fake runner retains exact birth\n"), 0700); err != nil {

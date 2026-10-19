@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -109,6 +110,9 @@ func updateCLIClient(t *testing.T, archive []byte, corrupt bool) (*http.Client, 
 }
 
 func TestSelfUpdateCLIWithIsolatedPublicRelease(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("native release update executes only in isolated Linux amd64")
+	}
 	binaries := updateCLIBinaries(t)
 	for _, tc := range []struct {
 		name                          string
@@ -164,6 +168,7 @@ func TestSelfUpdateCLIWithIsolatedPublicRelease(t *testing.T) {
 				o.version = "0.6.0"
 			}
 			if !tc.dry && (!tc.explicit || tc.current != o.version) {
+				o.githubProxy = ""
 				o.proxy = enabledAPIFixture(t, m, client)
 			}
 			code := c.update(m, o, nil)
@@ -472,6 +477,9 @@ func TestSelfUpdateCleanupPreservesReplacedCandidateAndDirectory(t *testing.T) {
 }
 
 func TestSelfUpdateCLIPinsConfirmedReleaseVersion(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("native release update executes only in isolated Linux amd64")
+	}
 	binaries := updateCLIBinaries(t)
 	for _, drift := range []bool{false, true} {
 		t.Run(fmt.Sprintf("tag-drift-%v", drift), func(t *testing.T) {
@@ -522,7 +530,7 @@ func TestSelfUpdateCLIPinsConfirmedReleaseVersion(t *testing.T) {
 			var out, stderr bytes.Buffer
 			c := CLI{Out: &out, Err: &stderr, UpdateHTTP: client}
 			proxyAddress := enabledAPIFixture(t, m, client)
-			code := c.update(m, cliOptions{yes: true, json: true, githubProxy: "direct", proxy: proxyAddress}, nil)
+			code := c.update(m, cliOptions{yes: true, json: true, proxy: proxyAddress}, nil)
 			if (code != 0) != drift {
 				t.Fatalf("unexpected result %d %s %s", code, out.String(), stderr.String())
 			}
@@ -583,5 +591,89 @@ func TestCandidateVersionProbeIsBoundedAndEnvironmentIsolated(t *testing.T) {
 	}
 	if stages, _ := filepath.Glob(filepath.Join(dir, ".nido-update-*")); len(stages) != 0 {
 		t.Fatal("probe created unexpected installation files")
+	}
+}
+
+func TestSelfUpdatePinnedCurrentVersionNeedsNoNetworkChoiceOrRunningListener(t *testing.T) {
+	binaries := updateCLIBinaries(t)
+	for _, mode := range []string{"unselected", "stopped-listener", "legacy-auto"} {
+		t.Run(mode, func(t *testing.T) {
+			m, home := fixture(t)
+			if err := m.Init(); err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "stopped-listener":
+				m.Config.Download = DownloadConfig{Mode: NetworkProxy, Listener: "stopped"}
+			case "legacy-auto":
+				m.Config.Download = DownloadConfig{GitHubProxy: "auto"}
+			}
+			if err := m.save(); err != nil {
+				t.Fatal(err)
+			}
+			program := filepath.Join(m.Root, "bin", "nido")
+			if err := os.WriteFile(program, binaries["0.5.0"], 0755); err != nil {
+				t.Fatal(err)
+			}
+			m.Executable = program
+			m.executableInfo, _ = os.Stat(program)
+			before := proxyBootstrapSnapshot(t, "", m.Root, home)
+			runner := &cliProxyRunner{}
+			m.Proxy.Runner = runner
+			previous := Version
+			Version = "0.5.0"
+			t.Cleanup(func() { Version = previous })
+			calls := 0
+			client := &http.Client{Transport: updateCLITransport(func(*http.Request) (*http.Response, error) {
+				calls++
+				return nil, fmt.Errorf("same version must not connect")
+			})}
+			var out, stderr bytes.Buffer
+			cli := CLI{Out: &out, Err: &stderr, UpdateHTTP: client}
+			for _, dry := range []bool{false, true} {
+				if code := cli.update(m, cliOptions{version: "0.5.0", yes: true, json: true, dry: dry}, nil); code != 0 {
+					t.Fatal("offline same-version failed", mode, dry, stderr.String())
+				}
+			}
+			if calls != 0 || runner.starts != 0 || runner.stops != 0 || len(runner.commands) != 0 || !reflect.DeepEqual(before, proxyBootstrapSnapshot(t, "", m.Root, home)) {
+				t.Fatal("same-version consulted network, core, or changed data")
+			}
+		})
+	}
+}
+
+func TestSelfUpdateVersionCheckIgnoresInvalidGitHubFileRoute(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("release version checking supports Linux amd64")
+	}
+	binaries := updateCLIBinaries(t)
+	m, home := fixture(t)
+	if err := m.Init(); err != nil {
+		t.Fatal(err)
+	}
+	// A manually edited bad file preference must not block an independent API.
+	m.Config.Download = DownloadConfig{GitHubAccelerate: "invalid-file-prefix"}
+	if err := m.save(); err != nil {
+		t.Fatal(err)
+	}
+	program := filepath.Join(m.Root, "bin", "nido")
+	if err := os.WriteFile(program, binaries["0.5.0"], 0755); err != nil {
+		t.Fatal(err)
+	}
+	m.Executable = program
+	m.executableInfo, _ = os.Stat(program)
+	previous := Version
+	Version = "0.5.0"
+	t.Cleanup(func() { Version = previous })
+	client, calls := updateCLIClient(t, nil, false)
+	address := enabledAPIFixture(t, m, client)
+	before := proxyBootstrapSnapshot(t, "", m.Root, home)
+	var out, stderr bytes.Buffer
+	c := CLI{Out: &out, Err: &stderr, UpdateHTTP: client}
+	if code := c.update(m, cliOptions{check: true, proxy: address, json: true}, nil); code != 0 || len(*calls) != 1 || !strings.Contains(out.String(), `"latest":"0.6.0"`) {
+		t.Fatal("file preference blocked the independent version API", code, *calls, out.String(), stderr.String())
+	}
+	if !reflect.DeepEqual(before, proxyBootstrapSnapshot(t, "", m.Root, home)) {
+		t.Fatal("version query modified program or data")
 	}
 }

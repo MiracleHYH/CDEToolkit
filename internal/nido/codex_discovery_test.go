@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/MiracleHYH/CDEToolkit/internal/terminalui"
 )
 
 func TestCLISetupDiscoveryPriorityAndCustomFallback(t *testing.T) {
@@ -66,7 +68,7 @@ func TestCLISetupDiscoveryPriorityAndCustomFallback(t *testing.T) {
 			args := []string{"codex", "setup", "--json"}
 			input := ""
 			if tc.interactive {
-				input = paths["custom"] + "\ny\n"
+				input = "2\n" + paths["custom"] + "\ny\n"
 			} else {
 				args = append(args, "--yes")
 			}
@@ -82,10 +84,10 @@ func TestCLISetupDiscoveryPriorityAndCustomFallback(t *testing.T) {
 			var out, stderr string
 			if tc.interactive {
 				var stdout, errors bytes.Buffer
-				c := CLI{Interactive: true, In: strings.NewReader(input), Out: &stdout, Err: &errors, Runner: runner}
+				c := CLI{UI: terminalui.NewScriptDriver(strings.NewReader(input), &errors), Out: &stdout, Err: &errors, Runner: runner}
 				code = c.Run([]string{"--root", m.Root, "codex", "setup"})
 				out, stderr = stdout.String(), errors.String()
-				if strings.Count(stderr, "自定义目录") != 1 || strings.Contains(stderr, "CODEX_HOME（目录保持原位）") {
+				if strings.Count(stderr, "已有自定义目录 [") != 1 || strings.Contains(stderr, "CODEX_HOME（目录保持原位）") {
 					t.Fatal("custom directory prompted more than once", stderr)
 				}
 			} else {

@@ -17,6 +17,8 @@ import (
 // and provider health checks. ISP can use a separately supplied test URL.
 const DefaultTestURL = "https://www.gstatic.com/generate_204"
 
+const DefaultControllerAddress = "127.0.0.1:9090"
+
 type QuickStartRoute struct {
 	Filter string
 	Port   int
@@ -35,6 +37,7 @@ type QuickStartOptions struct {
 	ProxyPort   int
 	Download    *QuickStartRoute
 	ISP         *QuickStartISP
+	Controller  *ControllerConfig
 }
 
 // QuickStart creates one native Mihomo configuration without reading files,
@@ -60,12 +63,14 @@ func QuickStart(o QuickStartOptions) ([]byte, error) {
 	}
 	groups := []map[string]any{quickStartProviderGroup("proxy", o.ProxyFilter)}
 	listeners := []map[string]any{quickStartListener("endpoint-proxy", "proxy", o.ProxyPort)}
+	updateGroup := "proxy"
 	if o.Download != nil {
 		if err := checkRoute("下载代理", o.Download.Filter, o.Download.Port); err != nil {
 			return nil, err
 		}
 		groups = append(groups, quickStartProviderGroup("download", o.Download.Filter))
 		listeners = append(listeners, quickStartListener("endpoint-download", "download", o.Download.Port))
+		updateGroup = "download"
 	}
 	config := map[string]any{
 		"allow-lan": false,
@@ -77,7 +82,7 @@ func QuickStart(o QuickStartOptions) ([]byte, error) {
 				"url":      o.ProviderURL,
 				"path":     "providers/subscription.yaml",
 				"proxy":    "DIRECT",
-				"interval": 3600,
+				"interval": 0,
 				"health-check": map[string]any{
 					"enable":   true,
 					"url":      DefaultTestURL,
@@ -85,7 +90,14 @@ func QuickStart(o QuickStartOptions) ([]byte, error) {
 				},
 			},
 		},
-		"rules": []string{"MATCH,DIRECT"},
+		// Native updater HTTP uses the initialized inner tunnel. Limit this
+		// recommendation to core-internal HTTPS on the official release hosts;
+		// ordinary listener traffic retains its explicit outbound group.
+		"rules": []string{
+			"AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,github.com))," + updateGroup,
+			"AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,release-assets.githubusercontent.com))," + updateGroup,
+			"MATCH,DIRECT",
+		},
 	}
 	if o.ISP != nil {
 		// The ISP group always contains a concrete node, so use the ordinary
@@ -125,6 +137,18 @@ func QuickStart(o QuickStartOptions) ([]byte, error) {
 	}
 	config["proxy-groups"] = groups
 	config["listeners"] = listeners
+	if o.Controller != nil {
+		controller, err := validatedController(*o.Controller)
+		if err != nil {
+			return nil, err
+		}
+		_, controllerPort, _ := localAddress(controller.Address)
+		if strings.HasPrefix(controller.Address, "127.0.0.1:") && ports[controllerPort] {
+			return nil, fmt.Errorf("Proxy controller 不能与代理入口监听同一地址和端口")
+		}
+		config["external-controller"] = controller.Address
+		config["secret"] = controller.Secret
+	}
 	var encoded bytes.Buffer
 	encoder := yaml.NewEncoder(&encoded)
 	encoder.SetIndent(2)

@@ -2,6 +2,7 @@ package conda
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -14,11 +15,26 @@ import (
 const maxOutput = 1 << 20
 
 func (s Service) run(name string, args ...string) ([]byte, error) {
-	run := s.Runner
-	if run == nil {
-		run = runCommand
+	ctx := s.Ctx
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	b, err := run(name, args, s.environment())
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("%s 只读配置检查已取消: %w", name, err)
+	}
+	var b []byte
+	var err error
+	if s.Runner != nil {
+		b, err = s.Runner(name, args, s.environment())
+	} else {
+		b, err = runCommandContext(ctx, name, args, s.environment())
+	}
+	// An injected Runner keeps its existing signature. It may finish after
+	// cancellation, but its output must never become a captured baseline or
+	// permit the next read-only query to start.
+	if contextErr := ctx.Err(); contextErr != nil {
+		return nil, fmt.Errorf("%s 只读配置检查已取消: %w", name, contextErr)
+	}
 	if len(b) > maxOutput {
 		return nil, fmt.Errorf("%s 输出超过 1 MiB", name)
 	}
@@ -31,6 +47,9 @@ func (s Service) run(name string, args ...string) ([]byte, error) {
 // Validate checks the current shell's actual upstream configuration. It never
 // injects the desired variables, so an unactivated configuration cannot pass.
 func (s Service) Validate(c Config) ([]string, error) {
+	if s.Ctx != nil && s.Ctx.Err() != nil {
+		return nil, s.Ctx.Err()
+	}
 	if err := s.ValidateConfig(c); err != nil {
 		return nil, err
 	}

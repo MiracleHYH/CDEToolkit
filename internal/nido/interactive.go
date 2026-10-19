@@ -1,49 +1,47 @@
 package nido
 
 import (
-	"fmt"
 	"os"
-	"strconv"
-	"strings"
+
+	"github.com/MiracleHYH/CDEToolkit/internal/terminalui"
 )
 
 // Menus only fill missing choices. Explicit arguments, previews and scripts
 // continue through the existing validation and mutation paths.
 func (c *CLI) interactive(o cliOptions) bool {
-	return !o.yes && !o.json && !o.dry && (c.Interactive || terminalInput(os.Stdin))
+	if o.yes || o.json || o.dry {
+		return false
+	}
+	if c.UI != nil || c.uiSession != nil {
+		return true
+	}
+	if f, ok := c.In.(*os.File); ok {
+		return terminalInput(f)
+	}
+	if c.In != nil {
+		return false
+	}
+	if terminalInput(os.Stdin) {
+		return true
+	}
+	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	return terminalInput(f)
 }
 
 func (c *CLI) choose(label string, options []string, fallback int) (int, error) {
-	if len(options) == 0 || fallback < 0 || fallback >= len(options) {
-		return 0, fmt.Errorf("无效的交互选项")
-	}
-	fmt.Fprintln(c.Err, label)
-	for i, option := range options {
-		fmt.Fprintf(c.Err, "  %d) %s\n", i+1, option)
-	}
-	for {
-		value, err := c.ask("选择编号，q 取消", strconv.Itoa(fallback+1))
-		if err != nil {
-			return 0, err
-		}
-		if strings.EqualFold(value, "q") || strings.EqualFold(value, "quit") {
-			return 0, fmt.Errorf("操作已取消")
-		}
-		n, err := strconv.Atoi(value)
-		if err == nil && n >= 1 && n <= len(options) {
-			return n - 1, nil
-		}
-		fmt.Fprintln(c.Err, "请输入列表中的编号，或 q 取消。")
-	}
+	var index int
+	err := c.withUI(func(ui terminalui.Driver) error {
+		var err error
+		index, err = ui.Select(label, options, fallback)
+		return err
+	})
+	return index, err
 }
 
 func (c *CLI) setting(label, fallback string) (string, error) {
-	value, err := c.ask(label+"；q 取消", fallback)
-	if err != nil {
-		return "", err
-	}
-	if strings.EqualFold(value, "q") || strings.EqualFold(value, "quit") {
-		return "", fmt.Errorf("操作已取消")
-	}
-	return value, nil
+	return c.textPrompt(label, fallback)
 }

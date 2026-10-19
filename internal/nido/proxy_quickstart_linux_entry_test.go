@@ -36,10 +36,12 @@ func TestProxyQuickStartLinuxEntryRequiresActualEvidence(t *testing.T) {
 		{"test-fail", false},
 		{"quickstart-pass-missing", false},
 		{"node-pass-missing", false},
-		{"git-pass-missing", false},
-		{"bind-pass-missing", false},
+		{"remediation-pass-missing", false},
 		{"cli-pass-missing", false},
 		{"new-cli-pass-missing", false},
+		{"default-skip-pass-missing", false},
+		{"tui-keys-pass-missing", false},
+		{"retention-pass-missing", false},
 		{"wrong-os", false},
 		{"wrong-arch", false},
 		{"root-user", false},
@@ -87,7 +89,7 @@ func TestProxyQuickStartLinuxEntryRequiresActualEvidence(t *testing.T) {
 				}
 			}
 			if test.ok {
-				for _, name := range []string{"source-manifest.sha256", "toolchain-sha256.txt", "environment.txt", "environment-skips.txt", "run.log", "proxy-race.json", "gitproxy-race.json", "nido-proxy-race.json", "cli-isolation.log", "quickstart-cli-isolation.log", "result.txt"} {
+				for _, name := range []string{"source-manifest.sha256", "toolchain-sha256.txt", "environment.txt", "environment-skips.txt", "run.log", "proxy-race.json", "nido-proxy-race.json", "cli-isolation.log", "quickstart-cli-isolation.log", "result.txt"} {
 					data, err := os.ReadFile(filepath.Join(output, name))
 					if err != nil || len(data) == 0 {
 						t.Fatalf("missing complete evidence %s: %v", name, err)
@@ -162,7 +164,7 @@ func runProxyQuickStartLinuxEntryFixture(t *testing.T, mode string) (string, str
 			t.Fatal(err)
 		}
 	}
-	for _, name := range []string{"Makefile", "VERSION", "GDS_VERSION", ".go-version", "go.mod", "go.sum", "vendor/modules.txt", "tests/proxy-quickstart-cli-isolation.sh"} {
+	for _, name := range []string{"Makefile", "VERSION", ".go-version", "go.mod", "go.sum", "vendor/modules.txt", "tests/proxy-quickstart-cli-isolation.sh"} {
 		if err := os.WriteFile(filepath.Join(source, name), []byte("inert public source fixture\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -283,10 +285,14 @@ if [[ "$NIDO_QUICKSTART_ENTRY_MODE" != missing-log ]]; then
     package_pass
   } > "$work/proxy-race.json"
 fi
-{ [[ "$NIDO_QUICKSTART_ENTRY_MODE" == git-pass-missing ]] || pass TestProxyPreservesOtherBytesAndUsesOnlyHTTPProxy; package_pass; } > "$work/gitproxy-race.json"
-{ pass TestProxyQuickStart; [[ "$NIDO_QUICKSTART_ENTRY_MODE" == bind-pass-missing ]] || pass TestProxyBind; if [[ "$NIDO_QUICKSTART_ENTRY_MODE" == ipv6-nido-skip ]]; then ipv6_skip IPv6_loopback; fi; package_pass; } > "$work/nido-proxy-race.json"
+{ pass TestProxyQuickStart; [[ "$NIDO_QUICKSTART_ENTRY_MODE" == remediation-pass-missing ]] || pass TestProxyRemediation; if [[ "$NIDO_QUICKSTART_ENTRY_MODE" == ipv6-nido-skip ]]; then ipv6_skip IPv6_loopback; fi; package_pass; } > "$work/nido-proxy-race.json"
 if [[ "$NIDO_QUICKSTART_ENTRY_MODE" != cli-pass-missing ]]; then echo 'Nido 单目录 CLI 隔离验证通过' > "$work/cli-isolation.log"; fi
-if [[ "$NIDO_QUICKSTART_ENTRY_MODE" != new-cli-pass-missing ]]; then echo 'Proxy quick start CLI 隔离验证通过' > "$work/quickstart-cli-isolation.log"; fi
+{
+  [[ "$NIDO_QUICKSTART_ENTRY_MODE" == new-cli-pass-missing ]] || echo 'Proxy quick start CLI 隔离验证通过'
+  [[ "$NIDO_QUICKSTART_ENTRY_MODE" == default-skip-pass-missing ]] || echo 'Proxy quick start 默认 Skip 与重复配置验证通过'
+  [[ "$NIDO_QUICKSTART_ENTRY_MODE" == tui-keys-pass-missing ]] || echo 'Proxy 公共 TUI 方向键、密钥隐藏与 Esc 取消验证通过'
+  [[ "$NIDO_QUICKSTART_ENTRY_MODE" == retention-pass-missing ]] || echo 'Proxy 配置、缓存与数据保留及卸载重装隔离验证通过'
+} > "$work/quickstart-cli-isolation.log"
 [[ "$NIDO_QUICKSTART_ENTRY_MODE" != command-fail-after-evidence ]] || exit 19
 printf 'strict bubblewrap fixture completed\n'
 `

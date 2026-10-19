@@ -611,15 +611,15 @@ func TestRuntimeRestartAppliesValidCandidateWithNewBirth(t *testing.T) {
 	}
 }
 
-func TestRuntimeRestartChecksCandidateAgainBeforeStopping(t *testing.T) {
+func TestRuntimeRestartChecksCandidateDuringStoppedValidation(t *testing.T) {
 	runner := &runtimeFakeRunner{ready: true}
 	s := runtimeService(t, runner)
 	if err := s.Start(); err != nil {
 		t.Fatal(err)
 	}
 	runner.onRun = func(Command) { path, _ := s.ConfigPath(); _ = os.WriteFile(path, []byte("mixed-port: 0\n"), 0600) }
-	if err := s.Restart(); err == nil || runner.stops != 0 || !runner.alive {
-		t.Fatalf("changed restart stopped old instance: %v", err)
+	if err := s.Restart(); err == nil || runner.stops != 1 || runner.alive || runner.starts != 1 {
+		t.Fatalf("changed stopped candidate launched a new instance: %v", err)
 	}
 }
 
@@ -644,7 +644,7 @@ func TestRuntimeRestartPreservesRecordReplacedDuringValidation(t *testing.T) {
 		runner.process.Executable = replacement.Program
 		preserved, _ = os.ReadFile(filepath.Join(s.Root, "proxy", "process.json"))
 	}
-	if err := s.Restart(); err == nil || runner.stops != 0 || runner.starts != 1 || !runner.alive {
+	if err := s.Restart(); err == nil || runner.stops != 1 || runner.starts != 1 || runner.alive {
 		t.Fatalf("restart adopted the replacement: %v starts=%d stops=%d alive=%v", err, runner.starts, runner.stops, runner.alive)
 	}
 	current, _ := os.ReadFile(filepath.Join(s.Root, "proxy", "process.json"))
@@ -981,7 +981,11 @@ func TestRuntimeValidationCannotProceedAfterLockReplacement(t *testing.T) {
 			} else {
 				err = s.Start()
 			}
-			if err == nil || runner.starts != starts || runner.stops != 0 || runner.alive != (action == "restart") {
+			wantStops := 0
+			if action == "restart" {
+				wantStops = 1
+			}
+			if err == nil || runner.starts != starts || runner.stops != wantStops || runner.alive {
 				t.Fatalf("%s adopted replaced lock: %v starts=%d stops=%d alive=%v", action, err, runner.starts, runner.stops, runner.alive)
 			}
 		})

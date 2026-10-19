@@ -44,7 +44,7 @@ export HOME="$case_root/runner-home" TMPDIR="$case_root/tmp" PATH=/usr/bin:/bin
 mkdir -p "$HOME" "$TMPDIR" "$case_root/guard" "$case_root/before"
 export CURL_HOME="$HOME" XDG_CONFIG_HOME="$HOME/.config" XDG_CACHE_HOME="$HOME/.cache" XDG_DATA_HOME="$HOME/.local/share"
 export ZDOTDIR="$HOME" BASH_ENV=/dev/null ENV=/dev/null
-unset CDET_PREFIX CDET_STORE CDET_HOME STK_HOME NIDO_VERSION NIDO_GITHUB_PROXY CODEX_SQLITE_HOME CODEX_INSTALL_DIR CODEX_NON_INTERACTIVE
+unset CDET_PREFIX CDET_STORE CDET_HOME STK_HOME NIDO_VERSION NIDO_NETWORK_MODE NIDO_GITHUB_PROXY NIDO_PROXY CODEX_SQLITE_HOME CODEX_INSTALL_DIR CODEX_NON_INTERACTIVE
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy NO_PROXY no_proxy
 if [[ -n ${NIDO_ACCEPT_GENERAL_PROXY:-} ]]; then
   export HTTPS_PROXY="$NIDO_ACCEPT_GENERAL_PROXY" HTTP_PROXY="$NIDO_ACCEPT_GENERAL_PROXY" ALL_PROXY="$NIDO_ACCEPT_GENERAL_PROXY"
@@ -85,6 +85,7 @@ arguments=(); target=''; url=''
 while (($#)); do
   case $1 in
     -o|--output) target=${2:?}; shift 2 ;;
+    --proxy|--noproxy) arguments+=("$1" "$2"); shift 2 ;;
     http://*|https://*) [[ -z $url ]]; url=$1; shift ;;
     *) arguments+=("$1"); shift ;;
   esac
@@ -212,14 +213,16 @@ assert_transport_requests() {
   local transport=$1 prefix expected_prefix name
   prefix=https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/
   if [[ $transport = accelerated ]]; then prefix=$accelerator/$prefix; fi
-  for name in install.sh "$asset" "$asset.sha256"; do
+  for name in install.sh; do
     expected_prefix=$prefix
-    if [[ $install_version_mode = tagged && $name != install.sh ]]; then
+    if [[ $install_version_mode = tagged ]]; then
       expected_prefix="https://github.com/MiracleHYH/CDEToolkit/releases/download/v$version/"
       if [[ $transport = accelerated ]]; then expected_prefix=$accelerator/$expected_prefix; fi
     fi
     grep -Fq $'VERIFIED-BEFORE-EXEC\t'"$expected_prefix$name"$'\t' "$NIDO_ACCEPT_HTTP_LOG"
+    [[ $(awk -F '\t' -v expected="$expected_prefix$name" '$1=="VERIFIED-BEFORE-EXEC" && $2==expected {n++} END {print n+0}' "$NIDO_ACCEPT_HTTP_LOG") = 2 ]]
   done
+  ! awk -F '\t' '$1=="REQUEST" && $2 ~ /nido-linux-amd64[.]tar[.]gz([.]sha256)?$/ {found=1} END {exit !found}' "$NIDO_ACCEPT_HTTP_LOG"
 }
 for transport in "${transports[@]}"; do
   export HOME="$case_root/$transport-user" TMPDIR="$case_root/$transport-tmp"
@@ -231,11 +234,16 @@ for transport in "${transports[@]}"; do
   official=https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh
   policy=direct; outer=$official
   if [[ $transport = accelerated ]]; then policy=$accelerator; outer="$policy/$official"; fi
-  install_options=(--github-proxy "$policy")
-  [[ $install_version_mode != tagged ]] || install_options+=(--version "$version")
-  # Exact README one-line flow: public latest script and package/checksum,
-  # explicit transport, then activation. The separate tagged mode adds only
-  # the installer's existing --version option; it cannot claim latest success.
+  # This is the explicit, noninteractive public-asset acceptance. Real
+  # parameter-free curl|sh interaction is covered by the controlling-PTY Go
+  # suite; a noninteractive run must never wait for answers on piped source.
+  install_options=(--network-mode DIRECT --yes)
+  if [[ $transport = accelerated ]]; then
+    install_options=(--network-mode GITHUB_PROXY --github-proxy "$policy" --yes)
+  fi
+  if [[ $install_version_mode = tagged ]]; then outer="https://github.com/MiracleHYH/CDEToolkit/releases/download/v$version/install.sh"; [[ $transport != accelerated ]] || outer="$accelerator/$outer"; fi
+  # Fetch one signed, self-contained installer using the selected outer URL,
+  # then activate. Tagged mode cannot claim latest-release acceptance.
   curl --http1.1 -fsSL "$outer" | sh -s -- "${install_options[@]}" && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
   assert_program
   assert_shell_activation "$transport"

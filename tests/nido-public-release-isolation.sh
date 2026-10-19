@@ -2,6 +2,8 @@
 # Opt-in public acceptance. Both asset directories must have been independently
 # verified with cosign and the exact release workflow/tag identity beforehand.
 # This harness never builds an old-version fixture or accesses the real HOME.
+# Only independently verified public releases belong to this entry point.
+# Unreleased source/snapshot validation uses offline Go and PTY suites instead.
 set -euo pipefail
 umask 077
 
@@ -60,10 +62,10 @@ esac
 asset="nido-${platform//\//-}.tar.gz"
 for directory in "$input" "$old_input"; do
   for name in "$asset" "$asset.sha256"; do
-    [[ -s $directory/$name && -s $directory/$name.sigstore.json && ! -L $directory/$name ]] || fail "missing independently verified asset/bundle: $directory/$name"
+    [[ -s $directory/$name && -s $directory/$name.sigstore.json && ! -L $directory/$name && ! -L $directory/$name.sigstore.json ]] || fail "missing independently verified ordinary asset/bundle: $directory/$name"
   done
 done
-[[ -s $input/install.sh && -s $input/install.sh.sigstore.json && ! -L $input/install.sh ]] || fail 'new signed installer input is required'
+[[ -s $input/install.sh && -s $input/install.sh.sigstore.json && ! -L $input/install.sh && ! -L $input/install.sh.sigstore.json ]] || fail 'new signed ordinary installer input is required'
 for command in tar cmp awk curl jq; do command -v "$command" >/dev/null || fail "missing existing command: $command"; done
 [[ $metadata_auth != gh ]] || command -v gh >/dev/null || fail 'gh is required for authenticated host metadata reads'
 sha256_file() {

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/MiracleHYH/CDEToolkit/internal/terminalui"
 )
 
 func shellFixture(t *testing.T) (*Manager, string) {
@@ -26,7 +28,10 @@ func shellFixture(t *testing.T) (*Manager, string) {
 
 func shellCLI(m *Manager, o cliOptions, input string, args ...string) (int, string, string) {
 	var out, stderr bytes.Buffer
-	c := CLI{In: strings.NewReader(input), Out: &out, Err: &stderr}
+	reader := strings.NewReader(input)
+	// Unit fixtures explicitly provide a scripted UI. Production continues to
+	// require a real terminal for prompts; a string reader is not a terminal.
+	c := CLI{UI: terminalui.NewScriptDriver(reader, &stderr), In: reader, Out: &out, Err: &stderr}
 	code := c.shell(m, o, args)
 	return code, out.String(), stderr.String()
 }

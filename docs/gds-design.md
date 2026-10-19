@@ -1,35 +1,29 @@
-# GDS 组件设计
+# GDS 独立源码设计与历史边界
 
-GDS 设计为 Nido 的可选单机 GPU 空闲显存保留组件：在持续观察到目标 GPU 空闲后分配指定显存，发现外部活动或失去可靠观察时释放。当前实现包含独立组件、状态机、worker 协议和 Linux amd64 原生适配；Nido v0.5.0 接入独立 GDS v0.1.0 官方发行。真实 GPU 验收尚未完成。问题与验证证据见 [GDS 组件审查](gds-audit.md)，资产与验签见 [独立发行](gds-release.md)。
+自 2026 年 10 月 19 日起，GDS 仅在 [standalone/gds](../standalone/gds/README.md) 保留独立源码和专属测试。当前 Nido 源码不注册 GDS，不提供 `nido gds` 命令；根模块的构建、测试、CI 和发行流程均不接入 GDS。本次不安装、迁移、清理既有 GDS 部署，也不自动发布独立程序。
 
-核心选择是：独立组件程序、UUID 设备身份、NVML 结构化探测、无计算 kernel 的显存 worker，以及失效自动到期的占用许可。Nido 保持普通 Go CLI；GDS 单独承担 NVIDIA 原生依赖。
+GDS 的设计目标是在持续观察到目标 GPU 空闲后分配指定显存，发现外部活动或失去可靠观察时释放。保留的实现包括管理服务、状态机、worker 协议和 Linux amd64 原生适配。真实 GPU 验收尚未完成；编译、CPU 协议与假驱动结果不能证明真实显存分配、释放或负载影响。
 
-## 产品承诺与首版范围
+Nido v0.5.0 与 GDS v0.1.0 的接入和发布属于历史事实，见 [发行记录](gds-release.md) 与 [审计记录](gds-audit.md)。下文保留技术设计与当时的接口约定；标为历史的命令、安装布局和发行计划不构成当前可用入口。
 
-首版面向 Linux amd64、普通用户、宿主机同一 PID 视图中的一张完整 NVIDIA GPU。GPU 必须显式选择；不默认为第 0 张。Nido 其他平台仍可构建，GDS 不支持的平台明确返回 unsupported。
+核心选择是：独立程序、UUID 设备身份、NVML 结构化探测、无计算 kernel 的显存 worker，以及失效自动到期的占用许可。GDS 的 NVIDIA 依赖只属于自己的 Go 模块。
+
+## 源码设计目标与首版范围
+
+原首版目标面向 Linux amd64、普通用户、宿主机同一 PID 视图中的一张完整 NVIDIA GPU。GPU 必须显式选择；不默认为第 0 张。不支持的平台由源码中的后端明确返回 unsupported。这些目标仍需真实 GPU 验收。
 
 | 能力 | 首版约定 |
 | --- | --- |
 | 自动占用 | 连续空闲达到阈值后尝试保留显存，默认 30 分钟、总显存 25% |
 | 自动让出 | 新鲜探测发现外部活动即停止自身 worker；探测失败、超时或过期也让出 |
-| 可靠使用前释放 | `nido gds stop` 等待 monitor 及 worker 全部退出；成功后再启动实际任务 |
-| 安装与更新 | 用户显式安装；停止状态替换程序；完成后仍停止 |
+| 可靠使用前释放 | 管理层必须等待 monitor 及 worker 全部退出；确认成功后才可启动实际任务 |
+| 历史安装与更新约定 | 用户显式安装；停止状态替换程序；完成后仍停止；当前无安装入口 |
 | 状态查询 | 本地只读，分别展示调度器、worker、采样新鲜度与异常原因 |
 | 独立运行 | 不依赖 Codex、Proxy、tmux、Python 或系统服务管理器 |
 
 自动让出存在观察窗口。新程序可能在窗口内先申请显存并失败，因此 GDS 不能保证任意直接启动的任务不受影响。这个结论来自并发时序：CUDA 分配不足会返回失败，而后续释放不能撤回失败，见 [CUDA 显存分配接口](https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__MEM.html)。降低轮询间隔只能缩短窗口。
 
-需要确定顺序时采用简单明确的流程：
-
-```sh
-nido gds stop
-# stop 成功后，直接运行自己的 GPU 任务
-python train.py
-# 任务结束后按需重新启用观察
-nido gds start
-```
-
-脚本须只在 stop 成功后继续，例如 `nido gds stop && <实际任务>`。停止后没有 monitor 自动重新占用。首版不增加任务队列、exec 包装器、pause 租约服务或控制 socket；后续确有频繁协作需求时再增加作用域明确的接口。该顺序只处理本 GDS，不能为用户排除其他进程竞争。
+需要确定顺序时，原设计要求先确认 monitor 与 worker 全部退出，再运行实际 GPU 任务，任务结束后才按需重新启用观察。历史上的 Nido 启停接口现已摘除，本文不提供当前部署的停止、接管或清理命令。该顺序即使成立，也只处理本 GDS，不能排除其他进程竞争。首版设计未增加任务队列、exec 包装器、pause 租约服务或控制 socket。
 
 默认只保留显存，不持续运行 kernel。显存保留不会保证 GPU 利用率、功耗或平台空闲回收策略满足某个指标。如果实际目标包含持续计算活动，应另行定义负载上限并实测，再显式增加活动模式；不沿用“单线程所以没有干扰”的推断。
 
@@ -39,8 +33,7 @@ nido gds start
 
 ```mermaid
 flowchart LR
-    CLI["nido gds"] --> Manager["components/gds 管理接口"]
-    Manager --> Program["独立 gds 程序"]
+    Manager["保留的管理服务源码与 CPU 夹具"] --> Program["独立 gds 程序源码"]
     Program --> Monitor["Go monitor 与状态机"]
     Monitor --> Probe["短时 NVML 探针子进程"]
     Monitor --> Worker["私有 CUDA worker 子进程"]
@@ -49,19 +42,22 @@ flowchart LR
 
 | 代码位置 | 职责 |
 | --- | --- |
-| `internal/nido` | 参数解析、用户输出、单根定位和组件组合 |
-| `internal/components/gds` | GDS 安装、配置、精确启停、状态、日志和静态预检；纯 Go |
-| `cmd/gds` | 可选组件程序入口，提供前台 run 和内部 probe/worker 模式 |
-| `internal/gdsruntime` | 可注入时钟、探针与 worker 的状态机、进程编排和占用许可 |
-| `internal/gdsruntime/nvidia` | Linux 原生适配，NVML 查询与 CUDA Driver API 的最小绑定 |
+| `standalone/gds/go.mod` | 独立模块 `github.com/MiracleHYH/CDEToolkit/standalone/gds` 与独立依赖 |
+| `standalone/gds/internal/components/gds` | 保留的安装、配置、精确启停、状态、日志和静态预检实现；没有 Nido 入口 |
+| `standalone/gds/cmd/gds` | 独立程序源码，含前台 run 和内部 probe/worker 模式；当前不发行 |
+| `standalone/gds/internal/gdsapi`、`standalone/gds/internal/gdsutil` | 模块内的配置、协议、文件和进程辅助实现 |
+| `standalone/gds/internal/gdsruntime` | 可注入时钟、探针与 worker 的状态机、进程编排和占用许可 |
+| `standalone/gds/internal/gdsruntime/nvidia` | Linux 原生适配，NVML 查询与 CUDA Driver API 的最小绑定 |
 
-`cmd/nido` 不导入 NVIDIA 原生适配，继续使用 `CGO_ENABLED=0` 构建。GDS 独立构建，NVML 优先采用 NVIDIA 官方 [go-nvml](https://github.com/NVIDIA/go-nvml)，接受其 cgo 构建依赖；CUDA 侧只封装 Driver API 所需的小范围接口，运行时加载驱动库。预编译 GDS 的使用端只需要兼容 NVIDIA 驱动，不需要 nvcc、CUDA Toolkit 或自行编译。发行前仍须固定并验证 glibc 基线、驱动最低版本和可用符号，不能把 ELF 架构匹配等同于运行兼容。
+嵌套模块不加入根 `go.work`，根模块也不通过 require/replace 引入它；根目录的 `go test ./...` 不遍历该模块。开发检查需进入 `standalone/gds` 并显式设置 `GOWORK=off`。NVIDIA 官方 [go-nvml](https://github.com/NVIDIA/go-nvml) 依赖仅保留在独立模块，根 Nido 不携带它。
 
-NVIDIA 原生文件采用 `linux && amd64 && cgo` 构建约束，其他平台或禁用 cgo 时提供明确 unsupported 的适配，不能链接 CUDA/NVML。状态机与 CPU 协议测试保持纯 Go；macOS 与无 cgo 的 `go test ./...` 仍须正常执行这些测试，不将整个组件排除测试。
+CUDA 侧只封装 Driver API 所需的小范围接口，运行时加载驱动库。NVIDIA 原生文件采用 `linux && amd64 && cgo` 构建约束，其他平台或禁用 cgo 时提供明确 unsupported 的适配，不链接 CUDA/NVML。状态机与 CPU 协议测试保留在模块内。当前只提供源码检查与显式 CPU 假驱动隔离测试；未来如恢复发行，仍需重新固定并验证 glibc 基线、驱动最低版本和可用符号，不能把 ELF 架构匹配等同于运行兼容。
 
 monitor、probe 和 worker 使用同一份受管 gds 程序的不同启动模式，便于校验程序与协议版本。GPU 状态机不放进 Nido CLI 进程，也不依赖 Nido 主程序更新后的映像。组件不导入 Codex、Proxy 或 `internal/nido`。
 
-## 固定目录与配置
+## 历史管理目录与配置
+
+以下是 Nido v0.5.0 集成时期的目录约定，供理解保留源码和历史记录使用。当前 Nido 不创建、读取、迁移或清理此 GDS 目录。
 
 ```text
 <NIDO_HOME>/gds/
@@ -94,7 +90,7 @@ min_free_mib = 1024
 max_idle_utilization_percent = 5
 ```
 
-未知键、重复键、非法 UUID、越界数值直接报错。idle_seconds 必须大于零，probe_interval_seconds 允许 1–10，memory_percent 允许 1–50；其他阈值要求符合设备容量及百分比范围。不静默使用默认值代替错误配置。当前 configure 只接受完整 UUID；GPU index 的便捷解析不在首版开放。
+未知键、重复键、非法 UUID、越界数值直接报错。idle_seconds 必须大于零，probe_interval_seconds 允许 1–10，memory_percent 允许 1–50；其他阈值要求符合设备容量及百分比范围。不静默使用默认值代替错误配置。保留的配置处理只接受完整 UUID；GPU index 的便捷解析不在首版设计内。
 
 运行中的配置按启动快照生效；磁盘改变时显示 config_changed，通过 restart 生效。configure 只在停止状态提交；restart 在停止旧实例前完成候选静态与设备能力预检，失败保留旧实例。
 
@@ -158,7 +154,9 @@ monitor 与 worker 之间只使用私有、有限消息协议：
 
 进程退出与驱动释放无法在 GPU/内核失常时获得硬实时保证；不能确认时记录 unknown，禁止新 worker、更新和卸载，不输出“显存已释放”。
 
-## 启停与并发
+## 保留的启停与并发协议
+
+本节描述独立模块中保留的管理服务与运行时协议，不表示当前 Nido 提供启停命令。
 
 monitor 持有实例运行锁。设备锁固定使用宿主 `/tmp/nido-gds-<euid>/gpu-<完整UUID>.lock`，目录必须经过所有者、权限和链接检查，避免同一用户多个 Nido 根同时争抢同一张卡。该位置不随 NIDO_HOME、TMPDIR 或 XDG_RUNTIME_DIR 改变，也不能按每次运行 mktemp；无法安全建立共享锁位置时拒绝 start。锁 inode 稳定，不能删除锁文件来解锁。
 
@@ -174,7 +172,9 @@ monitor 持有实例运行锁。设备锁固定使用宿主 `/tmp/nido-gds-<euid
 
 被授权的新 worker 始终必须先有可核验记录。停止流程不能只看到 monitor 退出就返回，也不能只依赖可能过期的 state.json；有 worker 退出未确认或启动归属不明时拒绝更新、卸载与重复启动。
 
-## 命令与程序来源
+## 历史命令与程序来源（当前停用）
+
+下表记录 Nido v0.5.0 接入时期的接口及完成条件。当前源码已移除全部 `nido gds` 分发，表中命令不可作为当前使用说明；保留服务代码也不恢复这些入口。
 
 | 命令 | 完成条件 |
 | --- | --- |
@@ -194,13 +194,15 @@ monitor 持有实例运行锁。设备锁固定使用宿主 `/tmp/nido-gds-<euid
 
 dry-run 不执行程序、不加载驱动、不分配、不联网或写锁，仍检查本地配置、artifact 格式、平台、摘要和已知运行记录。它应拒绝不存在的输入，并将驱动能力与实时 GPU 情况明确表示为未检查。
 
-install 默认获取本仓库独立 GDS 稳定版，也接受显式本地 gds artifact；GDS 自身不会随 Nido 自动安装。来源只支持本仓库官方资产和显式本地程序，不提供任意下载脚本或插件执行器。官方资产必须通过 API digest、大小、单行摘要文件、ELF 与候选版本检查后才能生成安装凭证。
+历史 install 默认获取本仓库独立 GDS 稳定版，也接受显式本地 gds artifact；GDS 当时也不会随 Nido 自动安装。来源只支持本仓库官方资产和显式本地程序，不提供任意下载脚本或插件执行器。官方资产必须通过 API digest、大小、单行摘要文件、ELF 与候选版本检查后才能生成安装凭证。
 
-GDS 使用 `gds-vX.Y.Z` 标签和 `gds-linux-amd64` 平台资产，发现仅匹配 GDS 稳定发布，按组件语义版本比较；显式版本按对应标签获取。不能借用仓库 releases/latest 选择 GDS，发布 GDS 也必须显式保持 Nido 的 latest 安装入口不变。
+历史发行使用 `gds-vX.Y.Z` 标签和 `gds-linux-amd64` 平台资产，发现仅匹配 GDS 稳定发布，按组件语义版本比较；显式版本按对应标签获取。当时不借用仓库 releases/latest 选择 GDS。当前没有 GDS 发行工作流，不触发新标签、资产上传或自动发布。
 
 更新采用候选准备、格式与协议核验、现有配置兼容检查、提交前快照复核、原子替换的顺序，不维护版本仓库或自动回滚。程序版本、协议版本与 Nido 版本分别表达；不兼容协议拒绝启用。卸载保留已停止的运行历史，未知文本或目标被并发替换时拒绝删除。
 
-## 实施顺序与验收
+## 历史实施顺序与剩余验收
+
+下表保留原计划；其中 Nido 接入和独立发行已停止，不是当前交付清单。
 
 | 阶段 | 交付 | 必须通过的检查 |
 | --- | --- | --- |
@@ -210,8 +212,8 @@ GDS 使用 `gds-vX.Y.Z` 标签和 `gds-linux-amd64` 平台资产，发现仅匹�
 | 4 | Linux NVIDIA 适配和真实 GPU 隔离验证 | UUID 重排、图形/计算活动、OOM 竞争、分配余量、自动让出、设备错误和释放时间 |
 | 5 | Linux amd64 GDS 独立发行与文档 | 驱动/ABI 兼容、程序协议、临时 HOME 安装更新卸载及 Nido 四平台构建 |
 
-CPU 状态机与假协议测试进入常规 CI；原生进程测试在 Linux 常规执行，不再全部藏在可选旧 check-gds 下。真实 GPU 验证通过显式入口执行，在获准的测试卡上使用临时 Nido 根与受限显存额度，不能自动使用当前开发机的任意空闲 GPU。
+当前根 CI 不运行 GDS，旧 `check-gds`、`check-gds-linux-native` 等 Make 入口已移除。独立模块的 [Linux 原生隔离入口](../standalone/gds/tests/linux-native-isolation.sh) 只供显式普通用户 namespace CPU 假驱动测试，不执行生产 GDS 程序或其元数据，也不构建 Nido；缺少隔离条件时失败，不退回宿主执行。旧公开发行 harness 仅作为不可执行历史文本保留，位置见 [发行记录](gds-release.md)。
 
-真实验收需记录驱动、GPU、设备模式、实际程序摘要、配置与释放延迟；既要证明正常路径，也要观察 monitor SIGKILL、探针挂起及许可过期。普通 CPU 测试、交叉编译和真实 CUDA 验证分别报告，不能互相替代。持续计算活动不在本设计验收范围内。
+真实 GPU 验收尚未执行。如未来另行授权硬件验收，仍需记录驱动、GPU、设备模式、实际程序摘要、配置与释放延迟；既要证明正常路径，也要观察 monitor SIGKILL、探针挂起及许可过期。普通 CPU 测试、交叉编译和真实 CUDA 验证分别报告，不能互相替代。持续计算活动不在本设计验收范围内。
 
-仅承载 GDS 的旧 Go builtin 框架已删除；旧 Bash 文件按既有冻结边界保留，不接入、不自动迁移真实部署。安装流程不读取或修改 Codex 的全局 AGENTS、认证、会话或数据库，也不生成“忽略占用直接启动”的规则。
+仅承载 GDS 的旧 Go builtin 框架已删除；旧 Bash 文件按既有冻结边界保留，不接入当前执行链。本轮隔离只调整源码和测试位置，不读取或修改既有部署、Codex 的全局 AGENTS、认证、会话或数据库，也不生成“忽略占用直接启动”的规则。

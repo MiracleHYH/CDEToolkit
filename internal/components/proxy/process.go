@@ -15,7 +15,10 @@ import (
 )
 
 // Command contains no shell text. Input is the captured candidate configuration.
+// Context bounds foreground Run checks; detached Start uses its recorded birth
+// and an explicit Stop, rather than inheriting the caller UI's lifetime.
 type Command struct {
+	Context                     context.Context
 	Program, Dir, Log, Launcher string
 	Args, Env                   []string
 	Input                       []byte
@@ -105,7 +108,11 @@ func (OSRunner) Run(c Command) ([]byte, error) {
 	if timeout <= 0 {
 		timeout = 15 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	parent := c.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, c.Program, c.Args...)
 	cmd.WaitDelay = time.Second
@@ -114,7 +121,7 @@ func (OSRunner) Run(c Command) ([]byte, error) {
 	cmd.Stdout, cmd.Stderr = &output, &output
 	err := cmd.Run()
 	if ctx.Err() != nil {
-		return output.b, fmt.Errorf("核心调用超时")
+		return output.b, fmt.Errorf("核心调用超时或取消：%w", ctx.Err())
 	}
 	return output.b, err
 }

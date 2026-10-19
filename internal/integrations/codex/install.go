@@ -15,7 +15,17 @@ const LatestURL = "https://api.github.com/repos/openai/codex/releases/latest"
 var releaseVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`)
 
 func (s Service) installerEnv(c Config, proxy map[string]string, temp, bin string) ([]string, error) {
-	env := s.environment()
+	// The caller supplies the proxy route for this Nido operation. Never let
+	// inherited shell variables add another route when the chosen route is
+	// direct, or leave mixed lowercase/uppercase values behind.
+	base := s.environment()
+	env := make([]string, 0, len(base))
+	for _, entry := range base {
+		key, _, _ := strings.Cut(entry, "=")
+		if !proxyKey(strings.ToLower(key)) {
+			env = append(env, entry)
+		}
+	}
 	normalized := make(map[string]string, len(proxy))
 	for key, value := range proxy {
 		lower := strings.ToLower(key)

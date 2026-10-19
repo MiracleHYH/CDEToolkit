@@ -32,7 +32,7 @@ func TestReinstallStagesProgramBeforeSavingDownloadPreference(t *testing.T) {
 	if err := m.InitWithDownload("https://mirror.invalid"); err == nil {
 		t.Fatal("reinstall unexpectedly wrote into a read-only bin")
 	}
-	if m.Config.Download.GitHubProxy != "direct" {
+	if m.Config.Download.GitHubAccelerate != "none" {
 		t.Fatal("failed staging changed the in-memory preference")
 	}
 	for path, expected := range protected {

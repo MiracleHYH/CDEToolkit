@@ -10,8 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -24,17 +22,6 @@ func explicitAPIScopeFixture(t *testing.T, handler http.Handler, httpsProxy, tru
 	t.Helper()
 	m, home := fixture(t)
 	if err := m.InitWithDownload("https://file-only.invalid"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(filepath.Join(m.Root, "proxy"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	writeBindingListeners(t, m, bindingListeners)
-	endpoint, err := m.Proxy.Endpoint("arbitrary-daily")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := m.configureAPIProxy(endpoint.URL(), &endpoint); err != nil {
 		t.Fatal(err)
 	}
 	// This temporary route does not launch or require the bound core. Only the

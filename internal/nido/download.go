@@ -6,8 +6,6 @@ import (
 	"debug/buildinfo"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,82 +13,24 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/MiracleHYH/CDEToolkit/internal/githubdownload"
-	"github.com/MiracleHYH/CDEToolkit/internal/integrations/codex"
 	"github.com/MiracleHYH/CDEToolkit/internal/selfupdate"
 )
 
 func (m *Manager) githubPolicy(explicit string) (string, error) {
-	return githubdownload.Resolve(explicit, m.Env, m.Config.Download.GitHubProxy)
+	return m.networkPolicy(explicit, "")
 }
 
 func (m *Manager) setDownload(policy string) error {
-	if err := githubdownload.Validate(policy); err != nil {
+	config, err := normalizeDownload(policy)
+	if err != nil {
 		return err
 	}
-	return m.mutate(false, func() error {
-		if m.Config.Download.GitHubProxy == policy {
-			return nil
-		}
-		previous := m.Config
-		before := append([]byte(nil), m.configBytes...)
-		m.Config.Download.GitHubProxy = policy
-		if err := m.save(); err != nil {
-			if bytes.Equal(before, m.configBytes) {
-				m.Config = previous
-			}
-			return err
-		}
-		return nil
-	})
-}
-
-func (c *CLI) download(m *Manager, o cliOptions, args []string) int {
-	if len(args) == 1 && (args[0] == "configure" || args[0] == "set") {
-		return c.downloadConfigure(m, o)
+	current, err := m.savedNetwork()
+	if err != nil {
+		return err
 	}
-	if len(args) == 0 || len(args) == 1 && args[0] == "show" {
-		policy, err := m.githubPolicy("")
-		if err != nil {
-			return c.fail(err)
-		}
-		saved := m.Config.Download.GitHubProxy
-		if saved == "" {
-			saved = "auto (default)"
-		} else if err := githubdownload.Validate(saved); err != nil {
-			saved = "invalid; use download set to correct"
-		}
-		api, _, err := m.readAPIProxy()
-		if err != nil {
-			return c.fail(err)
-		}
-		address, state := "", "disabled"
-		if api.Listener != "" {
-			state = "configured"
-			address = "unavailable"
-			if endpoints, err := m.Proxy.ListenerEndpoints(); err == nil {
-				for _, endpoint := range endpoints {
-					if endpoint.Name == api.Listener && !endpoint.Authentication {
-						address = endpoint.URL()
-					}
-				}
-			}
-		}
-		return c.output(o, map[string]string{"saved": saved, "effective": policy, "api_state": state, "api_listener": api.Listener, "api_proxy": address})
-	}
-	if len(args) != 2 || args[0] != "set" || args[1] == "" {
-		return c.fail(fmt.Errorf("使用 download show 或 download set auto|direct|HTTPS前缀"))
-	}
-	if err := githubdownload.Validate(args[1]); err != nil {
-		return c.fail(err)
-	}
-	if o.dry {
-		return c.output(o, map[string]string{"operation": "download-set", "github_proxy": args[1]})
-	}
-	if err := m.setDownload(args[1]); err != nil {
-		return c.fail(err)
-	}
-	return c.output(o, map[string]string{"github_proxy": args[1], "detail": "仅用于 Nido 和内置组件的 GitHub 下载；不配置 Codex 或全局代理。"})
+	config.ProxyURL = current.ProxyURL
+	return m.setNetwork(config)
 }
 
 // This is an in-memory identity snapshot for one explicit update, not a
@@ -297,19 +237,17 @@ func (c *CLI) update(m *Manager, o cliOptions, args []string) int {
 	if len(args) != 0 || o.check && o.version != "" {
 		return c.fail(fmt.Errorf("使用 update [--check] 或 update --version X.Y.Z"))
 	}
-	policy, err := m.githubPolicy(o.githubProxy)
-	if err != nil {
-		return c.fail(err)
-	}
-	client := c.UpdateHTTP
-	if o.proxy != "" {
-		if err := codex.ValidateProxyURL(o.proxy); err != nil {
+	// Invalid explicit flags are still rejected offline. Saved routing and
+	// listener readiness matter only when an actual online operation is needed.
+	if o.githubProxy != "" {
+		if _, err := normalizeDownload(o.githubProxy); err != nil {
 			return c.fail(err)
 		}
-		u, _ := url.Parse(o.proxy)
-		transport := http.DefaultTransport.(*http.Transport).Clone()
-		transport.Proxy = http.ProxyURL(u)
-		client = &http.Client{Transport: transport}
+	}
+	if o.proxy != "" {
+		if _, err := m.generalProxyURL(o.proxy); err != nil {
+			return c.fail(err)
+		}
 	}
 	if o.version != "" && !selfupdate.ValidVersion(o.version) {
 		return c.fail(fmt.Errorf("版本必须是稳定版本 X.Y.Z"))
@@ -324,27 +262,41 @@ func (c *CLI) update(m *Manager, o cliOptions, args []string) int {
 	if o.version != "" && o.version != Version && !selfupdate.IsNewer(Version, o.version) {
 		return c.fail(fmt.Errorf("自身更新不支持降级；旧版本可能不兼容当前配置"))
 	}
+	if o.version == Version {
+		return c.output(o, selfupdate.Info{Current: Version, Latest: Version})
+	}
 	if o.dry {
-		return c.output(o, map[string]string{"operation": "update-nido", "root": m.Root, "github_proxy": policy, "version": o.version})
-	}
-	service := selfupdate.Service{HTTP: client, GitHubProxy: policy}
-	version := o.version
-	if version != "" {
-		if version == Version {
-			return c.output(o, selfupdate.Info{Current: Version, Latest: version})
+		config, err := m.resolveNetwork(o.githubProxy, o.proxy)
+		mode := config.GitHubAccelerate
+		if err != nil {
+			mode = "需要选择"
 		}
+		return c.output(o, map[string]string{"operation": "update-nido", "root": m.Root, "mode": mode, "version": o.version})
 	}
-	service.APIHTTP, err = m.downloadAPIClient(o.proxy)
+	service := selfupdate.Service{}
+	if c.uiSession != nil {
+		service.Ctx = c.uiSession.Context()
+	}
+	version := o.version
+	service.APIHTTP, err = m.networkAPIClient(o.githubProxy, o.proxy)
 	if err != nil {
 		return c.fail(err)
 	}
+	defer service.APIHTTP.CloseIdleConnections()
 	if version == "" {
 		info, err := service.Check(Version)
 		if err != nil {
 			return c.fail(err)
 		}
-		if o.check || !info.Available {
+		if o.check {
 			return c.output(o, info)
+		}
+		if !info.Available {
+			if o.json {
+				return c.output(o, info)
+			}
+			fmt.Fprintf(c.Out, "已是最新版本：Nido %s\n", info.Current)
+			return 0
 		}
 		version = info.Latest
 		fmt.Fprintf(c.Err, "Nido %s → %s\n", info.Current, version)
@@ -352,6 +304,18 @@ func (c *CLI) update(m *Manager, o cliOptions, args []string) int {
 	if err = c.confirm(o, "更新 Nido 程序，保留配置和组件"); err != nil {
 		return c.fail(err)
 	}
+	// Version metadata uses the general proxy independently of the file route.
+	// Resolve GitHub file acceleration only when the user confirms a download.
+	policy, err := m.networkPolicy(o.githubProxy, o.proxy)
+	if err != nil {
+		return c.fail(err)
+	}
+	client, err := m.networkHTTP(c.UpdateHTTP, o.githubProxy, o.proxy)
+	if err != nil {
+		return c.fail(err)
+	}
+	defer client.CloseIdleConnections()
+	service.HTTP, service.GitHubProxy = client, policy
 	if err = m.updateSelf(before, func() (selfupdate.Prepared, error) { return service.Prepare(version) }, nil); err != nil {
 		return c.fail(err)
 	}

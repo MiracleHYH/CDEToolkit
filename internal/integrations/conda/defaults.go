@@ -251,6 +251,9 @@ func validSnapshotVariables(values map[string]string, keys []string) bool {
 // failed all capture returns the original baseline so its caller can commit a
 // complete result once. Repeated captures never replace an existing baseline.
 func (s Service) CaptureDefaults(d MirrorDefaults, tool string) (MirrorDefaults, error) {
+	if s.Ctx != nil && s.Ctx.Err() != nil {
+		return d, s.Ctx.Err()
+	}
 	if tool != "conda" && tool != "pip" && tool != "all" {
 		return d, fmt.Errorf("默认镜像捕获工具仅支持 conda、pip 或 all")
 	}
@@ -261,6 +264,9 @@ func (s Service) CaptureDefaults(d MirrorDefaults, tool string) (MirrorDefaults,
 	if (tool == "conda" || tool == "all") && !d.CondaCaptured {
 		data, err := s.run("conda", "config", "--show", "channels", "default_channels", "custom_channels", "custom_multichannels", "channel_alias", "migrated_channel_aliases", "migrated_custom_channels", "--json")
 		if err != nil {
+			if s.Ctx != nil && s.Ctx.Err() != nil {
+				return d, s.Ctx.Err()
+			}
 			// An injected runner can return arbitrary diagnostics. The captured
 			// source may contain secrets, so keep the public error value-free.
 			return d, fmt.Errorf("无法读取 Conda 原始镜像配置；未保存 default 镜像")
@@ -276,6 +282,9 @@ func (s Service) CaptureDefaults(d MirrorDefaults, tool string) (MirrorDefaults,
 	if (tool == "pip" || tool == "all") && !d.PipCaptured {
 		data, err := s.run("python", "-m", "pip", "config", "list")
 		if err != nil {
+			if s.Ctx != nil && s.Ctx.Err() != nil {
+				return d, s.Ctx.Err()
+			}
 			return d, fmt.Errorf("无法读取当前 Python 的 pip 原始镜像配置；未保存 default 镜像")
 		}
 		options, err := pipOptions(data)

@@ -63,20 +63,20 @@ func proxyBootstrapLocal(t *testing.T, listener string) (*Manager, string) {
 		options cliOptions
 	}{
 		{"install", cliOptions{artifact: artifact, checksum: updateCLIHash(data), yes: true, json: true}},
-		{"configure", cliOptions{file: configuration, yes: true, json: true}},
 		{"start", cliOptions{yes: true, json: true}},
 	} {
+		if step.action == "start" {
+			if err := m.Proxy.Configure(configuration); err != nil {
+				t.Fatal(err)
+			}
+		}
 		var out, stderr bytes.Buffer
 		cli := CLI{Out: &out, Err: &stderr}
 		if code := cli.proxy(m, step.options, []string{step.action}); code != 0 {
 			t.Fatalf("local bootstrap %s failed: %s %s", step.action, out.String(), stderr.String())
 		}
 	}
-	endpointForAPI, err := m.Proxy.Endpoint("bootstrap-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := m.configureAPIProxy(endpointForAPI.URL(), &endpointForAPI); err != nil {
+	if err := m.setNetwork(DownloadConfig{GitHubAccelerate: GitHubAccelerateProxy, ProxyURL: listener}); err != nil {
 		t.Fatal(err)
 	}
 	if requests != 0 || runner.starts != 1 || runner.stops != 0 {
@@ -90,8 +90,8 @@ func proxyBootstrapLocal(t *testing.T, listener string) (*Manager, string) {
 	if err != nil || !bytes.Equal(installed, data) {
 		t.Fatalf("local core bytes changed: %v", err)
 	}
-	if m.Config.Download.GitHubProxy != "https://saved-file-only.invalid" {
-		t.Fatal("bootstrap changed the saved file-prefix policy")
+	if m.Config.Download.GitHubAccelerate != GitHubAccelerateProxy || m.Config.Download.ProxyURL != listener {
+		t.Fatal("explicit proxy route was not saved")
 	}
 	return m, home
 }
@@ -173,7 +173,7 @@ func proxyBootstrapTLS(t *testing.T, handler http.Handler) (*httptest.Server, *x
 		t.Fatal(err)
 	}
 	template := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "isolated official-name fixture"},
-		DNSNames: []string{"api.github.com", "github.com"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		DNSNames: []string{"api.github.com", "github.com", "gh-proxy.org"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
 		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true, IsCA: true}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, public, private)
@@ -362,7 +362,7 @@ func TestProxyBootstrapOfficialUpdateThroughConnect(t *testing.T) {
 				t.Error("explicit --proxy was ignored in favor of the injected client")
 				return nil, fmt.Errorf("explicit proxy required")
 			})}}
-			options := cliOptions{githubProxy: "direct", proxy: listener.URL, yes: true, json: true, check: scenario == "success"}
+			options := cliOptions{proxy: listener.URL, githubProxy: "proxy", yes: true, json: true, check: scenario == "success"}
 			if scenario == "success" {
 				if code := cli.update(m, options, nil); code != 0 || !strings.Contains(out.String(), `"available":true`) {
 					t.Fatalf("API check through CONNECT failed: %s %s", out.String(), stderr.String())

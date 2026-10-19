@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,21 +13,6 @@ import (
 	"github.com/MiracleHYH/CDEToolkit/internal/integrations/conda"
 	"go.yaml.in/yaml/v3"
 )
-
-type condaAuditConfirmationReader struct {
-	read   bool
-	onRead func()
-	answer string
-}
-
-func (r *condaAuditConfirmationReader) Read(p []byte) (int, error) {
-	if r.read {
-		return 0, io.EOF
-	}
-	r.read = true
-	r.onRead()
-	return copy(p, r.answer), nil
-}
 
 // Directory and pip operations must not reapply a selected Conda mirror over
 // native channel changes made after that mirror was enabled.
@@ -156,9 +140,9 @@ func TestCondaAuditCancelledFirstSwitchDoesNotPersistDefaultOrNativeChange(t *te
 		t.Fatal(err)
 	}
 	var out, stderr bytes.Buffer
-	c := CLI{In: strings.NewReader("n\n"), Out: &out, Err: &stderr, CondaRunner: originalMirrorRunner}
-	if c.Run([]string{"--root", m.Root, "conda", "mirror", "conda", "tuna"}) == 0 {
-		t.Fatal("cancelled first-use switch succeeded")
+	c := CLI{UI: newCondaUI(t, condaSelect("取消")), Out: &out, Err: &stderr, CondaRunner: originalMirrorRunner}
+	if c.Run([]string{"--root", m.Root, "conda", "mirror", "conda", "tuna"}) != 0 {
+		t.Fatal("cancelled first-use switch was treated as a failure", stderr.String())
 	}
 	if after, _ := os.ReadFile(filepath.Join(m.Root, "config.toml")); !bytes.Equal(beforeConfig, after) {
 		t.Fatal("cancelled first-use switch persisted a default")
@@ -238,14 +222,15 @@ func TestCondaAuditFirstDefaultReflectsOriginalAfterConfirmation(t *testing.T) {
 	}
 	afterConfirmation := false
 	later := []byte("# edited while confirmation was open\nchannels:\n  - https://later.example/channel\nssl_verify: true\n")
-	reader := &condaAuditConfirmationReader{answer: "y\n", onRead: func() {
+	confirm := condaAccept()
+	confirm.before = func() {
 		afterConfirmation = true
 		if err := os.WriteFile(native, later, 0600); err != nil {
 			t.Fatal(err)
 		}
-	}}
+	}
 	var out, stderr bytes.Buffer
-	c := CLI{In: reader, Out: &out, Err: &stderr, CondaRunner: func(name string, args, env []string) ([]byte, error) {
+	c := CLI{UI: newCondaUI(t, confirm), Out: &out, Err: &stderr, CondaRunner: func(name string, args, env []string) ([]byte, error) {
 		data, err := originalMirrorRunner(name, args, env)
 		if afterConfirmation {
 			data = bytes.ReplaceAll(data, []byte("original.example"), []byte("later.example"))

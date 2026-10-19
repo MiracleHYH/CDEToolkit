@@ -3,6 +3,7 @@
 package selfupdate
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -29,8 +30,9 @@ var releaseID = regexp.MustCompile(`^[1-9][0-9]*$`)
 
 type Service struct {
 	HTTP *http.Client
-	// APIHTTP, when set, is the explicit network route for release metadata.
-	// Metadata keeps its official URL and never uses GitHub file accelerators.
+	Ctx  context.Context
+	// APIHTTP, when set, is an already configured route for release metadata.
+	// Otherwise metadata follows the same explicit policy as release assets.
 	APIHTTP     *http.Client
 	GitHubProxy string
 	Platform    string
@@ -128,7 +130,7 @@ func (s Service) release(version string) (release, error) {
 	if s.APIHTTP != nil {
 		client, policy = s.APIHTTP, "direct"
 	}
-	b, err := githubdownload.Get(client, source, maxMetadata, policy)
+	b, err := githubdownload.GetContext(s.Ctx, client, source, maxMetadata, policy)
 	if err != nil {
 		return release{}, fmt.Errorf("获取 Nido 发布信息失败: %w", err)
 	}
@@ -175,7 +177,7 @@ func selectAsset(r release, name string, maximum int64) (asset, error) {
 }
 
 func (s Service) download(a asset, maximum int64) ([]byte, error) {
-	b, err := githubdownload.Get(s.HTTP, a.URL, maximum, s.GitHubProxy)
+	b, err := githubdownload.GetContext(s.Ctx, s.HTTP, a.URL, maximum, s.GitHubProxy)
 	if err != nil {
 		return nil, err
 	}

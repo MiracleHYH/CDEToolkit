@@ -1,6 +1,29 @@
-# GDS 组件审查
+# GDS 源码隔离与历史审查
 
-审查日期为 2026 年 10 月 18 日，最终核对基线为 `b214363`，其 GDS 相关源码与开始审查时的 `1000e96` 一致。初审时，新 Go CLI 只能管理可选程序文件，旧 Bash monitor 和 CUDA worker 属于另一条冻结实现。当前源码已按独立组件设计重建，初审发现的问题及原始验证范围保留于下方。后续目标见 [GDS 组件设计](gds-design.md)。
+GDS 自 2026 年 10 月 19 日起只保留 [独立模块源码](../standalone/gds/README.md)。当前 Nido 不注册 GDS，不提供 `nido gds`；根构建、测试、CI 与发行不接入 GDS。本轮不安装、迁移、清理既有部署，不自动发布，也不运行真实 GPU 或生产 GDS 元数据。
+
+以下“源码隔离记录”描述当前边界；其后全部为 2026 年 10 月 18 日各阶段的历史记录，命令、路径、“当前”及“最终”均指各自当时的基线。原审查最终核对基线为 `b214363`，其 GDS 相关源码与开始审查时的 `1000e96` 一致；公开发行基线另为下文的 `60a71a9`。历史修复和验收事实保留，不据此恢复当前 Nido 入口或宣称真实 GPU 已验收。技术设计见 [GDS 源码设计](gds-design.md)，资产出处见 [历史发行记录](gds-release.md)。
+
+## 源码隔离记录（2026-10-19）
+
+Go 实现、C 绑定与专属测试迁到 `standalone/gds`，模块名为 `github.com/MiracleHYH/CDEToolkit/standalone/gds`；原 `GDS_VERSION` 原样迁为模块内 `VERSION`。嵌套模块不加入根 `go.work`，不由根 require/replace 引用；开发检查在该目录显式使用 `GOWORK=off`。NVML 依赖和相关校验和归入独立模块，根 Nido 不再携带它。
+
+54 个原 GDS 源码与测试文件逐一对照迁移前 Git 基线，内容变化仅为 Go import 的模块前缀；保留的 `internal/githubdownload` 是为模块自包含复制的历史 helper，不随根 Nido 本轮下载三模式整改更新。组件管理服务保留为源码与测试对象，不向 Nido 注册命令。
+
+本轮使用已有本地 Go 1.23.0 和依赖缓存，设置 `GOTOOLCHAIN=local`、`GOWORK=off`、`GOPROXY=off`、`GOSUMDB=off`，完成以下检查：
+
+| 检查 | 结果与边界 |
+| --- | --- |
+| Darwin arm64、CGO0，`go test -run '^$' ./...` | 7 个包均通过编译检查，无匹配测试执行 |
+| Linux amd64、CGO0，逐包 `go test -c` | 7 个测试程序均交叉编译成功，未执行 |
+| Linux amd64、cgo，`go list -deps ./...` | 依赖可离线解析，NVML 仅属于独立模块；未编译或执行原生驱动路径 |
+| 模块与源码完整性 | 离线 `go mod tidy`、gofmt、差异检查通过；没有旧根模块 import 或 go.work |
+
+这些结果只证明迁移完整性、指定平台的测试编译与依赖解析。未重跑下文历史发行验收，未联网、SSH、提交或发布，未执行生产 GDS、元数据命令或真实 GPU 操作。
+
+普通用户 CPU 假驱动隔离入口迁至 [standalone/gds/tests/linux-native-isolation.sh](../standalone/gds/tests/linux-native-isolation.sh)，当前不接入根 CI 或 Make。它只显式运行内部 CPU/假驱动测试，`cmd/gds` 测试仅编译；生产程序只构建与静态检查，不执行元数据，不构建 Nido。旧公开发行 harness 归档为不可执行的 [gds-public-release-isolation.sh.txt](../standalone/gds/archive/gds-public-release-isolation.sh.txt)，发行构建脚本和工作流已移除。
+
+真实 GPU、兼容驱动组合、实际显存分配与释放、外部任务竞争和负载影响仍未验收。历史 CPU 结果与本轮编译检查均不能替代硬件验收。
 
 ## 公开发行补验（2026-10-18）
 
@@ -32,9 +55,9 @@
 
 以下保留发布前各阶段的历史记录，其中“未发布”描述对应当时的执行范围。
 
-## 实现与修复
+## 历史实现与修复
 
-当前源码增加 `internal/components/gds`、`internal/gdsapi`、`internal/gdsutil`、`internal/gdsruntime` 和独立 `cmd/gds`，删除仅承载 GDS 的旧 Go builtin 框架。Nido 管理层仍为纯 Go，NVML 与 CUDA Driver API 只进入独立 Linux amd64 cgo 组件。
+当时源码增加 `internal/components/gds`、`internal/gdsapi`、`internal/gdsutil`、`internal/gdsruntime` 和独立 `cmd/gds`，删除仅承载 GDS 的旧 Go builtin 框架。Nido 管理层保持纯 Go，NVML 与 CUDA Driver API 只进入独立 Linux amd64 cgo 组件。这些 GDS 路径现已整体迁入 `standalone/gds`。
 
 - UUID 贯穿配置、探针、worker 与记录，GPU 进程排除要求精确出生身份及新鲜列表中的本 worker PID。
 - CPU 状态机按本次连续有效观察累计空闲，忙、失效、观察空档和重启都重新计时。
@@ -46,7 +69,7 @@
 
 新实现不调用冻结 Shell，不向 Codex 全局 AGENTS 写入规则，也不迁移旧部署。旧脚本问题由退出新执行链处理，未声称历史脚本本身已被修复。真实 NVIDIA GPU 上的显存释放、驱动故障和负载影响尚未实测。
 
-## 实现后的隔离验证
+## 历史实现后的隔离验证
 
 验证日期为 2026 年 10 月 18 日。临时 HOME、软件根、假 NVML/CUDA 共享库和 CPU worker 均与现有安装分离，没有调用真实驱动或 GPU，没有注册系统服务、切换实际入口或发布。
 
@@ -59,9 +82,9 @@
 | 同一原生 Linux 全项目回归 | Codex、Nido、Proxy、distribution 均通过 race。首轮仅发现 runtime 的最终调度阶段被清理覆盖，修复后所有受影响 GDS 包重新通过上述完整 race；未把首轮失败描述为全绿 |
 | 同一原生 Linux 构建与 CLI | 独立 GDS cgo ELF 与 Nido 纯 Go 程序构建通过；临时 HOME 的 `tests/nido-cli-isolation.sh` 通过；GDS 元数据为 `0.1.0-dev`、协议 1，ELF 直接动态依赖仅 libc |
 
-原生 Linux 验证在新建的临时目录中离线执行：SDK 取自固定官方镜像，依赖由当前模块缓存生成 vendor；子进程只得到临时 HOME、TMPDIR、构建缓存与必要 PATH。主要命令为：
+当时原生 Linux 验证在新建的临时目录中离线执行：SDK 取自固定官方镜像，依赖由当时模块缓存生成 vendor；子进程只得到临时 HOME、TMPDIR、构建缓存与必要 PATH。主要命令如下，仅记录旧仓库布局，不作为当前执行入口：
 
-```sh
+```text
 go test -race -json -count=1 ./...
 go test -race -json -count=1 ./internal/gdsruntime ./internal/components/gds \
   ./internal/gdsutil ./internal/gdsapi ./internal/gdsruntime/nvidia ./cmd/gds
@@ -75,7 +98,7 @@ go test -race -json -count=1 ./internal/gdsruntime ./internal/components/gds \
 
 真实 GPU 验收仍包括：兼容驱动版本、真实显存余量、外部任务创建与分配竞争、GPU lost、释放延迟和长期资源开销。CPU 假库证明绑定与策略行为，不能替代这些检查。独立 GDS 发行源尚未建立，安装和更新只接收显式本地程序；日志在启动前轮转，不承诺连续运行时的硬大小上限。
 
-## 完整复审与普通用户补验
+## 历史完整复审与普通用户补验
 
 2026 年 10 月 18 日再次对 Go 实现逐层审计，并交叉检查组件、运行时和原生适配之间的身份与退出交接。本轮仅修改源码和运行 CPU 隔离测试。
 
@@ -96,7 +119,7 @@ go test -race -json -count=1 ./internal/gdsruntime ./internal/components/gds \
 
 `renameat2` 不可用时生产路径明确失败，不回退到可能覆盖文件的普通 rename。程序与安装凭证采用两次局部提交；中断导致摘要不匹配时拒绝继续执行，不自动接管或回滚。普通编辑器的迟到原子替换有恢复内容；不能保证同 UID 的非合作进程持有旧 FD，并在最后核验之后任意延迟写入的所有时序，也不将这些保护当作抵御同 UID 恶意代码的权限边界。
 
-原生补验入口为 `tests/gds-linux-native-isolation.sh`，由 `make check-gds-linux-native` 调用。它拒绝 root、非 Linux amd64、缺少 namespace 能力或已有证据目录；仅挂载只读公共源码、已有 SDK/编译工具以及新建的可写 work。测试环境拥有私有 PID、网络、最小 `/dev` 与 `/tmp`，没有宿主 HOME、服务 socket 或 GPU 设备。假 NVML/CUDA 测试通过包内入口注入路径，不提供生产环境变量后门。
+当时原生补验入口为 `tests/gds-linux-native-isolation.sh`，由 `make check-gds-linux-native` 调用；该路径和 Make 入口现已移除，迁移后的显式 CPU 入口见本页“源码隔离记录”。历史 harness 拒绝 root、非 Linux amd64、缺少 namespace 能力或已有证据目录；仅挂载只读公共源码、已有 SDK/编译工具以及新建的可写 work。测试环境拥有私有 PID、网络、最小 `/dev` 与 `/tmp`，没有宿主 HOME、服务 socket 或 GPU 设备。假 NVML/CUDA 测试通过包内入口注入路径，不提供生产环境变量后门。
 
 最终普通用户原生环境为 J66，UID 1001，Linux x86_64 6.8.0-124-generic，Go 1.23.12、GCC 13.3.0。SDK 仍取自上述固定官方镜像，依赖离线生成并经过 `go mod verify`。没有改动宿主 `/tmp` 权限、账号或系统配置。
 
@@ -123,7 +146,7 @@ go test -race -json -count=1 ./internal/gdsruntime ./internal/components/gds \
 
 Dev 最后记录发布 Nido v0.3.1；当前源码还包含之后独立完成的 Proxy 组件。已有版本发布和 Proxy 验证不构成 GDS 可用的证据。
 
-| 实现 | 当前能力 | 缺少的部分 |
+| 初审实现 | 初审时的能力 | 当时缺少的部分 |
 | --- | --- | --- |
 | `internal/builtin` | 本地 ELF/Mach-O 文件安装、更新、删除，少量进程记录处理 | 专用配置、GPU 探测、连续空闲判定、worker 管理、故障释放 |
 | `internal/nido` | 将 `nido gds` 分发至上述通用残留实现 | 专用命令与可解释的调度状态 |
@@ -133,7 +156,7 @@ Dev 最后记录发布 Nido v0.3.1；当前源码还包含之后独立完成的 
 
 `internal/builtin/manager.go:198` 的 `Start` 明确拒绝启动；安装后 `Status` 也明确报告调度未适配。这项拒绝是合理的保护，不能通过直接启动 CUDA worker 来补齐。
 
-## 旧调度实现的问题
+## 历史旧调度实现的问题
 
 以下 P1 问题会破坏设备选择、活动识别或资源让出；部分需要特定 GPU 环境触发。表中的硬件场景来自源码与 NVIDIA 接口语义推演，本轮没有运行真实 GPU 复现。
 
@@ -150,7 +173,7 @@ CUDA ordinal 会受可见设备列表和顺序影响，见 [CUDA 环境变量](h
 
 另外，当前只查询 compute apps，不能据此排除图形 context 等活动；无效配置静默回落默认值、worker 启动失败后缺少有界退避、持续 kernel 的功耗与竞争缺少真实测量，也不适合直接继承。
 
-## Go 程序管理的问题
+## 历史 Go 程序管理的问题
 
 | 级别 | 位置 | 已验证行为 | 修正方向 |
 | --- | --- | --- | --- |
@@ -160,7 +183,7 @@ CUDA ordinal 会受可见设备列表和顺序影响，见 [CUDA 环境变量](h
 
 现有锁缺少稳定路径与硬链接复核，进程身份也没有 boot ID。它们不足以作为新 GDS 的基础。Proxy 已实现更完整的局部文件和进程保护，但不应因此将两种组件合并为通用生命周期引擎。
 
-## 初审测试证据与缺口
+## 历史初审测试证据与缺口
 
 本轮使用现有 Go 1.27.2 工具链，在临时目录、假 Runner 与本地夹具范围执行：
 

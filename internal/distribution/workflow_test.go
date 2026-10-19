@@ -12,6 +12,58 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+func TestGDSRemainsOutsideRootBuildAndRelease(t *testing.T) {
+	root := filepath.Join("..", "..")
+	read := func(path string) string {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	modulePath := func(source string) string {
+		t.Helper()
+		for _, line := range strings.Split(source, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) == 2 && fields[0] == "module" {
+				return fields[1]
+			}
+		}
+		t.Fatal("missing module declaration")
+		return ""
+	}
+	rootModule := read("go.mod")
+	if standalone := modulePath(read("standalone/gds/go.mod")); standalone != modulePath(rootModule)+"/standalone/gds" {
+		t.Fatal("standalone GDS must declare its own module", standalone)
+	}
+	for _, path := range []string{"go.work", "GDS_VERSION", "cmd/gds", "internal/components/gds", "internal/gdsapi", "internal/gdsutil", "internal/gdsruntime", ".github/workflows/gds-release.yml", ".github/workflows/gds-release.yaml"} {
+		if _, err := os.Lstat(filepath.Join(root, path)); !os.IsNotExist(err) {
+			t.Fatal("root build or release must not rejoin standalone GDS", path, err)
+		}
+	}
+	for path, source := range map[string]string{
+		"go.mod":                        rootModule,
+		"go.sum":                        read("go.sum"),
+		"Makefile":                      read("Makefile"),
+		".github/workflows/check.yml":   read(".github/workflows/check.yml"),
+		".github/workflows/release.yml": read(".github/workflows/release.yml"),
+	} {
+		for _, line := range strings.Split(source, "\n") {
+			// Ignore comments while keeping require/replace paths, Make targets,
+			// workflow commands and environment variables inside the boundary.
+			comment := "#"
+			if path == "go.mod" {
+				comment = "//"
+			}
+			code := strings.ToLower(strings.SplitN(line, comment, 2)[0])
+			if strings.Contains(code, "gds") || strings.Contains(code, "nvidia/go-nvml") {
+				t.Fatal("root module and default pipelines must exclude GDS", path, line)
+			}
+		}
+	}
+}
+
 func TestCheckWorkflowCoversDeclaredMinimumAndPinnedGo(t *testing.T) {
 	module, err := os.ReadFile("../../go.mod")
 	if err != nil {
@@ -78,6 +130,9 @@ func TestReleaseWorkflowUsesExactTagAndNoPrivilegedRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	var workflow struct {
+		On struct {
+			Push struct{ Tags []string }
+		}
 		Jobs map[string]struct {
 			Steps []struct {
 				Run string
@@ -87,6 +142,9 @@ func TestReleaseWorkflowUsesExactTagAndNoPrivilegedRunner(t *testing.T) {
 	}
 	if err = yaml.Unmarshal(data, &workflow); err != nil {
 		t.Fatal(err)
+	}
+	if len(workflow.On.Push.Tags) != 1 || workflow.On.Push.Tags[0] != "v*" {
+		t.Fatal("Nido releases must use the v* tag namespace")
 	}
 	checks := 0
 	for _, step := range workflow.Jobs["release"].Steps {
@@ -141,108 +199,6 @@ func TestNidoReleasePlatformsAndBaseline(t *testing.T) {
 	for _, platform := range []string{"linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64"} {
 		if _, err := assetName(platform); err == nil {
 			t.Fatal("unsupported release platform accepted", platform)
-		}
-	}
-}
-
-func TestGDSReleaseWorkflowOnlyPublishesIndependentVerifiedAllowlist(t *testing.T) {
-	testPublisher(t, "gds-release.yml", "gds-v0.1.0", "--latest=false", []string{"dist/gds-linux-amd64", "dist/gds-linux-amd64.sha256"})
-}
-
-func TestIndependentReleaseTagsAndGDSChecks(t *testing.T) {
-	for _, file := range []string{"release.yml", "gds-release.yml"} {
-		data, err := os.ReadFile("../../.github/workflows/" + file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var workflow struct {
-			On struct {
-				Push struct{ Tags []string }
-			}
-			Jobs map[string]struct {
-				Steps []struct {
-					Run string
-					Env map[string]string
-				}
-			}
-		}
-		if err = yaml.Unmarshal(data, &workflow); err != nil {
-			t.Fatal(err)
-		}
-		want := "v*"
-		if file == "gds-release.yml" {
-			want = "gds-v*"
-		}
-		if len(workflow.On.Push.Tags) != 1 || workflow.On.Push.Tags[0] != want {
-			t.Fatal("release namespaces must remain disjoint", file)
-		}
-		if file != "gds-release.yml" {
-			continue
-		}
-		checks, isolation := 0, 0
-		for _, step := range workflow.Jobs["release"].Steps {
-			if strings.Contains(step.Run, "make release-check") || strings.Contains(step.Run, "make release\n") {
-				t.Fatal("GDS tag must not run the Nido release pipeline")
-			}
-			if strings.Contains(step.Run, "make gds-release-check") {
-				checks++
-				if step.Env["GDS_RELEASE_TAG"] != "${{ github.ref_name }}" || strings.Contains(step.Run, "${{ github.ref_name }}") || !strings.Contains(step.Run, "go mod verify") {
-					t.Fatal("GDS checks must receive the exact tag through environment after dependency verification")
-				}
-			}
-			if strings.Contains(step.Run, "make check-gds-linux-native") {
-				isolation++
-			}
-		}
-		if checks != 1 || isolation != 1 {
-			t.Fatal("GDS release must run native CPU fixture and ordinary user isolation gates")
-		}
-	}
-}
-
-func TestGDSWorkflowsPrepareOrdinaryRunnerNamespaces(t *testing.T) {
-	for _, item := range []struct{ file, job string }{{"check.yml", "gds-native"}, {"gds-release.yml", "release"}} {
-		data, err := os.ReadFile("../../.github/workflows/" + item.file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var workflow struct {
-			Jobs map[string]struct {
-				RunsOn string `yaml:"runs-on"`
-				Steps  []struct{ Run string }
-			}
-		}
-		if err = yaml.Unmarshal(data, &workflow); err != nil {
-			t.Fatal(err)
-		}
-		if workflow.Jobs[item.job].RunsOn != "ubuntu-22.04" {
-			t.Fatal("GDS namespace jobs require the verified compatible runner without changing host AppArmor policy", item.file)
-		}
-		prepared, isolation := -1, -1
-		for index, step := range workflow.Jobs[item.job].Steps {
-			if strings.Contains(step.Run, "make check-gds-linux-native") {
-				isolation = index
-			}
-			if !strings.Contains(step.Run, "apt-get install --yes --no-install-recommends bubblewrap") {
-				continue
-			}
-			if prepared >= 0 {
-				t.Fatal("ambiguous namespace preparation", item.file)
-			}
-			prepared = index
-			for _, required := range []string{`test "$GITHUB_ACTIONS" = true`, `test "$(id -u)" -ne 0`, "/usr/bin/bwrap --unshare-all", "--clearenv --cap-drop ALL", `test "$(/usr/bin/id -u)" -ne 0`} {
-				if !strings.Contains(step.Run, required) {
-					t.Fatal("missing ordinary-user namespace gate", item.file, required)
-				}
-			}
-			for _, forbidden := range []string{"sysctl", "aa-disable", "--privileged", "sudo /usr/bin/bwrap", "|| true"} {
-				if strings.Contains(step.Run, forbidden) {
-					t.Fatal("namespace checks may not disable restrictions or fall back", item.file, forbidden)
-				}
-			}
-		}
-		if prepared < 0 || isolation <= prepared {
-			t.Fatal("namespace preparation must precede native isolation", item.file)
 		}
 	}
 }

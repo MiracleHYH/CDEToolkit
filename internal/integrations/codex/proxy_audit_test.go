@@ -128,20 +128,6 @@ func TestProxyUndoRefusesMovedHomeWithSameEnvFile(t *testing.T) {
 	}
 }
 
-func TestProxyEnvExplicitEmptyProcessValuesOverrideDotenv(t *testing.T) {
-	s, home := fixture(t)
-	write(t, filepath.Join(home, ".env"), []byte("http_proxy=http://127.0.0.1:7890\nhttps_proxy=http://127.0.0.1:7891\nNO_PROXY=localhost\n"), 0600)
-	s.Env = append(s.Env, "HTTP_PROXY=http://127.0.0.1:8888", "http_proxy=", "HTTPS_PROXY=", "NO_PROXY=")
-	got, err := s.ProxyEnv(Config{Home: home})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]string{"http_proxy": "", "https_proxy": "", "no_proxy": ""}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("explicit empty values were lost: %#v", got)
-	}
-}
-
 func TestDotenvProxyUsesOnlySupportedLiteralAssignments(t *testing.T) {
 	content := []byte("# EXAMPLE='not a multiline value\nOTHER=\"multiline\nHTTP_PROXY=http://ignored:1234\n\"\nHttp_Proxy=http://case-sensitive-ignored:1234\nexport\thttp_proxy = 'http://user:$literal@localhost:7890'\nHTTPS_PROXY=http://localhost:7891\t# comment\nNO_PROXY= # deliberately empty\n")
 	got, err := dotenvProxy(content)

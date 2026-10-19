@@ -1,15 +1,11 @@
-# 旧 Bash 与历史 Go 实现边界
+# 已退役实现的边界
 
-> **本页说明历史源码的保留范围，不是旧入口的安装或迁移指引。** 新 Nido 不自动迁移旧 Bash 部署；已有真实入口、配置和运行数据不因源码修改或安装新版本而切换。
+Nido 的业务实现统一使用 Go。根目录旧 `install.sh`、`toolkit.sh`、Codex launcher、旧 `lib/`、`modules/`、Proxy/GDS Shell 后端、Python helper、系统服务模板与平台路径样例均已从当前源码移除。旧实现可通过 Git 历史查阅，不再提供安装入口或独立发布包。
 
-当前 Go CLI 位于 `internal/nido`，采用单一软件目录：Codex 属于外部辅助集成，Proxy、可选 GDS 属于内置组件。旧双目录 Go 核心已退出当前实现，不提供原地状态升级或目录迁入。
+`scripts/install.sh` 只保留自包含 Go 程序的解包、校验与调用模板，发行载荷由 Go 工具生成。安装选择全部由同一 Go 界面完成，不再保留下载前 Shell 问答。Go 生成的 `env.sh` 和受管 Shell 加载块属于环境接口；Codex 官方安装脚本属于上游接口。这些都不是第二套 Nido 业务后端。现代隔离验收脚本仍是测试脚手架，不进入发行包。
 
-- `toolkit.sh`、根 `install.sh`、`codex-launcher.sh`、Proxy/GDS 脚本与旧库冻结保留，可能仍被旧部署引用。它们不进入 Nido 包，不是新 Go CLI 的组件后端。
-- `scripts/install.sh` 是独立的 Nido POSIX 下载器，只下载 CLI 并初始化单目录，不调用根目录 Bash 安装器。
-- `scripts/check.sh` 转交 Make/Go；`scripts/public-audit.sh` 用于源码与历史审查。
-- GDS 始终显式可选。旧 CUDA 源码与模拟测试可以保留，不形成默认安装或服务启动。
-- 旧原地接管、双根清单、完整目录迁入、数据库路径检查、挂载重定位和事务回滚不再作为 Nido 协议提供。
+公开源码与历史凭据审查由 `go run ./cmd/nido-dist audit --repository .` 执行。内置检查只报告文件名，不输出命中的内容；安装 gitleaks 后额外执行临时源码快照与全 Git 历史的脱敏扫描。CI 必须安装 gitleaks，不能把本地未安装时的内置检查等同于完整凭据审查。可通过 `NIDO_PUBLIC_FORBIDDEN_PATTERN` 增加项目特定的禁止模式。
 
-保留源文件不表示允许修改真实服务。旧入口未来退役时，需要依据当时的部署引用独立处理，不能只因新 Go 不再依赖便删除用户运行中的文件。
+现行使用方式见 [使用指南](usage.md)、[Go 设计](go-design.md) 与[构建发行](go-ci-release.md)。[双目录审计](two-root-audit.md)、[更早安全审计](go-safety-audit.md) 及各历史发行记录只描述当时版本，不能作为当前操作指南。GDS 的保留源码不属于默认 Nido 编译、集成或发布内容。
 
-现行行为见 [设计说明](go-design.md)、[使用指南](usage.md) 和 [构建发行](go-ci-release.md)。[旧 Bash 使用说明](legacy-shell.md)、[双目录审计](two-root-audit.md) 与[更早安全审计](go-safety-audit.md) 仅是历史资料，不应作为 Nido 操作指南。
+本次移除仅涉及仓库源码，不检查、注销或删除任何开发机中可能仍存在的旧服务、Shell 注册、配置、认证、会话或运行数据。

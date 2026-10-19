@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -20,9 +21,58 @@ const maxConfig = 4 << 20
 // Config retains the exact bytes checked by the component. Full node and route
 // semantics are intentionally left to mihomo -t, rather than copied here.
 type Config struct {
-	Data      []byte     `json:"-"`
-	Digest    string     `json:"digest"`
-	Endpoints []Endpoint `json:"endpoints"`
+	Data       []byte            `json:"-"`
+	Digest     string            `json:"digest"`
+	Endpoints  []Endpoint        `json:"endpoints"`
+	Controller *ControllerConfig `json:"controller,omitempty"`
+}
+
+// ControllerConfig contains only the local controller authority and its
+// bearer secret. The secret never appears in ordinary configuration JSON.
+type ControllerConfig struct {
+	Address string `json:"address"`
+	Secret  string `json:"-"`
+}
+
+// Digest binds controller authorization without persisting the bearer secret.
+// ParseConfig canonicalizes Address before exposing a ControllerConfig.
+func (c ControllerConfig) Digest() string {
+	return hash([]byte(c.Address + "\x00" + c.Secret))
+}
+
+func validatedController(c ControllerConfig) (ControllerConfig, error) {
+	_, portText, splitErr := net.SplitHostPort(c.Address)
+	if splitErr != nil || portText == "" || strings.IndexFunc(portText, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+		return ControllerConfig{}, fmt.Errorf("Proxy controller 必须使用字面回环地址和有效端口")
+	}
+	host, port, err := localAddress(c.Address)
+	if err != nil {
+		return ControllerConfig{}, fmt.Errorf("Proxy controller 必须使用字面回环地址和有效端口")
+	}
+	if !utf8.ValidString(c.Secret) || strings.TrimSpace(c.Secret) == "" || len(c.Secret) > 4096 || strings.ContainsFunc(c.Secret, unicode.IsControl) {
+		return ControllerConfig{}, fmt.Errorf("Proxy controller 必须配置有效的非空 secret")
+	}
+	c.Address = net.JoinHostPort(host, strconv.Itoa(port))
+	return c, nil
+}
+
+func configController(root *yaml.Node) (*ControllerConfig, error) {
+	address, err := stringValue(field(root, "external-controller"), "")
+	if err != nil {
+		return nil, fmt.Errorf("Proxy controller 地址无效")
+	}
+	if address == "" {
+		return nil, nil
+	}
+	secret, err := stringValue(field(root, "secret"), "")
+	if err != nil {
+		return nil, fmt.Errorf("Proxy controller 必须配置有效的非空 secret")
+	}
+	controller, err := validatedController(ControllerConfig{Address: address, Secret: secret})
+	if err != nil {
+		return nil, err
+	}
+	return &controller, nil
 }
 
 func (s *Service) ConfigPath() (string, error) {
@@ -84,7 +134,18 @@ func ParseConfig(data []byte, rootDir string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	config := Config{Data: bytes.Clone(data), Digest: hash(data), Endpoints: endpoints}
+	controller, err := configController(root)
+	if err != nil {
+		return Config{}, err
+	}
+	if controller != nil {
+		for _, endpoint := range endpoints {
+			if net.JoinHostPort(endpoint.Host, strconv.Itoa(endpoint.Port)) == controller.Address {
+				return Config{}, fmt.Errorf("Proxy controller 不能与代理入口监听同一地址和端口")
+			}
+		}
+	}
+	config := Config{Data: bytes.Clone(data), Digest: hash(data), Endpoints: endpoints, Controller: controller}
 	for i := range config.Endpoints {
 		config.Endpoints[i].ConfigDigest = config.Digest
 	}
@@ -140,19 +201,6 @@ func checkLocalPolicy(root *yaml.Node, rootDir string) error {
 			if _, _, err := localAddress(listen); err != nil {
 				return fmt.Errorf("Proxy DNS 必须使用字面回环地址和有效端口")
 			}
-		}
-	}
-	controller, err := stringValue(field(root, "external-controller"), "")
-	if err != nil {
-		return fmt.Errorf("Proxy controller 地址无效")
-	}
-	if controller != "" {
-		if _, _, err := localAddress(controller); err != nil {
-			return fmt.Errorf("Proxy controller 必须使用字面回环地址和有效端口")
-		}
-		secret, err := stringValue(field(root, "secret"), "")
-		if err != nil || strings.TrimSpace(secret) == "" || strings.ContainsFunc(secret, unicode.IsControl) {
-			return fmt.Errorf("Proxy controller 必须配置非空 secret")
 		}
 	}
 	for _, name := range []string{"proxy-providers", "rule-providers"} {
@@ -324,7 +372,7 @@ func resourcePath(node *yaml.Node, root string) error {
 		return fmt.Errorf("Proxy 资源必须使用组件根内的相对路径")
 	}
 	first, _, _ := strings.Cut(filepath.Clean(path), string(filepath.Separator))
-	for _, reserved := range []string{"mihomo", "config.yaml", "process.json", "output.log", ".lock"} {
+	for _, reserved := range []string{"mihomo", "config.yaml", "config.yaml.back", "process.json", "output.log", ".lock", "meta-update", "meta-backup"} {
 		if strings.EqualFold(first, reserved) {
 			return fmt.Errorf("Proxy 资源不能覆盖组件受管文件")
 		}

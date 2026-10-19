@@ -32,7 +32,7 @@ func TestDownloadConfigurationIsScopedAndPersistent(t *testing.T) {
 		}
 	}
 	m, err := New(m.Root)
-	if err != nil || m.Config.Download.GitHubProxy != "https://mirror.example/gh" {
+	if err != nil || m.Config.Download.GitHubAccelerate != "https://mirror.example/gh" {
 		t.Fatalf("saved download configuration: %v", err)
 	}
 	before, _ := os.ReadFile(filepath.Join(m.Root, "config.toml"))
@@ -42,7 +42,7 @@ func TestDownloadConfigurationIsScopedAndPersistent(t *testing.T) {
 	if after, _ := os.ReadFile(filepath.Join(m.Root, "config.toml")); !bytes.Equal(after, before) {
 		t.Fatal("reinstall changed a saved download preference")
 	}
-	for _, policy := range []string{"auto", "direct", "https://custom.example/prefix"} {
+	for _, policy := range []string{"direct", "https://custom.example/prefix"} {
 		code, _, stderr := isolatedCLI(t, m, []string{"download", "set", policy}, "", nil)
 		if code != 0 {
 			t.Fatal(stderr)
@@ -77,11 +77,11 @@ func TestDownloadShowPrintsSavedAndEffectivePolicies(t *testing.T) {
 	}
 	t.Setenv("NIDO_GITHUB_PROXY", "direct")
 	code, out, stderr := isolatedCLI(t, m, []string{"download", "show"}, "", nil)
-	if code != 0 || !strings.Contains(out, "saved: https://saved.example/gh\n") || !strings.Contains(out, "effective: direct\n") {
+	if code != 0 || !strings.Contains(out, "github_accelerate: https://saved.example/gh\n") {
 		t.Fatalf("download show is incomplete: %d %q %q", code, out, stderr)
 	}
-	code, out, stderr = isolatedCLI(t, m, []string{"download", "set", "auto", "--dry-run"}, "", nil)
-	if code != 0 || !strings.Contains(out, "github_proxy: auto\n") {
+	code, out, stderr = isolatedCLI(t, m, []string{"download", "set", "DIRECT", "--dry-run"}, "", nil)
+	if code != 0 || !strings.Contains(out, "github_accelerate: none\n") {
 		t.Fatalf("download preview omitted policy: %d %q %q", code, out, stderr)
 	}
 }
@@ -105,7 +105,7 @@ func TestMalformedSavedDownloadPolicyDoesNotBlockIndependentOperations(t *testin
 		t.Fatal(err)
 	}
 	t.Setenv("NIDO_GITHUB_PROXY", "not-an-environment-prefix")
-	for _, args := range [][]string{{"status"}, {"env"}, {"path"}, {"proxy", "status"}, {"gds", "status"}} {
+	for _, args := range [][]string{{"status"}, {"env"}, {"path"}, {"proxy", "status"}} {
 		if code, _, stderr := isolatedCLI(t, m, args, "", nil); code != 0 {
 			t.Fatalf("download policy blocked independent operation %v: %s", args, stderr)
 		}
@@ -130,14 +130,14 @@ func TestMalformedSavedDownloadPolicyDoesNotBlockIndependentOperations(t *testin
 	if after, _ := os.ReadFile(configPath); !bytes.Equal(after, config) {
 		t.Fatal("independent operation repaired or rewrote configuration")
 	}
-	if code, _, _ := isolatedCLI(t, m, []string{"download", "show"}, "", nil); code == 0 {
+	if code, out, _ := isolatedCLI(t, m, []string{"download", "show"}, "", nil); code != 0 || !strings.Contains(out, "需要配置") {
 		t.Fatal("invalid effective policy was silently accepted")
 	}
 	if code, _, stderr := isolatedCLI(t, m, []string{"download", "set", "direct"}, "", nil); code != 0 {
 		t.Fatal("cannot correct malformed preference", stderr)
 	}
 	loaded, err := New(m.Root)
-	if err != nil || loaded.Config.Download.GitHubProxy != "direct" {
+	if err != nil || loaded.Config.Download.GitHubAccelerate != "none" {
 		t.Fatal("corrected preference was not saved", err)
 	}
 }
@@ -157,11 +157,11 @@ func TestDownloadPreferenceCanRetryAfterPreservingUserEnvironmentEdit(t *testing
 			}
 			set := func() error {
 				if reinstall {
-					return m.InitWithDownload("auto")
+					return m.InitWithDownload("https://custom.example")
 				}
-				return m.setDownload("auto")
+				return m.setDownload("https://custom.example")
 			}
-			if err := set(); err == nil || m.Config.Download.GitHubProxy != "direct" {
+			if err := set(); err == nil || m.Config.Download.GitHubAccelerate != "none" {
 				t.Fatal("failed save lost its previous preference", err)
 			}
 			if actual, _ := os.ReadFile(path); !bytes.Equal(actual, modified) {
@@ -174,7 +174,7 @@ func TestDownloadPreferenceCanRetryAfterPreservingUserEnvironmentEdit(t *testing
 				t.Fatal("retry failed", err)
 			}
 			loaded, err := New(m.Root)
-			if err != nil || loaded.Config.Download.GitHubProxy != "auto" {
+			if err != nil || loaded.Config.Download.GitHubAccelerate != "https://custom.example" {
 				t.Fatal("retry did not persist its preference", err)
 			}
 		})

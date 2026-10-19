@@ -3,392 +3,263 @@ package nido
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
-	"sync/atomic"
 	"testing"
+	"time"
 
-	"github.com/MiracleHYH/CDEToolkit/internal/components/gds"
-	"github.com/MiracleHYH/CDEToolkit/internal/components/proxy"
-	"github.com/MiracleHYH/CDEToolkit/internal/gdsapi"
+	"github.com/MiracleHYH/CDEToolkit/internal/githubdownload"
 )
 
 type apiGateReader struct{ reads int }
 
-func (r *apiGateReader) Read([]byte) (int, error) {
-	r.reads++
-	return 0, io.EOF
-}
+func (r *apiGateReader) Read([]byte) (int, error) { r.reads++; return 0, io.EOF }
 
-type apiGateProxyRunner struct {
-	cliProxyRunner
-	inspects, ownership int
-}
-
-func (r *apiGateProxyRunner) Inspect(int) (proxy.Process, error) {
-	r.inspects++
-	return proxy.Process{}, os.ErrNotExist
-}
-
-func (r *apiGateProxyRunner) OwnsEndpoint(proxy.Process, string) (bool, error) {
-	r.ownership++
-	return false, nil
-}
-
-type apiGateGDSRunner struct{ runs, starts, inspects, stops int }
-
-func (r *apiGateGDSRunner) Run(gds.Command) ([]byte, error) {
-	r.runs++
-	return nil, fmt.Errorf("disabled API must not execute GDS")
-}
-
-func (r *apiGateGDSRunner) Start(gds.Command, func(gdsapi.Process) error) (gdsapi.Process, <-chan error, error) {
-	r.starts++
-	return gdsapi.Process{}, nil, fmt.Errorf("disabled API must not start GDS")
-}
-
-func (r *apiGateGDSRunner) Inspect(int) (gdsapi.Process, error) {
-	r.inspects++
-	return gdsapi.Process{}, os.ErrNotExist
-}
-
-func (r *apiGateGDSRunner) Stop(gdsapi.Process) error {
-	r.stops++
-	return fmt.Errorf("disabled API must not stop GDS")
-}
-
-func apiGateFixture(t *testing.T, emptyBinding bool, binary []byte) (*Manager, string) {
-	t.Helper()
+func TestNetworkRoutesAreExclusiveAndDirectIgnoresAmbientProxy(t *testing.T) {
 	m, home := fixture(t)
-	if err := m.InitWithDownload("https://saved-file-only.invalid"); err != nil {
+	if err := m.Init(); err != nil {
 		t.Fatal(err)
 	}
-	if emptyBinding {
-		if err := os.WriteFile(filepath.Join(m.Root, apiProxyFile), []byte("schema=1\nproduct='nido-api-proxy'\nlistener=''\n"), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for relative, data := range map[string]string{
-		".gitconfig":           "[user]\n name = Original Fixture User\n",
-		".condarc":             "ssl_verify: /original/cert.pem\nchannels: [original]\n",
-		".config/pip/pip.conf": "[global]\nindex-url = https://original.invalid/simple\n",
-		"codex/.env":           "HTTPS_PROXY=http://original.invalid:7890\n",
-		"codex/auth.json":      "ORIGINAL AUTH DATA\n", "codex/state.sqlite": "ORIGINAL STATE\n",
-		"codex/sessions/session.jsonl": "ORIGINAL SESSION\n",
+	before := proxyBootstrapSnapshot(t, "", m.Root, home)
+	for _, invalid := range []DownloadConfig{
+		{GitHubAccelerate: "auto"}, {GitHubAccelerate: "proxy"},
+		{GitHubAccelerate: "https://user:secret@invalid"},
+		{GitHubAccelerate: "none", ProxyURL: "ftp://127.0.0.1:1"},
+		{GitHubAccelerate: "none", Mode: NetworkDirect},
+		{Mode: NetworkProxy, Listener: "one"},
 	} {
-		path := filepath.Join(home, relative)
-		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
-			t.Fatal(err)
+		if err := m.setNetwork(invalid); err == nil {
+			t.Fatal("invalid network setting accepted", invalid)
 		}
 	}
-	if err := os.Mkdir(filepath.Join(m.Root, "proxy"), 0700); err != nil {
-		t.Fatal(err)
+	if !reflect.DeepEqual(before, proxyBootstrapSnapshot(t, "", m.Root, home)) {
+		t.Fatal("validation changed files")
 	}
-	writeBindingListeners(t, m, bindingListeners)
-	m.Config.Codex.Home = filepath.Join(home, "codex")
-	m.GDS.Platform = "linux/amd64"
-	program := filepath.Join(m.Root, "bin", "nido")
-	if err := os.WriteFile(program, binary, 0755); err != nil {
-		t.Fatal(err)
+	base := &http.Transport{Proxy: func(*http.Request) (*url.URL, error) { t.Fatal("ambient proxy was consulted"); return nil, nil }, TLSClientConfig: &tls.Config{InsecureSkipVerify: true, ServerName: "wrong.invalid"}}
+	previous := http.DefaultTransport
+	http.DefaultTransport = base
+	t.Cleanup(func() { http.DefaultTransport = previous })
+	for _, accelerate := range []string{"none", "https://gh-proxy.org"} {
+		if err := m.setNetwork(DownloadConfig{GitHubAccelerate: accelerate, ProxyURL: "http://127.0.0.1:1"}); err != nil {
+			t.Fatal(err)
+		}
+		client, err := m.networkHTTP(nil, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.CloseIdleConnections()
+		transport := client.Transport.(apiBindingTransport).base.(*http.Transport)
+		if transport.Proxy != nil || transport.TLSClientConfig.InsecureSkipVerify || transport.TLSClientConfig.ServerName != "" {
+			t.Fatal("direct or prefix inherited proxy/unsafe TLS")
+		}
 	}
-	m.Executable = program
-	var err error
-	m.executableInfo, err = os.Stat(program)
-	if err != nil {
-		t.Fatal(err)
+	if base.Proxy == nil || !base.TLSClientConfig.InsecureSkipVerify || base.TLSClientConfig.ServerName != "wrong.invalid" {
+		t.Fatal("shared transport was modified")
 	}
-	return m, home
 }
 
-func TestAPIGateDisabledBlocksEveryOnlineEntryPoint(t *testing.T) {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("managed self-update identity fixture targets isolated Linux amd64")
-	}
-	// This builds format-valid managed identities without executing a candidate.
-	// All component runners and network paths below are counted private fakes.
-	binary := updateCLIBinaries(t)["0.5.0"]
-	previousVersion := Version
-	Version = "0.5.0"
-	t.Cleanup(func() { Version = previousVersion })
-	for _, mode := range []string{"missing-binding", "empty-listener"} {
-		t.Run(mode, func(t *testing.T) {
-			m, home := apiGateFixture(t, mode == "empty-listener", binary)
-			var httpCalls, dialCalls atomic.Int32
-			client := &http.Client{Transport: updateCLITransport(func(*http.Request) (*http.Response, error) {
-				httpCalls.Add(1)
-				return nil, fmt.Errorf("disabled API must not issue HTTP requests")
-			})}
-			transport := &http.Transport{Proxy: http.ProxyFromEnvironment, DialContext: func(context.Context, string, string) (net.Conn, error) {
-				dialCalls.Add(1)
-				return nil, fmt.Errorf("disabled API must not connect to a network")
+// API traffic always uses the official endpoint and the independent general
+// Proxy. An invalid file prefix cannot block or rewrite this request.
+func TestNetworkGitHubPrefixNeverRoutesAPI(t *testing.T) {
+	for _, status := range []int{200, 503} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			m, home := fixture(t)
+			if err := m.InitWithDownload("https://gh-proxy.org"); err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			origin, certificate := proxyBootstrapTLS(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.Host != "api.github.com" || r.TLS.ServerName != "api.github.com" || r.URL.Path != "/repos/a/b/releases/latest" {
+					t.Error("API was accelerated", r.Host, r.URL)
+				}
+				w.WriteHeader(status)
+				_, _ = io.WriteString(w, `{"tag_name":"v1.2.3"}`)
+			}))
+			pool := x509.NewCertPool()
+			pool.AddCert(certificate)
+			transport := &http.Transport{Proxy: http.ProxyFromEnvironment, TLSClientConfig: &tls.Config{RootCAs: pool}, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				if address != "api.github.com:443" {
+					return nil, fmt.Errorf("unexpected API route")
+				}
+				return (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "tcp", origin.Listener.Addr().String())
 			}}
-			previousTransport := http.DefaultTransport
+			previous := http.DefaultTransport
 			http.DefaultTransport = transport
-			t.Cleanup(func() { http.DefaultTransport = previousTransport; transport.CloseIdleConnections() })
-			pristineEnv := append([]string(nil), m.Env...)
-			for _, attempt := range []struct {
-				name, explicitProxy, githubProxy string
-				environmentProxy                 bool
-				environmentGitHub                bool
-			}{
-				{name: "saved-file-prefix"},
-				{name: "environment-network-proxy", environmentProxy: true},
-				{name: "explicit-network-proxy", explicitProxy: "http://127.0.0.1:1"},
-				{name: "explicit-github-direct", githubProxy: "direct"},
-				{name: "explicit-file-prefix", githubProxy: "https://explicit-file-only.invalid"},
-				{name: "environment-github-prefix", environmentGitHub: true},
-				{name: "combined-overrides", explicitProxy: "socks5h://127.0.0.1:1", githubProxy: "https://explicit-file-only.invalid", environmentProxy: true, environmentGitHub: true},
-			} {
-				t.Run(attempt.name, func(t *testing.T) {
-					m.Env = append([]string(nil), pristineEnv...)
-					if attempt.environmentGitHub {
-						m.Env = append(m.Env, "NIDO_GITHUB_PROXY=https://environment-file-only.invalid")
-					}
-					if attempt.environmentProxy {
-						for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
-							t.Setenv(key, "http://127.0.0.1:1")
-							m.Env = append(m.Env, key+"=http://127.0.0.1:1")
-						}
-					}
-					if got, err := m.downloadAPIClient(attempt.explicitProxy); got != nil || !errors.Is(err, ErrAPIDisabled) {
-						t.Fatalf("override enabled disabled API client: client=%v err=%v", got, err)
-					}
-					for _, operation := range []struct {
-						name, component string
-						args            []string
-						options         cliOptions
-					}{
-						{name: "nido-check", component: "nido", options: cliOptions{check: true}},
-						{name: "nido-update", component: "nido"},
-						{name: "nido-pinned-update", component: "nido", options: cliOptions{version: "0.6.0"}},
-						{name: "proxy-install", component: "proxy", args: []string{"install"}},
-						{name: "proxy-install-artifact-latest", component: "proxy", args: []string{"install"}, options: cliOptions{artifact: "latest"}},
-						{name: "proxy-update", component: "proxy", args: []string{"update"}},
-						{name: "proxy-update-artifact-latest", component: "proxy", args: []string{"update"}, options: cliOptions{artifact: "latest"}},
-						{name: "proxy-check", component: "proxy", args: []string{"update"}, options: cliOptions{check: true}},
-						{name: "gds-install", component: "gds", args: []string{"install"}},
-						{name: "gds-install-latest", component: "gds", args: []string{"install", "latest"}},
-						{name: "gds-install-pinned", component: "gds", args: []string{"install", "0.1.0"}},
-						{name: "gds-update", component: "gds", args: []string{"update"}},
-						{name: "gds-update-latest", component: "gds", args: []string{"update", "latest"}},
-						{name: "gds-update-pinned", component: "gds", args: []string{"update", "gds-v0.1.0"}},
-						{name: "gds-check", component: "gds", args: []string{"update"}, options: cliOptions{check: true}},
-						{name: "codex-check", component: "codex", args: []string{"update"}, options: cliOptions{check: true}},
-					} {
-						t.Run(operation.name, func(t *testing.T) {
-							proxyRunner := &apiGateProxyRunner{}
-							gdsRunner := &apiGateGDSRunner{}
-							var codexRuns int
-							m.Proxy.Runner, m.Proxy.HTTP = proxyRunner, client
-							m.GDS.Runner, m.GDS.HTTP = gdsRunner, client
-							m.Codex.Run = func(string, []string, []string, []byte) ([]byte, error) {
-								codexRuns++
-								return nil, fmt.Errorf("disabled API must not execute Codex or curl")
-							}
-							reader := &apiGateReader{}
-							var out, stderr bytes.Buffer
-							cli := CLI{In: reader, Out: &out, Err: &stderr, UpdateHTTP: client}
-							options := operation.options
-							options.proxy, options.githubProxy, options.json = attempt.explicitProxy, attempt.githubProxy, true
-							if operation.component == "codex" {
-								// --github-proxy does not apply to Codex commands;
-								// environment overrides still remain in this case.
-								options.githubProxy = ""
-							}
-							before := proxyBootstrapSnapshot(t, "", m.Root, home)
-							code := 0
-							switch operation.component {
-							case "nido":
-								code = cli.update(m, options, nil)
-							case "proxy":
-								code = cli.proxy(m, options, operation.args)
-							case "gds":
-								code = cli.gds(m, options, operation.args)
-							case "codex":
-								code = cli.codex(m, options, operation.args)
-							}
-							if code == 0 || !strings.Contains(stderr.String(), ErrAPIDisabled.Error()) {
-								t.Fatalf("online entry point bypassed API gate: code=%d stdout=%s stderr=%s", code, out.String(), stderr.String())
-							}
-							if httpCalls.Load() != 0 || dialCalls.Load() != 0 || reader.reads != 0 || len(proxyRunner.commands) != 0 || proxyRunner.starts != 0 || proxyRunner.stops != 0 || proxyRunner.inspects != 0 || proxyRunner.ownership != 0 || *gdsRunner != (apiGateGDSRunner{}) || codexRuns != 0 {
-								t.Fatalf("disabled API attempted HTTP, confirmation or execution: HTTP=%d dials=%d reads=%d proxy=%+v gds=%+v codex=%d", httpCalls.Load(), dialCalls.Load(), reader.reads, proxyRunner, gdsRunner, codexRuns)
-							}
-							if !reflect.DeepEqual(before, proxyBootstrapSnapshot(t, "", m.Root, home)) {
-								t.Fatal("disabled API changed a program, binding, configuration or user data")
-							}
-						})
-					}
-				})
+			t.Cleanup(func() { transport.CloseIdleConnections(); http.DefaultTransport = previous })
+			t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+			before := proxyBootstrapSnapshot(t, "", m.Root, home)
+			client, err := m.downloadAPIClient("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.CloseIdleConnections()
+			data, err := githubdownload.Get(client, "https://api.github.com/repos/a/b/releases/latest", 4096, "direct")
+			if (err == nil) != (status == 200) || calls != 1 {
+				t.Fatal("API failed or fell back", string(data), calls, err)
+			}
+			if !reflect.DeepEqual(before, proxyBootstrapSnapshot(t, "", m.Root, home)) {
+				t.Fatal("query changed files")
 			}
 		})
 	}
 }
 
-func TestAPIGateReadOnlyDisabledAndOffState(t *testing.T) {
-	t.Setenv("NIDO_GITHUB_PROXY", "direct")
-	m, home := fixture(t)
-	if err := m.Init(); err != nil {
-		t.Fatal(err)
-	}
-	var httpCalls, dialCalls atomic.Int32
-	client := &http.Client{Transport: updateCLITransport(func(*http.Request) (*http.Response, error) {
-		httpCalls.Add(1)
-		return nil, fmt.Errorf("local API state must not issue HTTP requests")
-	})}
-	transport := &http.Transport{DialContext: func(context.Context, string, string) (net.Conn, error) {
-		dialCalls.Add(1)
-		return nil, fmt.Errorf("local API state must not dial a network")
-	}}
-	previousTransport := http.DefaultTransport
-	http.DefaultTransport = transport
-	t.Cleanup(func() { http.DefaultTransport = previousTransport; transport.CloseIdleConnections() })
-	proxyRunner, gdsRunner := &apiGateProxyRunner{}, &apiGateGDSRunner{}
-	var codexRuns int
-	run := func(args ...string) (int, string, string) {
-		t.Helper()
-		var out, stderr bytes.Buffer
-		cli := CLI{Out: &out, Err: &stderr, ProxyRunner: proxyRunner, GDSRunner: gdsRunner, UpdateHTTP: client, GDSHTTP: client,
-			Runner: func(string, []string, []string, []byte) ([]byte, error) {
-				codexRuns++
-				return nil, fmt.Errorf("local API state must not execute Codex or curl")
-			}}
-		code := cli.Run(append([]string{"--root", m.Root}, args...))
-		return code, out.String(), stderr.String()
-	}
-	show := func(wantState string) {
-		t.Helper()
-		before := proxyBootstrapSnapshot(t, "", m.Root, home)
-		code, out, stderr := run("download", "show", "--json")
-		var state map[string]string
-		if code != 0 || json.Unmarshal([]byte(out), &state) != nil || state["api_state"] != wantState {
-			t.Fatalf("local API state: want=%s code=%d stdout=%s stderr=%s", wantState, code, out, stderr)
+func TestNetworkOldSidecarIsUnownedAndNeverRead(t *testing.T) {
+	for _, contents := range []string{"USER DATA", "schema=1\nproduct='nido-api-proxy'\nlistener='old-api'\n"} {
+		m, home := fixture(t)
+		if err := m.Init(); err != nil {
+			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(before, proxyBootstrapSnapshot(t, "", m.Root, home)) {
-			t.Fatal("download show changed local files")
+		path := filepath.Join(m.Root, apiProxyFile)
+		if err := os.WriteFile(path, []byte(contents), 0644); err != nil {
+			t.Fatal(err)
 		}
-	}
-	checkDisabledReadOnly := func() {
-		t.Helper()
-		// This fixture has no linked external tool or installed component. Its
-		// owned environment, download preference and static component status
-		// must be healthy before asserting that disabled API is not a fault.
-		if err := m.checkEnv(); err != nil {
-			t.Fatalf("doctor fixture has an unrelated environment issue: %v", err)
+		configPath := filepath.Join(m.Root, "config.toml")
+		before := proxyBootstrapSnapshot(t, configPath, m.Root, home)
+		if err := m.setNetwork(DownloadConfig{GitHubAccelerate: "none", ProxyURL: "http://127.0.0.1:1"}); err != nil {
+			t.Fatal(err)
 		}
-		if _, err := m.githubPolicy(""); err != nil {
-			t.Fatalf("doctor fixture has an unrelated download issue: %v", err)
+		if got, _ := os.ReadFile(path); string(got) != contents {
+			t.Fatal("unowned sidecar was changed")
 		}
-		for _, row := range m.Status() {
-			if row.Detail != "" {
-				t.Fatalf("doctor fixture has an unrelated %s issue: %s", row.Name, row.Detail)
-			}
+		if !reflect.DeepEqual(before, proxyBootstrapSnapshot(t, configPath, m.Root, home)) {
+			t.Fatal("network settings modified other data")
 		}
-		show("disabled")
-		for _, command := range []string{"status", "doctor"} {
-			before := proxyBootstrapSnapshot(t, "", m.Root, home)
-			code, out, stderr := run(command, "--json")
-			if !json.Valid([]byte(out)) || code != 0 || strings.Contains(out+stderr, ErrAPIDisabled.Error()) {
-				t.Fatalf("disabled API misreported by %s: code=%d stdout=%s stderr=%s", command, code, out, stderr)
-			}
-			if command == "doctor" {
-				var report struct {
-					Issues []string `json:"issues"`
-				}
-				if err := json.Unmarshal([]byte(out), &report); err != nil || len(report.Issues) != 0 {
-					t.Fatalf("disabled API doctor has unexpected issues: %s %v", out, err)
-				}
-			}
-			if !reflect.DeepEqual(before, proxyBootstrapSnapshot(t, "", m.Root, home)) {
-				t.Fatal("local status or doctor changed configuration/data")
-			}
-		}
-	}
-	checkDisabledReadOnly()
-	if err := os.Mkdir(filepath.Join(m.Root, "proxy"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	writeBindingListeners(t, m, bindingListeners)
-	if code, _, stderr := run("proxy", "bind", "download", "--endpoint", "arbitrary-daily", "--yes"); code != 0 {
-		t.Fatal("offline listener selection failed", stderr)
-	}
-	show("configured")
-	protected := proxyBootstrapSnapshot(t, filepath.Join(m.Root, apiProxyFile), m.Root, home)
-	if code, _, stderr := run("proxy", "bind", "download", "--proxy", "off", "--yes"); code != 0 {
-		t.Fatal("API off failed", stderr)
-	}
-	if !reflect.DeepEqual(protected, proxyBootstrapSnapshot(t, filepath.Join(m.Root, apiProxyFile), m.Root, home)) {
-		t.Fatal("API off changed other configuration or data")
-	}
-	checkDisabledReadOnly()
-	if httpCalls.Load() != 0 || dialCalls.Load() != 0 || codexRuns != 0 || len(proxyRunner.commands) != 0 || proxyRunner.starts != 0 || proxyRunner.stops != 0 || proxyRunner.inspects != 0 || proxyRunner.ownership != 0 || *gdsRunner != (apiGateGDSRunner{}) {
-		t.Fatalf("local state/selection contacted API or ran a component: HTTP=%d dials=%d Codex=%d Proxy=%+v GDS=%+v", httpCalls.Load(), dialCalls.Load(), codexRuns, proxyRunner, gdsRunner)
 	}
 }
 
-func TestAPIGateOneOffProxyRequiresNonemptyBinding(t *testing.T) {
+type networkGuardBody struct {
+	io.Reader
+	close func() error
+}
+
+func (b networkGuardBody) Close() error { return b.close() }
+
+func TestNetworkResponseCloseRejectsChangedConfigurationWithoutFallback(t *testing.T) {
 	m, home := fixture(t)
-	if err := m.Init(); err != nil {
+	if err := m.InitWithDownload("direct"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(m.Root, "proxy"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	writeBindingListeners(t, m, bindingListeners)
-	var dials atomic.Int32
-	transport := &http.Transport{DialContext: func(context.Context, string, string) (net.Conn, error) {
-		dials.Add(1)
-		return nil, fmt.Errorf("constructing an API client must not dial a network")
-	}}
-	previousTransport := http.DefaultTransport
-	http.DefaultTransport = transport
-	t.Cleanup(func() { http.DefaultTransport = previousTransport; transport.CloseIdleConnections() })
-	runner := &apiGateProxyRunner{}
-	m.Proxy.Runner = runner
-	const oneOff = "http://127.0.0.1:1"
-	assertDisabled := func() {
-		t.Helper()
-		before := proxyBootstrapSnapshot(t, "", m.Root, home)
-		if client, err := m.downloadAPIClient(oneOff); client != nil || !errors.Is(err, ErrAPIDisabled) {
-			t.Fatalf("one-off proxy enabled an unbound API: client=%v err=%v", client, err)
-		}
-		if !reflect.DeepEqual(before, proxyBootstrapSnapshot(t, "", m.Root, home)) {
-			t.Fatal("refused one-off proxy changed files")
-		}
-	}
-	assertDisabled()
-	endpoint, err := m.Proxy.Endpoint("arbitrary-daily")
+	path := filepath.Join(m.Root, "config.toml")
+	original, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := m.configureAPIProxy(endpoint.URL(), &endpoint); err != nil {
+	edited := append(append([]byte(nil), original...), []byte("# USER EDIT\n")...)
+	protected := proxyBootstrapSnapshot(t, path, m.Root, home)
+	calls, closes := 0, 0
+	fake := &http.Client{Transport: updateCLITransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{StatusCode: 200, Header: make(http.Header), ContentLength: 8, Body: networkGuardBody{Reader: strings.NewReader("complete"), close: func() error { closes++; return os.WriteFile(path, edited, 0600) }}, Request: r}, nil
+	})}
+	client, err := m.networkHTTP(fake, "", "")
+	if err != nil {
 		t.Fatal(err)
 	}
-	before := proxyBootstrapSnapshot(t, "", m.Root, home)
-	client, err := m.downloadAPIClient(oneOff)
-	if err != nil || client == nil {
-		t.Fatalf("configured API rejected a temporary override: client=%v err=%v", client, err)
+	data, err := githubdownload.Get(client, "https://github.com/a/b/releases/download/v1/file", 4096, "direct")
+	if err == nil || data != nil || calls != 1 || closes != 1 {
+		t.Fatal("changed configuration accepted", string(data), calls, closes, err)
 	}
-	client.CloseIdleConnections()
-	if !reflect.DeepEqual(before, proxyBootstrapSnapshot(t, "", m.Root, home)) {
-		t.Fatal("one-off proxy construction changed the saved binding or user data")
+	if actual, _ := os.ReadFile(path); !bytes.Equal(actual, edited) {
+		t.Fatal("response error overwrote concurrent user edit")
 	}
-	if err := m.configureAPIProxy("", nil); err != nil {
+	if !reflect.DeepEqual(protected, proxyBootstrapSnapshot(t, path, m.Root, home)) {
+		t.Fatal("response error modified unrelated data")
+	}
+}
+
+func TestNetworkShowDoesNotExposeMalformedCredentials(t *testing.T) {
+	m, _ := fixture(t)
+	if err := m.Init(); err != nil {
 		t.Fatal(err)
 	}
-	assertDisabled()
-	if dials.Load() != 0 || len(runner.commands) != 0 || runner.starts != 0 || runner.stops != 0 || runner.inspects != 0 || runner.ownership != 0 {
-		t.Fatalf("client construction used network or a core: dials=%d runner=%+v", dials.Load(), runner)
+	m.Config.Download = DownloadConfig{Mode: NetworkGitHubProxy, GitHubProxy: "https://sentinel-user:sentinel-password@private.invalid"}
+	var out, stderr bytes.Buffer
+	cli := CLI{Out: &out, Err: &stderr}
+	if code := cli.download(m, cliOptions{json: true}, []string{"show"}); code != 0 {
+		t.Fatal(code, stderr.String())
+	}
+	if strings.Contains(out.String()+stderr.String(), "sentinel-") {
+		t.Fatal("invalid configuration leaked credentials", out.String(), stderr.String())
+	}
+}
+
+func TestNetworkLongLivedManagerRebuildsRouteAfterMenuChanges(t *testing.T) {
+	m, _ := fixture(t)
+	if err := m.Init(); err != nil {
+		t.Fatal(err)
+	}
+	source := "https://github.com/a/b/releases/download/v1/file"
+	var hosts []string
+	origin, certificate := proxyBootstrapTLS(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hosts = append(hosts, r.Host)
+		if r.TLS.ServerName != r.Host {
+			t.Error("lost request hostname", r.Host, r.TLS.ServerName)
+		}
+		_, _ = io.WriteString(w, "fixture")
+	}))
+	traffic := &bootstrapTraffic{connections: map[net.Conn]bool{}}
+	connect := proxyBootstrapConnect(t, origin.Listener.Addr().String(), traffic, false)
+	proxyAddress := connect.Listener.Addr().String()
+	pool := x509.NewCertPool()
+	pool.AddCert(certificate)
+	var directDials, prefixDials, proxyDials int
+	transport := &http.Transport{DisableKeepAlives: true, TLSClientConfig: &tls.Config{RootCAs: pool}, Proxy: http.ProxyFromEnvironment, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+		target := ""
+		switch address {
+		case proxyAddress:
+			proxyDials++
+			target = proxyAddress
+		case "github.com:443":
+			directDials++
+			target = origin.Listener.Addr().String()
+		case "gh-proxy.org:443":
+			prefixDials++
+			target = origin.Listener.Addr().String()
+		default:
+			return nil, fmt.Errorf("unexpected dial target")
+		}
+		return (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "tcp", target)
+	}}
+	previous := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { transport.CloseIdleConnections(); http.DefaultTransport = previous })
+	for _, config := range []DownloadConfig{
+		{GitHubAccelerate: "proxy", ProxyURL: connect.URL},
+		{GitHubAccelerate: "none", ProxyURL: connect.URL},
+		{GitHubAccelerate: "https://gh-proxy.org", ProxyURL: connect.URL},
+		{GitHubAccelerate: "proxy", ProxyURL: connect.URL},
+	} {
+		if err := m.setNetwork(config); err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		// Match the component's repeated menu actions, including its retained HTTP.
+		m.Proxy.HTTP, err = m.networkHTTP(m.Proxy.HTTP, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy, err := m.networkPolicy("", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := githubdownload.Get(m.Proxy.HTTP, source, 4096, policy)
+		m.Proxy.HTTP.CloseIdleConnections()
+		if err != nil || string(data) != "fixture" {
+			t.Fatal(config.Mode, string(data), err)
+		}
+	}
+	if directDials != 1 || prefixDials != 1 || proxyDials != 2 || !reflect.DeepEqual(hosts, []string{"github.com", "github.com", "gh-proxy.org", "github.com"}) {
+		t.Fatal("old route survived menu selection", directDials, prefixDials, proxyDials, hosts)
 	}
 }

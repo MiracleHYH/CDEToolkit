@@ -189,7 +189,7 @@ func TestCoreValidationFailsClosedWithoutLeakingCandidateSecrets(t *testing.T) {
 	}
 }
 
-func TestCoreConfigureAndUpdateRejectConcurrentSnapshots(t *testing.T) {
+func TestCoreConfigureRejectsConcurrentSnapshots(t *testing.T) {
 	for _, change := range []string{"config", "program", "directory", "metadata", "source"} {
 		t.Run(change, func(t *testing.T) {
 			s, r, artifact := coreService(t)
@@ -234,11 +234,7 @@ func TestCoreConfigureAndUpdateRejectConcurrentSnapshots(t *testing.T) {
 				return nil, nil
 			}
 			var err error
-			if change == "source" {
-				err = s.Configure(source)
-			} else {
-				err = s.Update(artifact, "")
-			}
+			err = s.Configure(source)
 			if err == nil {
 				t.Fatal("concurrent change was overwritten")
 			}
@@ -266,8 +262,8 @@ func TestCoreUpdatePreservesUpstreamDirectoriesAndUserData(t *testing.T) {
 	for _, relative := range []string{"meta-update/unknown", "providers/cache", "unknown/user-data"} {
 		coreWrite(t, filepath.Join(dir, relative), []byte("keep"))
 	}
-	if err := s.Update(artifact, ""); err != nil {
-		t.Fatal(err)
+	if err := s.Update(artifact, ""); err == nil {
+		t.Fatal("local update accepted")
 	}
 	if data, _ := os.ReadFile(filepath.Join(outside, "mihomo")); string(data) != "external program" {
 		t.Fatal("external backup target changed")
@@ -306,12 +302,13 @@ func TestCoreMutationRefusesActiveOrUnknownProcesses(t *testing.T) {
 				r.inspectErr = errors.New("kernel unavailable")
 			}
 			n := len(r.commands)
-			for _, action := range []func() error{func() error { return s.Update(artifact, "") }, func() error { return s.ConfigureBytes([]byte(coreConfig)) }, s.Remove} {
+			for _, action := range []func() error{func() error { return s.Update(artifact, "") }, func() error { return s.ConfigureBytes([]byte(coreConfig)) }} {
 				if err := action(); err == nil {
 					t.Fatal("mutating active/unknown process state allowed")
 				}
 			}
-			if len(r.commands) != n || r.stops != 0 || r.starts != 0 {
+			wantCommands := n
+			if len(r.commands) != wantCommands || r.stops != 0 || r.starts != 0 {
 				t.Fatal("mutation attempted runtime side effects")
 			}
 		})
@@ -489,9 +486,6 @@ func TestCoreConfigureRejectsPublicSourceAndSnapshotMetadataChanges(t *testing.T
 
 func TestCoreTemporaryCleanupRetainsSubstitutedUnknownFile(t *testing.T) {
 	s, r, artifact := coreService(t)
-	if err := s.Install(artifact, ""); err != nil {
-		t.Fatal(err)
-	}
 	var candidatePath string
 	r.run = func(c Command) ([]byte, error) {
 		candidatePath = c.Program
@@ -501,16 +495,16 @@ func TestCoreTemporaryCleanupRetainsSubstitutedUnknownFile(t *testing.T) {
 		coreWrite(t, c.Program, []byte("unknown replacement"))
 		return []byte("Mihomo Meta v1.2.4"), nil
 	}
-	if err := s.Update(artifact, ""); err == nil {
+	if err := s.Install(artifact, ""); err == nil {
 		t.Fatal("substituted candidate accepted")
 	}
 	if data, err := os.ReadFile(candidatePath); err != nil || string(data) != "unknown replacement" {
-		t.Fatalf("cleanup removed an unknown substituted path: %q %v", data, err)
+		t.Fatalf("cleanup removed unknown substituted path: %q %v", data, err)
 	}
 }
 
 func TestCoreLongOperationsRejectReplacedOperationLock(t *testing.T) {
-	for _, action := range []string{"update", "configure", "validate"} {
+	for _, action := range []string{"configure", "validate"} {
 		t.Run(action, func(t *testing.T) {
 			s, r, artifact := coreService(t)
 			if err := s.Install(artifact, ""); err != nil {
@@ -591,7 +585,7 @@ func coreStoppedRecord(t *testing.T, s *Service) processRecord {
 }
 
 func TestCoreMutationsBindSnapshotsBeforeInitialStoppedInspection(t *testing.T) {
-	for _, action := range []string{"update", "configure", "remove"} {
+	for _, action := range []string{"configure", "remove"} {
 		for _, mutation := range []string{"lock", "program", "program-identical"} {
 			t.Run(action+"/"+mutation, func(t *testing.T) {
 				s, r, artifact := coreService(t)
@@ -711,9 +705,6 @@ func TestCoreInheritedEnvironmentCannotOverrideValidatedCore(t *testing.T) {
 
 func TestCoreOperationCannotAdoptNewLockAtActionHandoff(t *testing.T) {
 	s, r, artifact := coreService(t)
-	if err := s.Install(artifact, ""); err != nil {
-		t.Fatal(err)
-	}
 	commands := len(r.commands)
 	err := s.withLock(func(directory directorySnapshot) error {
 		lock := filepath.Join(directory.path, ".lock")
@@ -721,7 +712,7 @@ func TestCoreOperationCannotAdoptNewLockAtActionHandoff(t *testing.T) {
 			t.Fatal(err)
 		}
 		coreWrite(t, lock, []byte("new lock at handoff"))
-		return s.install(artifact, "", true, directory)
+		return s.install(artifact, "", directory)
 	})
 	if err == nil || len(r.commands) != commands {
 		t.Fatalf("operation adopted a new lock before capturing its inputs: %v", err)

@@ -159,7 +159,7 @@ run_nido conda status --json > "$NIDO_TEST_ROOT/before.json"
 run_nido conda mirrors --json > "$NIDO_TEST_ROOT/mirrors-before.json"
 [[ ! -e "$root" && ! -e "$NIDO_FIXTURE_CALLS" ]]
 run_nido init --yes > "$NIDO_TEST_ROOT/init.log"
-run_nido conda > "$NIDO_TEST_ROOT/status.log"
+run_nido conda status > "$NIDO_TEST_ROOT/status.log"
 run_nido conda show --json > "$NIDO_TEST_ROOT/show.json"
 run_nido conda mirrors > "$NIDO_TEST_ROOT/mirrors.log"
 [[ ! -e "$NIDO_FIXTURE_CALLS" && ! -e "$root/conda" ]]

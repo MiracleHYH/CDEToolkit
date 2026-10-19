@@ -4,12 +4,11 @@ HOST_ARCH = $(shell "$(GO)" env GOARCH)
 TARGET_OS ?= $(HOST_OS)
 TARGET_ARCH ?= $(HOST_ARCH)
 VERSION := $(shell cat VERSION)
-GDS_VERSION := $(shell cat GDS_VERSION)
 BINARY = build/$(TARGET_OS)-$(TARGET_ARCH)/nido
 PACKAGE = dist/nido-$(TARGET_OS)-$(TARGET_ARCH).tar.gz
 RELEASE_PLATFORMS = linux/amd64
 
-.PHONY: build test fmt-check check dist smoke release verify-release release-check gds-release gds-release-check gds-verify-release check-gds check-gds-linux-native check-gds-legacy build-gds check-proxy-real check-proxy-linux check-proxy-linux-race check-proxy-linux-native check-proxy-quickstart-linux-native check-proxy-quickstart-real-linux check-proxy-public-release check-nido-public-release check-nido-proxy-bootstrap nido-api-release-isolation
+.PHONY: build test fmt-check check dist smoke release verify-release release-check check-proxy-real check-proxy-linux check-proxy-linux-race check-proxy-linux-native check-proxy-quickstart-linux-native check-proxy-quickstart-real-linux check-proxy-public-release check-nido-public-release check-nido-proxy-bootstrap nido-api-release-isolation
 build:
 	CGO_ENABLED=0 GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) GOAMD64=v1 "$(GO)" build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w -X=github.com/MiracleHYH/CDEToolkit/internal/nido.Version=$(VERSION)' -o "$(BINARY)" ./cmd/nido
 
@@ -27,8 +26,7 @@ test:
 fmt-check:
 	@nido_unformatted=$$("$(shell "$(GO)" env GOROOT)/bin/gofmt" -l cmd internal tests/fixtures/proxy-core tests/fixtures/nido-api-release); test -z "$$nido_unformatted" || { printf 'gofmt required:\n%s\n' "$$nido_unformatted"; exit 1; }
 	sh -n scripts/install.sh
-	sh -n scripts/gds-release-build.sh
-	bash -n tests/proxy-linux-isolation.sh tests/proxy-linux-bwrap.sh tests/gds-linux-native-isolation.sh tests/gds-public-release-isolation.sh
+	bash -n tests/proxy-linux-isolation.sh tests/proxy-linux-bwrap.sh
 	bash -n tests/proxy-quickstart-linux-native.sh tests/proxy-quickstart-cli-isolation.sh tests/proxy-quickstart-real-linux.sh
 	bash -n tests/proxy-public-release-isolation.sh
 	bash -n tests/conda-cli-isolation.sh
@@ -64,43 +62,10 @@ release-check:
 	$(MAKE) verify-release
 	"$(GO)" run ./cmd/nido-dist verify --archive "dist/nido-$(HOST_OS)-$(HOST_ARCH).tar.gz" --platform "$(HOST_OS)/$(HOST_ARCH)" --smoke
 
-# Current GDS tests use fake drivers, clocks and temporary CPU subprocesses.
-check-gds:
-	"$(GO)" test -race -count=1 ./internal/gdsapi ./internal/gdsutil ./internal/gdsruntime/... ./internal/components/gds ./cmd/gds
-	"$(GO)" test -race -count=1 ./internal/nido -run '^TestGDS'
-
-# Ordinary native amd64 user; needs existing bwrap, SDK, GCC and offline vendor.
-# NIDO_TEST_GDS_OUTPUT must name a fresh evidence directory. No host fallback.
-check-gds-linux-native:
-	GO="$(GO)" bash tests/gds-linux-native-isolation.sh
-
-# Explicit historical test; this is not the Nido GDS backend.
-check-gds-legacy:
-	bash tests/gds-isolation.sh
-
-# Native optional artifact; ordinary Nido builds remain CGO_ENABLED=0.
-# Run on Linux amd64 with a C compiler, or provide an explicit cross CC.
-build-gds:
-	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 GOAMD64=v1 "$(GO)" build -mod=readonly -trimpath -buildvcs=false -buildmode=exe -ldflags='-s -w -X=main.version=$(GDS_VERSION)' -o build/gds-linux-amd64 ./cmd/gds
-
-# Formal raw GDS assets use the current pinned Go SDK with the pinned Bullseye
-# libc/compiler image. GDS_RELEASE_GOROOT must be a Linux amd64 SDK on macOS.
-# Two clean, offline, CPU-only builds must be byte-identical before packaging.
-gds-release:
-	GO="$(GO)" sh scripts/gds-release-build.sh
-
-gds-verify-release:
-	"$(GO)" run ./cmd/nido-dist gds-verify --binary dist/gds-linux-amd64 --smoke
-
-gds-release-check:
-	"$(GO)" run ./cmd/nido-dist gds-check-tag --tag "$${GDS_RELEASE_TAG:?set GDS_RELEASE_TAG to gds-vVERSION}" --repository .
-	$(MAKE) check-gds
-	$(MAKE) gds-release
-	$(MAKE) gds-verify-release
-
-# Opt in with a previously verified standalone core. This target never downloads
+# Opt in with a previously verified core. This target never downloads
 # a program; the test runs only in temporary HOME/root and loopback fixtures.
-# NIDO_TEST_MIHOMO_UPDATE optionally adds a separately verified upgrade core.
+# Native updater/controller safety is covered by isolated fake-core tests;
+# the optional real-core suite never fetches or replaces an upstream program.
 check-proxy-real:
 	@test -n "$${NIDO_TEST_MIHOMO:-}" || { printf 'set NIDO_TEST_MIHOMO to an absolute verified Mihomo path\n' >&2; exit 1; }
 	"$(GO)" test -count=1 -v ./internal/nido -run '^TestProxyRealMihomo(CrossVersion)?$$'
@@ -146,7 +111,8 @@ check-proxy-public-release:
 check-nido-public-release:
 	bash tests/nido-public-release-isolation.sh
 
-# Offline Linux amd64 API binding/gate contracts. Supply trusted prebuilt tests,
+# Offline Linux amd64 three-mode routing and native-core delegation contracts.
+# Supply trusted prebuilt tests,
 # an existing Linux SDK, a cached Docker image and a fresh evidence directory.
 check-nido-proxy-bootstrap:
 	bash tests/nido-proxy-bootstrap-isolation.sh

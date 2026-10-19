@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# This is an automation contract. Real keyboard interaction is covered by PTY
+# suites; never feed production menus numbered lines or y/N answers here.
+exec </dev/null
 
 NIDO_TEST_BINARY="${1:?provide the built nido binary}"
 [[ "$NIDO_TEST_BINARY" = /* && -x "$NIDO_TEST_BINARY" ]]
@@ -8,6 +11,7 @@ NIDO_TEST_ROOT="$(cd "$NIDO_TEST_ROOT" && pwd -P)"
 trap 'rm -rf -- "$NIDO_TEST_ROOT"' EXIT
 export HOME="$NIDO_TEST_ROOT/user" PATH="$NIDO_TEST_ROOT/forbidden:/usr/bin:/bin" TMPDIR="$NIDO_TEST_ROOT/tmp"
 unset NIDO_HOME CDET_PREFIX CDET_STORE CDET_HOME STK_HOME CODEX_HOME CODEX_SQLITE_HOME XDG_CONFIG_HOME
+unset NIDO_GITHUB_PROXY NIDO_NETWORK_MODE NIDO_PROXY NIDO_VERSION
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
 unset CONDARC CONDA_EXE CONDA_ENVS_PATH CONDA_PKGS_DIRS CONDA_CHANNELS CONDA_DEFAULT_CHANNELS CONDA_CUSTOM_CHANNELS CONDA_CUSTOM_MULTICHANNELS CONDA_CHANNEL_ALIAS
 unset PIP_CONFIG_FILE PIP_INDEX_URL PIP_EXTRA_INDEX_URL PIP_NO_INDEX PIP_CACHE_DIR PIP_NO_CACHE_DIR
@@ -107,20 +111,20 @@ set -eu
 last=
 for arg do last=$arg; done
 [ "$HOME" != "$NIDO_FIXTURE_USER_HOME" ]
-[ "$http_proxy" = http://127.0.0.1:17890 ]
+[ "$http_proxy" = http://127.0.0.1:1 ]
 [ "$https_proxy" = "$http_proxy" ] && [ "$all_proxy" = "$http_proxy" ]
 [ "$HTTP_PROXY" = "$http_proxy" ] && [ "$HTTPS_PROXY" = "$http_proxy" ] && [ "$ALL_PROXY" = "$http_proxy" ]
+[ "$no_proxy" = localhost,127.0.0.1,::1 ] && [ "$NO_PROXY" = "$no_proxy" ]
 printf '%s\n' "$last" >> "$NIDO_FIXTURE_CURL_LOG"
 case "$last" in
-  https://api.github.com/repos/openai/codex/releases/latest)
-    printf '{"tag_name":"rust-v2.0.0"}\n' ;;
   https://chatgpt.com/codex/install.sh)
     /bin/cat <<'INSTALLER'
 set -eu
 [ "$CODEX_NON_INTERACTIVE" = 1 ]
 [ "$HOME" != "$NIDO_FIXTURE_USER_HOME" ]
 [ "$CODEX_INSTALL_DIR" = "$NIDO_FIXTURE_USER_HOME/.local/bin" ]
-[ "$HTTP_PROXY" = http://127.0.0.1:17890 ]
+[ "$HTTP_PROXY" = http://127.0.0.1:1 ]
+[ "$NO_PROXY" = localhost,127.0.0.1,::1 ]
 [ -d "$CODEX_HOME" ]
 /bin/mkdir -p "$CODEX_INSTALL_DIR"
 # Remove only our fixture symlink: a real installation remains upstream-owned.
@@ -139,18 +143,15 @@ FIXTURE
 chmod 0755 "$NIDO_TEST_ROOT/forbidden/curl"
 "$root/bin/nido" --root "$root" codex update --dry-run > "$NIDO_TEST_ROOT/update-preview.log"
 [[ ! -e "$NIDO_FIXTURE_CURL_LOG" ]]
-if "$root/bin/nido" --root "$root" codex update --check --json > "$NIDO_TEST_ROOT/versions.json" 2> "$NIDO_TEST_ROOT/api-disabled.err"; then
-  printf 'Unconfigured Nido API feature unexpectedly enabled\n' >&2
-  exit 1
-fi
-/usr/bin/grep -Fq 'API 功能未启用' "$NIDO_TEST_ROOT/api-disabled.err"
-[[ ! -e "$NIDO_FIXTURE_CURL_LOG" ]]
+# Codex commands reference Nido Proxy, independently of GitHub Accelerate
+# and the Codex runtime .env block. The mock downloader never opens a socket.
+"$root/bin/nido" --root "$root" download proxy http://127.0.0.1:1 --yes > "$NIDO_TEST_ROOT/nido-proxy.log"
+"$root/bin/nido" --root "$root" download set https://accelerator.invalid --yes > "$NIDO_TEST_ROOT/accelerate.log"
+cp "$external/.env" "$NIDO_TEST_ROOT/runtime-proxy.before"
 "$root/bin/nido" --root "$root" codex update --yes > "$NIDO_TEST_ROOT/update.log"
-if /usr/bin/grep -Fq 'api.github.com' "$NIDO_FIXTURE_CURL_LOG"; then
-  printf 'Optional Codex API query ran without an API binding\n' >&2
-  exit 1
-fi
+cmp "$external/.env" "$NIDO_TEST_ROOT/runtime-proxy.before"
 /usr/bin/grep -Fq 'https://chatgpt.com/codex/install.sh' "$NIDO_FIXTURE_CURL_LOG"
+[[ $(wc -l < "$NIDO_FIXTURE_CURL_LOG") -eq 1 ]]
 "$HOME/.local/bin/codex" --version > "$NIDO_TEST_ROOT/updated-version.log"
 /usr/bin/grep -Fxq 'codex-cli 2.0.0' "$NIDO_TEST_ROOT/updated-version.log"
 "$root/bin/nido" --root "$root" codex detach --yes > "$NIDO_TEST_ROOT/detach.log"
@@ -167,7 +168,8 @@ diff -r "$NIDO_TEST_ROOT/external.before/packages/standalone/fixture" "$external
 # Codex data directory. Remove only the fixture command to model a fresh tool.
 rm "$HOME/.local/bin/codex"
 fresh="$NIDO_TEST_ROOT/new external codex"
-"$root/bin/nido" --root "$root" codex install --home "$fresh" --proxy http://127.0.0.1:17890 --yes > "$NIDO_TEST_ROOT/install.log"
+"$root/bin/nido" --root "$root" codex install --home "$fresh" --proxy http://127.0.0.1:1 --yes > "$NIDO_TEST_ROOT/install.log"
+[[ $(wc -l < "$NIDO_FIXTURE_CURL_LOG") -eq 2 ]]
 [[ -d "$fresh" && -x "$HOME/.local/bin/codex" && ! -e "$root/codex" && ! -e "$root/bin/codex" ]]
 "$root/bin/nido" --root "$root" codex detach --yes > "$NIDO_TEST_ROOT/detach-new.log"
 [[ -d "$fresh" && -x "$HOME/.local/bin/codex" ]]

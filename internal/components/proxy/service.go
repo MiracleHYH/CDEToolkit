@@ -3,6 +3,8 @@
 package proxy
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -80,16 +82,33 @@ func (s *Service) runner() Runner {
 }
 
 func (s *Service) Install(artifact, checksum string) error {
-	return s.withLock(func(directory directorySnapshot) error { return s.install(artifact, checksum, false, directory) })
+	return s.InstallContext(context.Background(), artifact, checksum)
 }
 
-// Update requires an already stopped component. No controller request, restart,
-// or cleanup of upstream meta-update/meta-backup directories is performed.
+func (s *Service) InstallContext(ctx context.Context, artifact, checksum string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.withLock(func(directory directorySnapshot) error { return s.installContext(ctx, artifact, checksum, directory) })
+}
+
+// Update uses the running core's native release updater. Artifact selection is
+// an installation-only operation; Nido never downloads a second update path.
 func (s *Service) Update(artifact, checksum string) error {
-	return s.withLock(func(directory directorySnapshot) error { return s.install(artifact, checksum, true, directory) })
+	if artifact != "" && artifact != "latest" || checksum != "" {
+		return fmt.Errorf("Proxy 更新仅支持运行核心的原生 release 更新；本地 artifact/SHA-256 仅用于首次 install")
+	}
+	return s.Upgrade()
 }
 
-func (s *Service) install(artifact, checksum string, update bool, directory directorySnapshot) error {
+func (s *Service) install(artifact, checksum string, directory directorySnapshot) error {
+	return s.installContext(context.Background(), artifact, checksum, directory)
+}
+
+func (s *Service) installContext(ctx context.Context, artifact, checksum string, directory directorySnapshot) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	dir, program, err := s.paths()
 	if err != nil {
 		return err
@@ -104,16 +123,8 @@ func (s *Service) install(artifact, checksum string, update bool, directory dire
 	if err != nil {
 		return err
 	}
-	if !update && current.info != nil {
+	if current.info != nil {
 		return fmt.Errorf("Proxy 已安装；请使用 update")
-	}
-	if update && current.info == nil {
-		return fmt.Errorf("Proxy 尚未安装")
-	}
-	if update {
-		if err = s.checkExecutable(current); err != nil {
-			return err
-		}
 	}
 	configPath := filepath.Join(dir, "config.yaml")
 	if err = safePath(s.Root, configPath); err != nil {
@@ -135,8 +146,11 @@ func (s *Service) install(artifact, checksum string, update bool, directory dire
 	if err = config.check(); err != nil {
 		return err
 	}
-	prepared, err := s.artifact(artifact, checksum)
+	prepared, err := s.artifactContext(ctx, artifact, checksum)
 	if err != nil {
+		return err
+	}
+	if err = ctx.Err(); err != nil {
 		return err
 	}
 	data := prepared.data
@@ -146,6 +160,9 @@ func (s *Service) install(artifact, checksum string, update bool, directory dire
 		return err
 	}
 	if err = directory.check(); err != nil {
+		return err
+	}
+	if err = ctx.Err(); err != nil {
 		return err
 	}
 	f, err := os.CreateTemp(dir, ".nido-core-")
@@ -188,7 +205,7 @@ func (s *Service) install(artifact, checksum string, update bool, directory dire
 	if err = candidate.check(); err != nil {
 		return err
 	}
-	version, err := s.version(path)
+	version, err := s.versionContext(ctx, path)
 	if err != nil {
 		return err
 	}
@@ -205,7 +222,7 @@ func (s *Service) install(artifact, checksum string, update bool, directory dire
 		return err
 	}
 	if config.info != nil {
-		if err = s.validateConfig(path, config.data); err != nil {
+		if err = s.validateConfigContext(ctx, candidate, config.data, directory); err != nil {
 			return err
 		}
 	}
@@ -230,11 +247,15 @@ func (s *Service) install(artifact, checksum string, update bool, directory dire
 	if err = directory.check(); err != nil {
 		return err
 	}
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	return os.Rename(path, program)
 }
 
-// Remove only removes the ordinary executable. Configuration, process history,
-// log files, caches, and unknown files are retained.
+// Remove stops only the recorded birth, confirms its exit, then removes the
+// ordinary executable under the same component lock. Configuration, process
+// history, log files, caches, and unknown files are retained.
 func (s *Service) Remove() error {
 	return s.withLock(func(directory directorySnapshot) error {
 		_, program, err := s.paths()
@@ -251,19 +272,16 @@ func (s *Service) Remove() error {
 		if err != nil {
 			return err
 		}
-		if err = s.requireStopped(); err != nil {
-			return err
-		}
-		if before.info == nil {
-			return nil
-		}
 		// The explicit fixed program path is the uninstall boundary. Native
 		// format does not prove origin, but unknown notes/scripts are user data.
-		if err = s.checkExecutable(before); err != nil {
-			return err
+		if before.info != nil {
+			if err = s.checkExecutable(before); err != nil {
+				return err
+			}
 		}
-		if err = s.requireStopped(); err != nil {
-			return err
+		r, record, recordErr := s.readRecordSnapshot()
+		if recordErr != nil && !errors.Is(recordErr, os.ErrNotExist) {
+			return recordErr
 		}
 		if err = directory.check(); err != nil {
 			return err
@@ -271,8 +289,25 @@ func (s *Service) Remove() error {
 		if err = before.check(); err != nil {
 			return err
 		}
+		if recordErr == nil {
+			// Keep this operation's committed snapshot through deletion. Reading
+			// process.json again here could adopt an unrelated new instance.
+			record, err = s.stopRecordSnapshot(r, record, directory)
+			if err != nil {
+				return err
+			}
+		}
+		if err = before.check(); err != nil {
+			return err
+		}
+		if err = record.check(); err != nil {
+			return fmt.Errorf("Proxy 进程记录在卸载期间发生变化；保留程序: %w", err)
+		}
 		if err = directory.check(); err != nil {
 			return err
+		}
+		if before.info == nil {
+			return nil
 		}
 		return os.Remove(program)
 	})
@@ -289,31 +324,136 @@ func (s *Service) Configure(file string) error {
 	if err = privateConfigInput(source); err != nil {
 		return err
 	}
-	return s.withLock(func(directory directorySnapshot) error { return s.configure(source.data, &source, directory, false) })
+	return s.withLock(func(directory directorySnapshot) error {
+		return s.configure(source.data, &source, directory, false, nil)
+	})
 }
 
 func privateConfigInput(source fileSnapshot) error {
 	stat, ok := source.info.Sys().(*syscall.Stat_t)
-	if source.info.Mode().Perm()&0077 != 0 || !ok || stat.Uid != uint32(os.Geteuid()) {
-		return fmt.Errorf("配置输入必须是当前用户拥有、禁止 group/other 访问的普通文件")
+	if source.info.Mode().Perm()&0077 != 0 || source.info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || !ok || stat.Uid != uint32(os.Geteuid()) {
+		return fmt.Errorf("配置输入必须是当前用户拥有、禁止 group/other 访问且无特殊权限位的普通文件")
+	}
+	return nil
+}
+
+func privateConfigBackup(backup fileSnapshot) error {
+	if backup.info == nil {
+		return nil
+	}
+	if err := privateConfigInput(backup); err != nil {
+		return fmt.Errorf("配置备份不可安全读取：%w", err)
 	}
 	return nil
 }
 
 func (s *Service) ConfigureBytes(data []byte) error {
 	data = append([]byte(nil), data...)
-	return s.withLock(func(directory directorySnapshot) error { return s.configure(data, nil, directory, false) })
+	return s.withLock(func(directory directorySnapshot) error { return s.configure(data, nil, directory, false, nil) })
 }
 
 // ConfigureInitialBytes is for the first interactive quick start. A file that
 // appeared while collecting input belongs to its writer and must be preserved.
 func (s *Service) ConfigureInitialBytes(data []byte) error {
 	data = append([]byte(nil), data...)
-	return s.withLock(func(directory directorySnapshot) error { return s.configure(data, nil, directory, true) })
+	return s.withLock(func(directory directorySnapshot) error { return s.configure(data, nil, directory, true, nil) })
 }
 
-func (s *Service) configure(data []byte, source *fileSnapshot, directory directorySnapshot, initial bool) error {
-	dir, program, err := s.paths()
+// ConfigRevision is an opaque snapshot captured before interactive input.
+// It authorizes replacing that exact file (or creating the still absent file),
+// never a different writer's configuration appearing during the conversation.
+type ConfigRevision struct {
+	config    fileSnapshot
+	backup    fileSnapshot
+	directory directorySnapshot
+}
+
+func (r ConfigRevision) Exists() bool { return r.config.info != nil }
+
+func (s *Service) CaptureConfigRevision() (ConfigRevision, error) {
+	dir, _, err := s.paths()
+	if err != nil {
+		return ConfigRevision{}, err
+	}
+	path := filepath.Join(dir, "config.yaml")
+	if err = safePath(s.Root, path); err != nil {
+		return ConfigRevision{}, err
+	}
+	directory, err := captureDirectory(dir)
+	if err != nil {
+		return ConfigRevision{}, err
+	}
+	config, err := capture(path, maxConfig, true)
+	backupPath := filepath.Join(dir, "config.yaml.back")
+	if err == nil {
+		err = safePath(s.Root, backupPath)
+	}
+	var backup fileSnapshot
+	if err == nil {
+		backup, err = capture(backupPath, maxConfig, true)
+	}
+	if err == nil {
+		err = privateConfigBackup(backup)
+	}
+	if err == nil {
+		err = directory.check()
+	}
+	return ConfigRevision{config: config, backup: backup, directory: directory}, err
+}
+
+func (s *Service) ConfigureIfUnchanged(file string, revision ConfigRevision) error {
+	source, err := s.CaptureConfigSource(file)
+	if err != nil {
+		return err
+	}
+	return s.ConfigureSourceIfUnchanged(source, revision)
+}
+
+// ConfigSource retains the exact private YAML file selected before confirmation.
+type ConfigSource struct{ file fileSnapshot }
+
+func (s *Service) CaptureConfigSource(file string) (ConfigSource, error) {
+	if !filepath.IsAbs(file) {
+		return ConfigSource{}, fmt.Errorf("配置来源必须使用绝对路径")
+	}
+	source, err := capture(file, maxConfig, false)
+	if err != nil {
+		return ConfigSource{}, fmt.Errorf("无法读取候选配置：%w", err)
+	}
+	if err = privateConfigInput(source); err != nil {
+		return ConfigSource{}, err
+	}
+	dir, _, err := s.paths()
+	if err != nil {
+		return ConfigSource{}, err
+	}
+	if _, err = ParseConfig(source.data, dir); err != nil {
+		return ConfigSource{}, err
+	}
+	return ConfigSource{file: source}, nil
+}
+
+func (s *Service) ConfigureSourceIfUnchanged(source ConfigSource, revision ConfigRevision) error {
+	if source.file.info == nil {
+		return fmt.Errorf("配置输入快照无效")
+	}
+	return s.withLock(func(directory directorySnapshot) error {
+		if err := source.file.check(); err != nil {
+			return err
+		}
+		return s.configure(source.file.data, &source.file, directory, false, &revision)
+	})
+}
+
+func (s *Service) ConfigureBytesIfUnchanged(data []byte, revision ConfigRevision) error {
+	data = append([]byte(nil), data...)
+	return s.withLock(func(directory directorySnapshot) error {
+		return s.configure(data, nil, directory, false, &revision)
+	})
+}
+
+func (s *Service) configure(data []byte, source *fileSnapshot, directory directorySnapshot, initial bool, revision *ConfigRevision) error {
+	dir, _, err := s.paths()
 	if err != nil {
 		return err
 	}
@@ -324,12 +464,50 @@ func (s *Service) configure(data []byte, source *fileSnapshot, directory directo
 	if err = safePath(s.Root, path); err != nil {
 		return err
 	}
-	before, err := capture(path, maxConfig, true)
-	if err != nil {
-		return err
+	if revision != nil {
+		if revision.config.path != path {
+			return fmt.Errorf("配置快照不属于当前 Proxy 目录")
+		}
+		if err = revision.directory.check(); err != nil {
+			return err
+		}
+		if err = revision.config.check(); err != nil {
+			return fmt.Errorf("输入期间配置已变化；保留现有配置：%w", err)
+		}
+		if revision.backup.path != filepath.Join(dir, "config.yaml.back") {
+			return fmt.Errorf("配置备份快照不属于当前 Proxy 目录")
+		}
+		if err = revision.backup.check(); err != nil {
+			return fmt.Errorf("输入期间配置备份已变化；保留现有文件：%w", err)
+		}
+	}
+	var before fileSnapshot
+	if revision != nil {
+		before = revision.config
+	} else {
+		before, err = capture(path, maxConfig, true)
+		if err != nil {
+			return err
+		}
 	}
 	if initial && before.info != nil {
 		return fmt.Errorf("quick start 期间配置已创建；保留现有配置，请查看 config-path")
+	}
+	backupPath := filepath.Join(dir, "config.yaml.back")
+	if err = safePath(s.Root, backupPath); err != nil {
+		return err
+	}
+	var backup fileSnapshot
+	if revision != nil {
+		backup = revision.backup
+	} else {
+		backup, err = capture(backupPath, maxConfig, true)
+		if err != nil {
+			return err
+		}
+	}
+	if err = privateConfigBackup(backup); err != nil {
+		return err
 	}
 	core, err := s.programSnapshot()
 	if err != nil {
@@ -347,7 +525,7 @@ func (s *Service) configure(data []byte, source *fileSnapshot, directory directo
 	if err = before.check(); err != nil {
 		return err
 	}
-	if err = s.validateConfig(program, data); err != nil {
+	if err = s.validateConfig(core, data, directory); err != nil {
 		return err
 	}
 	if err = s.requireStopped(); err != nil {
@@ -368,6 +546,37 @@ func (s *Service) configure(data []byte, source *fileSnapshot, directory directo
 	if source != nil {
 		if err = source.check(); err != nil {
 			return err
+		}
+	}
+	if bytes.Equal(before.data, data) && before.info != nil {
+		return nil
+	}
+	if before.info != nil {
+		// The backup is committed first, as exact original bytes. Each rename is
+		// atomic, but the pair is not a transaction across crashes/power loss.
+		if err = backup.check(); err != nil {
+			return err
+		}
+		savedBackup, saveErr := atomicWriteSnapshotExpected(backupPath, before.data, 0600, backup, directory)
+		if saveErr != nil {
+			return fmt.Errorf("无法保存原配置备份；主配置未替换：%w", saveErr)
+		}
+		if err = s.requireStopped(); err != nil {
+			return err
+		}
+		if err = core.check(); err != nil {
+			return err
+		}
+		if err = savedBackup.check(); err != nil {
+			return err
+		}
+		// Restoring config.yaml.back is a valid import: our own preceding
+		// backup write intentionally replaced that source inode. Its captured
+		// bytes were already checked immediately before saving the backup.
+		if source != nil && (backup.info == nil || !os.SameFile(source.info, backup.info)) {
+			if err = source.check(); err != nil {
+				return err
+			}
 		}
 	}
 	return atomicWriteExpected(path, data, 0600, before, directory)
@@ -404,7 +613,33 @@ func (s *Service) Preflight(action, artifact, checksum string) error {
 		return e
 	}
 	switch action {
-	case "install", "update":
+	case "reload":
+		if artifact != "" || checksum != "" {
+			return fmt.Errorf("reload 仅使用固定 config.yaml，不接受程序包参数")
+		}
+		controller, e := s.controllerSession(true, true)
+		if e != nil {
+			return e
+		}
+		controller.close()
+		return nil
+	case "update":
+		if artifact != "" && artifact != "latest" || checksum != "" {
+			return fmt.Errorf("原生 Proxy 更新不接受 artifact 或 SHA-256 参数")
+		}
+		if s.platform() != "linux/amd64" && s.platform() != "linux/arm64" {
+			return fmt.Errorf("原生 Proxy 更新的运行映像确认仅支持 Linux amd64/arm64")
+		}
+		if _, ok := s.runner().(runningImageObserver); !ok {
+			return fmt.Errorf("当前运行器不支持 Linux 运行映像确认")
+		}
+		controller, e := s.controllerSession(false, true)
+		if e != nil {
+			return e
+		}
+		controller.close()
+		return s.nativeUpdatePaths()
+	case "install":
 		if err = s.requireStopped(); err != nil {
 			return err
 		}
@@ -415,16 +650,8 @@ func (s *Service) Preflight(action, artifact, checksum string) error {
 		if e != nil {
 			return e
 		}
-		if action == "install" && before.info != nil {
+		if before.info != nil {
 			return fmt.Errorf("Proxy 已安装；请使用 update")
-		}
-		if action == "update" && before.info == nil {
-			return fmt.Errorf("Proxy 尚未安装")
-		}
-		if action == "update" {
-			if e = s.checkExecutable(before); e != nil {
-				return e
-			}
 		}
 		if e = safePath(s.Root, filepath.Join(dir, "config.yaml")); e != nil {
 			return e
@@ -441,9 +668,6 @@ func (s *Service) Preflight(action, artifact, checksum string) error {
 		}
 		return nil
 	case "configure":
-		if err = s.requireStopped(); err != nil {
-			return err
-		}
 		if _, err = s.programSnapshot(); err != nil {
 			return err
 		}
@@ -451,6 +675,16 @@ func (s *Service) Preflight(action, artifact, checksum string) error {
 			return err
 		}
 		if _, err = capture(filepath.Join(dir, "config.yaml"), maxConfig, true); err != nil {
+			return err
+		}
+		if err = safePath(s.Root, filepath.Join(dir, "config.yaml.back")); err != nil {
+			return err
+		}
+		backup, e := capture(filepath.Join(dir, "config.yaml.back"), maxConfig, true)
+		if e != nil {
+			return e
+		}
+		if err = privateConfigBackup(backup); err != nil {
 			return err
 		}
 		if artifact == "" {
@@ -478,17 +712,22 @@ func (s *Service) Preflight(action, artifact, checksum string) error {
 		}
 		return s.preflightStop()
 	case "remove":
-		if err = s.requireStopped(); err != nil {
-			return err
-		}
 		if err = safePath(s.Root, program); err != nil {
 			return err
 		}
 		before, e := capture(program, maxProgram, true)
-		if e != nil || before.info == nil {
+		if e != nil {
 			return e
 		}
-		return s.checkExecutable(before)
+		if before.info != nil {
+			if err = s.checkExecutable(before); err != nil {
+				return err
+			}
+		}
+		if err = s.preflightStop(); err != nil {
+			return err
+		}
+		return before.check()
 	case "stop":
 		return s.preflightStop()
 	default:
@@ -582,8 +821,19 @@ func (s *Service) Validate() error {
 		if hash(before.data) != config.Digest {
 			return fmt.Errorf("配置在验证前发生变化")
 		}
-		if err = s.validateConfig(program, config.Data); err != nil {
+		// A live or unverifiable recorded birth may share provider/cache data.
+		// Do not run a parallel -t; this result is explicitly static-only.
+		stopped := s.requireStopped() == nil
+		if err = core.check(); err != nil {
 			return err
+		}
+		if err = before.check(); err != nil {
+			return err
+		}
+		if stopped {
+			if err = s.validateConfig(core, config.Data, directory); err != nil {
+				return err
+			}
 		}
 		if err = core.check(); err != nil {
 			return err

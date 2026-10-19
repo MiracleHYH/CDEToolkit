@@ -31,7 +31,9 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// This opt-in test never downloads a program or contacts an external target.
+// This opt-in test injects native configs through Service.Configure, then uses
+// the CLI for validation and lifecycle/traffic checks. It does not test the
+// interactive configuration flow, download a program or contact external hosts.
 // NIDO_TEST_MIHOMO must name an explicitly supplied, native official binary.
 // NIDO_TEST_NIDO may name a prebuilt native CLI for environments without Go.
 // Example: NIDO_TEST_MIHOMO=/absolute/path/mihomo go test ./internal/nido -run TestProxyRealMihomo -v
@@ -136,7 +138,8 @@ func TestProxyRealMihomo(t *testing.T) {
 	realYAMLDrop(root, "listeners")
 	// This legacy-port branch intentionally returns to global routing after
 	// removing the listener that normally pins its own outbound group.
-	realYAMLField(root, "rules").Content[0].Value = "MATCH,proxy"
+	rules := realYAMLField(root, "rules")
+	rules.Content[len(rules.Content)-1].Value = "MATCH,proxy"
 	port, release = realProxyPort(t)
 	root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "mixed-port"}, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.Itoa(port)})
 	fileConfig := realYAMLBytes(t, &document)
@@ -150,18 +153,34 @@ func TestProxyRealMihomo(t *testing.T) {
 	if same := cli.assertRunning(); same != beforeRestart {
 		t.Fatalf("重复 start 替换了存活出生身份: before=%+v after=%+v", beforeRestart, same)
 	}
-	cli.rejectInvalidRestart(fileConfig)
+	cli.rejectInvalidRestart(fileConfig, false)
 	if same := cli.assertRunning(); same != beforeRestart {
-		t.Fatalf("无效配置 restart 停止或替换了旧身份: before=%+v after=%+v", beforeRestart, same)
+		t.Fatalf("静态无效配置 restart 停止或替换了旧身份: before=%+v after=%+v", beforeRestart, same)
+	}
+	realProxyTraffic(t, endpoint.URL(), endpoint.URL(), origin, tlsOrigin, &originRequests, &upstreamTunnels)
+	// A statically valid candidate is validated by the core only after the
+	// original birth is stopped. Native validation failure does not restart it.
+	cli.rejectInvalidRestart(fileConfig, true)
+	realAssertGone(t, beforeRestart)
+	realAssertClosed(t, endpoint)
+	var failedRestart proxy.Status
+	if err := json.Unmarshal(cli.must("proxy", "status", "--json"), &failedRestart); err != nil || failedRestart.Runtime.State != "stopped" || failedRestart.Runtime.Listeners {
+		t.Fatalf("原生校验失败的 restart 未保持停止: %+v %v", failedRestart, err)
+	}
+	// The helper restored the original private bytes; recovery is explicit.
+	cli.must("proxy", "start", "--yes", "--json")
+	recovered := cli.assertRunning()
+	if realSameBirth(beforeRestart, recovered) {
+		t.Fatal("失败 restart 后的显式 start 复用了旧出生身份")
 	}
 	realProxyTraffic(t, endpoint.URL(), endpoint.URL(), origin, tlsOrigin, &originRequests, &upstreamTunnels)
 	cli.must("proxy", "restart", "--yes", "--json")
 	afterRestart := cli.assertRunning()
-	if realSameBirth(beforeRestart, afterRestart) {
-		t.Fatalf("restart 未创建新的出生身份: before=%+v after=%+v", beforeRestart, afterRestart)
+	if realSameBirth(recovered, afterRestart) {
+		t.Fatalf("restart 未创建新的出生身份: before=%+v after=%+v", recovered, afterRestart)
 	}
-	realAssertGone(t, beforeRestart)
-	t.Logf("真实 restart 出生身份: before=%+v after=%+v", beforeRestart, afterRestart)
+	realAssertGone(t, recovered)
+	t.Logf("真实 restart 出生身份: before=%+v after=%+v", recovered, afterRestart)
 	realProxyTraffic(t, endpoint.URL(), endpoint.URL(), origin, tlsOrigin, &originRequests, &upstreamTunnels)
 	cli.must("proxy", "stop", "--yes", "--json")
 	realAssertGone(t, afterRestart)
@@ -202,8 +221,10 @@ func TestProxyRealMihomo(t *testing.T) {
 	if err := os.WriteFile(badPath, bytes.Replace(inline, []byte("mode: rule"), []byte("mode: invalid-e2e-mode"), 1), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cli.run("proxy", "configure", "--file", badPath, "--yes", "--json"); err == nil {
+	if err := cli.service().Configure(badPath); err == nil {
 		t.Fatal("真实核心未拒绝无效原生 mode")
+	} else if !strings.Contains(err.Error(), "核心配置验证失败") {
+		t.Fatalf("无效 mode 未到达真实核心校验: %v", err)
 	}
 	if current, err := os.ReadFile(filepath.Join(cli.root, "proxy", "config.yaml")); err != nil || !bytes.Equal(current, inline) {
 		t.Fatalf("真实核心验证失败后原配置被替换: %v", err)
@@ -238,14 +259,7 @@ func TestProxyRealMihomo(t *testing.T) {
 	if err := os.WriteFile(sentinel, []byte("unknown component data\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	retained := realProxyFiles(t, filepath.Join(cli.root, "proxy"))
-	cli.must("proxy", "update", "--artifact", artifact, "--sha256", hex.EncodeToString(sum[:]), "--yes", "--json")
-	for path, want := range retained {
-		got, err := os.ReadFile(path)
-		if err != nil || !bytes.Equal(got, want) {
-			t.Fatalf("停机 update 修改了应保留文件 %s: %v", path, err)
-		}
-	}
+	retained := cli.rejectArtifactUpdate(artifact, hex.EncodeToString(sum[:]))
 	cli.must("proxy", "remove", "--yes", "--json")
 	if _, err := os.Stat(filepath.Join(cli.root, "proxy", "mihomo")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("remove 未移除临时核心: %v", err)
@@ -262,7 +276,7 @@ func TestProxyRealMihomo(t *testing.T) {
 			t.Fatalf("临时 HOME 中的认证/会话模拟数据被修改 %s: %v", path, err)
 		}
 	}
-	t.Logf("真实回环证据: provider HTTP 请求=%d，origin 请求=%d，上游 CONNECT=%d；停机 update/remove 保留快照一致", providerDownloads.Load(), originRequests.Load(), upstreamTunnels.Load())
+	t.Logf("真实回环证据: provider HTTP 请求=%d，origin 请求=%d，上游 CONNECT=%d；旧 artifact update 参数明确拒绝，remove 保留快照一致；未验证原生更新", providerDownloads.Load(), originRequests.Load(), upstreamTunnels.Load())
 }
 
 type realProxyCLI struct {
@@ -387,8 +401,16 @@ func (c *realProxyCLI) configure(data []byte) {
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		c.t.Fatal(err)
 	}
-	c.must("proxy", "configure", "--file", path, "--yes", "--json")
+	// This is explicit test injection through the component API. The current
+	// CLI configures interactively and deliberately has no --file import flag.
+	if err := c.service().Configure(path); err != nil {
+		c.t.Fatalf("真实核心未接受注入的原生配置: %v", err)
+	}
 	c.must("proxy", "validate", "--json")
+}
+
+func (c *realProxyCLI) service() *proxy.Service {
+	return &proxy.Service{Root: c.root, Env: append([]string(nil), c.env...), Launcher: c.executable}
 }
 
 func (c *realProxyCLI) endpoint(name string) proxy.Endpoint {
@@ -423,19 +445,74 @@ func (c *realProxyCLI) assertRunning() proxy.Process {
 	return p
 }
 
-func (c *realProxyCLI) rejectInvalidRestart(config []byte) {
+func (c *realProxyCLI) rejectArtifactUpdate(artifact, checksum string) map[string][]byte {
+	c.t.Helper()
+	program := filepath.Join(c.root, "proxy", "mihomo")
+	before, err := readFile(program, 256<<20)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	retained := realProxyFiles(c.t, filepath.Join(c.root, "proxy"))
+	output, err := c.run("proxy", "update", "--artifact", artifact, "--sha256", checksum, "--yes", "--json")
+	if err == nil || !bytes.Contains(output, []byte("程序包选项仅用于首次安装")) {
+		c.t.Fatalf("旧 artifact update 未明确拒绝: %v %s", err, output)
+	}
+	if after, err := readFile(program, 256<<20); err != nil || !bytes.Equal(after, before) {
+		c.t.Fatalf("拒绝旧 artifact update 时改变了已安装程序: %v", err)
+	}
+	realAssertRetainedBytes(c.t, retained)
+	realAssertRetainedBytes(c.t, c.sentinels)
+	return retained
+}
+
+func realInvalidRestartConfig(config []byte, native bool) ([]byte, error) {
+	replacement := []byte("mode: rule\ntun: {enable: true}")
+	if native {
+		replacement = []byte("mode: invalid-e2e-restart")
+	}
+	invalid := bytes.Replace(config, []byte("mode: rule"), replacement, 1)
+	if bytes.Equal(invalid, config) {
+		return nil, fmt.Errorf("无法构造无效 restart 配置")
+	}
+	return invalid, nil
+}
+
+func TestRealRestartCandidatesSeparateStaticAndNativeValidation(t *testing.T) {
+	config := []byte("mode: rule\nmixed-port: 17890\n")
+	for _, native := range []bool{false, true} {
+		t.Run(fmt.Sprint(native), func(t *testing.T) {
+			candidate, err := realInvalidRestartConfig(config, native)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = proxy.ParseConfig(candidate, t.TempDir())
+			if (err == nil) != native {
+				t.Fatalf("native=%v 的候选静态校验结果错误: %v", native, err)
+			}
+			if string(config) != "mode: rule\nmixed-port: 17890\n" {
+				t.Fatal("构造候选修改了原配置")
+			}
+		})
+	}
+	if _, err := realInvalidRestartConfig([]byte("mixed-port: 17890\n"), true); err == nil {
+		t.Fatal("没有目标字段时仍声称构造了无效配置")
+	}
+}
+
+func (c *realProxyCLI) rejectInvalidRestart(config []byte, native bool) {
 	c.t.Helper()
 	path := filepath.Join(c.root, "proxy", "config.yaml")
 	current, err := readFile(path, 4<<20)
 	if err != nil || !bytes.Equal(current, config) {
 		c.t.Fatalf("无效 restart 夹具未匹配既有配置: %v", err)
 	}
-	invalid := bytes.Replace(config, []byte("mode: rule"), []byte("mode: invalid-e2e-restart"), 1)
-	if bytes.Equal(invalid, config) {
-		c.t.Fatal("无法构造无效原生 mode 的 restart 配置")
+	invalid, err := realInvalidRestartConfig(config, native)
+	if err != nil {
+		c.t.Fatal(err)
 	}
 	// Only the test's private managed config is edited. Restore even when an
-	// assertion fails, so cleanup can still stop the original live identity.
+	// assertion fails. Native validation failure deliberately leaves it stopped;
+	// the caller must explicitly start after these original bytes are restored.
 	defer func() {
 		if err := os.WriteFile(path, config, 0600); err != nil {
 			c.t.Errorf("恢复本测试原配置失败: %v", err)
@@ -445,7 +522,7 @@ func (c *realProxyCLI) rejectInvalidRestart(config []byte) {
 		c.t.Fatal(err)
 	}
 	if _, err := c.run("proxy", "restart", "--yes", "--json"); err == nil {
-		c.t.Fatal("真实核心接受了无效 mode 的 restart")
+		c.t.Fatalf("restart 接受了无效配置（native=%v）", native)
 	}
 	if after, err := readFile(path, 4<<20); err != nil || !bytes.Equal(after, invalid) {
 		c.t.Fatalf("失败的 restart 修改了候选原配置: %v", err)

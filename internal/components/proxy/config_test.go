@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -360,7 +361,12 @@ func TestTemplateRoutesThroughSubscriptionAndRejectsEmptyGroup(t *testing.T) {
 	if len(config.Groups[0].Proxies) != 0 || config.Groups[0].EmptyFallback != "REJECT" {
 		t.Fatal("template must neither prefer direct nor fall back to it")
 	}
-	if len(config.Rules) != 1 || config.Rules[0] != "MATCH,DIRECT" {
+	wantRules := []string{
+		"AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,github.com)),proxy",
+		"AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,release-assets.githubusercontent.com)),proxy",
+		"MATCH,DIRECT",
+	}
+	if !reflect.DeepEqual(config.Rules, wantRules) {
 		t.Fatal("template must use listener-specific outbound and a direct default rule")
 	}
 }

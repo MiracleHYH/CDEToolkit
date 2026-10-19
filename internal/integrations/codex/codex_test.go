@@ -164,15 +164,15 @@ func TestProxyRefusesConflictTamperAndSymlink(t *testing.T) {
 	}
 }
 
-func TestProxyEnvIsLiteralAndProcessValuesOverride(t *testing.T) {
+func TestDotenvProxyIsLiteralAndNeverEvaluatesShell(t *testing.T) {
 	s, home := fixture(t)
-	write(t, filepath.Join(home, ".env"), []byte("OTHER=$(touch /must-not-run)\nhttp_proxy='http://127.0.0.1:7890'\nHTTPS_PROXY=\"http://127.0.0.1:7891\" # literal\nNO_PROXY=localhost\n"), 0600)
-	s.Env = append(s.Env, "HTTP_PROXY=http://127.0.0.1:8888")
-	got, err := s.ProxyEnv(Config{Home: home})
+	content := []byte("OTHER=$(touch /must-not-run)\nhttp_proxy='http://127.0.0.1:7890'\nHTTPS_PROXY=\"http://127.0.0.1:7891\" # literal\nNO_PROXY=localhost\n")
+	write(t, filepath.Join(home, ".env"), content, 0600)
+	got, err := dotenvProxy(content)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"http_proxy": "http://127.0.0.1:8888", "https_proxy": "http://127.0.0.1:7891", "no_proxy": "localhost"}
+	want := map[string]string{"http_proxy": "http://127.0.0.1:7890", "https_proxy": "http://127.0.0.1:7891", "no_proxy": "localhost"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %#v want %#v", got, want)
 	}

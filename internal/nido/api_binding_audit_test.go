@@ -13,64 +13,64 @@ import (
 	"github.com/MiracleHYH/CDEToolkit/internal/githubdownload"
 )
 
-func TestAPIBindingAuditConcurrentConfirmationEdits(t *testing.T) {
-	for _, edit := range []string{"created", "edited", "replaced-identically", "removed", "permissions", "hardlink"} {
-		for _, action := range []string{"switch", "off", "same"} {
-			t.Run(edit+"/"+action, func(t *testing.T) {
-				m, _, _ := proxyBindingFixture(t)
-				writeBindingListeners(t, m, bindingListeners)
-				path := filepath.Join(m.Root, apiProxyFile)
-				data := []byte("schema=1\nproduct='nido-api-proxy'\nlistener='renamed-ai'\n")
-				if edit != "created" {
-					if err := os.WriteFile(path, data, 0600); err != nil {
-						t.Fatal(err)
+func TestNetworkConcurrentConfigurationEditsArePreserved(t *testing.T) {
+	for _, edit := range []string{"edited", "replaced-identically", "removed", "symlink", "hardlink"} {
+		t.Run(edit, func(t *testing.T) {
+			m, home := fixture(t)
+			if err := m.InitWithDownload("direct"); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(m.Root, "config.toml")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch edit {
+			case "edited":
+				err = os.WriteFile(path, append(data, []byte("# USER EDIT\n")...), 0600)
+			case "replaced-identically":
+				err = os.WriteFile(path+".user", data, 0600)
+				if err == nil {
+					err = os.Rename(path+".user", path)
+				}
+			case "removed":
+				err = os.Remove(path)
+			case "symlink":
+				err = os.Rename(path, path+".original")
+				if err == nil {
+					err = os.Symlink(path+".original", path)
+				}
+			case "hardlink":
+				err = os.Link(path, filepath.Join(home, "user-config-link"))
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := proxyBootstrapSnapshot(t, "", m.Root, home)
+			// The ordinary managed configuration writer must retain its original
+			// receipt; network settings do not create an independent transaction file.
+			err = m.setNetwork(DownloadConfig{GitHubAccelerate: "https://gh-proxy.org"})
+			if edit == "replaced-identically" || edit == "hardlink" {
+				// Same bytes under the normal owned config path are accepted by the
+				// existing manager contract; no network-specific inode policy is added.
+				if err != nil {
+					t.Fatal(err)
+				}
+				if edit == "hardlink" {
+					linked, err := os.ReadFile(filepath.Join(home, "user-config-link"))
+					if err != nil || !bytes.Equal(linked, data) {
+						t.Fatal("atomic save overwrote linked user data", err)
 					}
 				}
-				args := []string{"--root", m.Root, "proxy", "bind", "download"}
-				switch action {
-				case "switch":
-					args = append(args, "--endpoint", "arbitrary-daily")
-				case "same":
-					args = append(args, "--endpoint", "renamed-ai")
-				case "off":
-					args = append(args, "--proxy", "off")
+			} else {
+				if err == nil {
+					t.Fatal("unsafe/stale configuration was accepted", edit)
 				}
-				var afterEdit map[string]bootstrapFile
-				var out, stderr bytes.Buffer
-				runner := &cliProxyRunner{}
-				cli := CLI{In: &beforeRead{reader: strings.NewReader("y\n"), before: func() {
-					var err error
-					switch edit {
-					case "created", "edited":
-						err = os.WriteFile(path, []byte("schema=1\nproduct='nido-api-proxy'\nlistener='concurrent-user-choice'\n"), 0600)
-					case "replaced-identically":
-						temporary := path + ".user-edit"
-						if err = os.WriteFile(temporary, data, 0600); err == nil {
-							err = os.Rename(temporary, path)
-						}
-					case "removed":
-						err = os.Remove(path)
-					case "permissions":
-						err = os.Chmod(path, 0644)
-					case "hardlink":
-						err = os.Link(path, filepath.Join(m.UserHome, "keep-linked-binding"))
-					}
-					if err != nil {
-						t.Fatal(err)
-					}
-					afterEdit = proxyBootstrapSnapshot(t, "", m.Root, m.UserHome)
-				}}, Out: &out, Err: &stderr, ProxyRunner: runner}
-				if code := cli.Run(args); code == 0 || !strings.Contains(stderr.String(), "发生变化") {
-					t.Fatalf("concurrent receipt edit accepted: %d %s %s", code, out.String(), stderr.String())
+				if !reflect.DeepEqual(before, proxyBootstrapSnapshot(t, "", m.Root, home)) {
+					t.Fatal("refusal overwrote user edit")
 				}
-				if afterEdit == nil || !reflect.DeepEqual(afterEdit, proxyBootstrapSnapshot(t, "", m.Root, m.UserHome)) {
-					t.Fatal("refusal changed the concurrent binding or unrelated configuration/data")
-				}
-				if runner.starts != 0 || len(runner.commands) != 0 {
-					t.Fatal("refused binding invoked a component")
-				}
-			})
-		}
+			}
+		})
 	}
 }
 
@@ -80,35 +80,30 @@ type apiBindingAuditBody struct {
 }
 
 func (b *apiBindingAuditBody) Close() error { b.close(); return nil }
-
 func TestAPIBindingAuditCloseFailureCannotReturnMetadata(t *testing.T) {
-	m, _, _ := proxyBindingFixture(t)
-	path := filepath.Join(m.Root, apiProxyFile)
-	if err := os.WriteFile(path, []byte("schema=1\nproduct='nido-api-proxy'\nlistener='renamed-ai'\n"), 0600); err != nil {
+	m, home := fixture(t)
+	if err := m.Init(); err != nil {
 		t.Fatal(err)
 	}
-	_, snapshot, err := m.readAPIProxy()
-	if err != nil {
-		t.Fatal(err)
+	path := filepath.Join(m.Root, "config.toml")
+	data, _ := os.ReadFile(path)
+	concurrent := append(append([]byte(nil), data...), []byte("# concurrent user choice\n")...)
+	protected := proxyBootstrapSnapshot(t, path, m.Root, home)
+	client := &http.Client{Transport: apiBindingTransport{check: m.networkCheck(), base: updateCLITransport(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: &apiBindingAuditBody{Reader: strings.NewReader(`{"tag_name":"v9.9.9"}`), close: func() {
+			if err := os.WriteFile(path, concurrent, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}}}, nil
+	})}}
+	response, err := githubdownload.Get(client, "https://api.github.com/repos/MiracleHYH/CDEToolkit/releases/latest", 4096, "direct")
+	if err == nil || len(response) != 0 {
+		t.Fatal("changed configuration returned usable metadata", string(response), err)
 	}
-	concurrent := []byte("schema=1\nproduct='nido-api-proxy'\nlistener=''\n")
-	client := &http.Client{Transport: apiBindingTransport{
-		check: snapshot.check,
-		base: updateCLITransport(func(*http.Request) (*http.Response, error) {
-			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: &apiBindingAuditBody{
-				Reader: strings.NewReader(`{"tag_name":"v9.9.9"}`), close: func() {
-					if err := os.WriteFile(path, concurrent, 0600); err != nil {
-						t.Fatal(err)
-					}
-				},
-			}}, nil
-		}),
-	}}
-	data, err := githubdownload.Get(client, "https://api.github.com/repos/MiracleHYH/CDEToolkit/releases/latest", 4096, "direct")
-	if err == nil || len(data) != 0 {
-		t.Fatal("binding changed after EOF but Get returned usable metadata", string(data), err)
+	if got, _ := os.ReadFile(path); !bytes.Equal(got, concurrent) {
+		t.Fatal("failed request undid concurrent choice")
 	}
-	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, concurrent) {
-		t.Fatal("failed request undid a user's concurrent off operation", err)
+	if !reflect.DeepEqual(protected, proxyBootstrapSnapshot(t, path, m.Root, home)) {
+		t.Fatal("failed request changed unrelated data")
 	}
 }

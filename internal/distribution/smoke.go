@@ -66,10 +66,10 @@ func Smoke(binary []byte, version, platform string) error {
 		Configured bool   `json:"configured"`
 		State      string `json:"state"`
 	}
-	if json.Unmarshal(out, &rows) != nil || len(rows) != 4 {
+	if json.Unmarshal(out, &rows) != nil || len(rows) != 3 {
 		return fmt.Errorf("空环境状态输出无效")
 	}
-	want := map[string]string{"codex": "external", "conda": "external", "proxy": "builtin", "gds": "builtin"}
+	want := map[string]string{"codex": "external", "conda": "external", "proxy": "builtin"}
 	for _, row := range rows {
 		if kind, ok := want[row.Name]; !ok || row.Kind != kind || row.Configured || row.State == "" {
 			return fmt.Errorf("空环境意外配置了组件或组件分类无效")

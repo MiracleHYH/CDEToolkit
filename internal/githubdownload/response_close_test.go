@@ -24,7 +24,7 @@ func TestResponseCloseGuardFailureRejectsBytesWithoutFallback(t *testing.T) {
 		"https://api.github.com/repos/example/tool/releases/latest",
 		"https://github.com/example/tool/releases/download/v1.0.0/tool",
 	} {
-		for _, policy := range []string{"direct", "auto", "https://file-only.invalid/public"} {
+		for _, policy := range []string{"direct", "https://file-only.invalid/public"} {
 			for _, guard := range []string{"binding", "instance"} {
 				t.Run(source+"/"+policy+"/"+guard, func(t *testing.T) {
 					// Reads, including EOF, succeed. Only the final guard reports

@@ -9,59 +9,35 @@ import (
 	"testing"
 )
 
-func TestCoreAPIHTTPSeparatesMetadataAndPreservesAssetValidation(t *testing.T) {
+func TestCoreAPIHTTPIsOnlyUsedForExplicitMetadataQueries(t *testing.T) {
 	const prefix = "https://file-only.invalid/public"
 	const apiURL = "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
-	const name = "mihomo-linux-amd64-v1-v1.2.4.gz"
-	const assetURL = "https://github.com/MetaCubeX/mihomo/releases/download/v1.2.4/" + name
-	for _, problem := range []string{"", "source", "digest", "size", "body"} {
-		t.Run(problem, func(t *testing.T) {
-			data := coreNativeFixture("linux", "amd64")
-			source, digest, size := assetURL, hash(data), len(data)
-			switch problem {
-			case "source":
-				source = "https://other.invalid/" + name
-			case "digest":
-				digest = "invalid"
-			case "size":
-				size = maxProgram + 1
-			}
-			metadata, err := json.Marshal(map[string]any{"tag_name": "v1.2.4", "assets": []any{map[string]any{"name": name, "browser_download_url": source, "digest": "sha256:" + digest, "size": size}}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			apiCalls, fileCalls := 0, 0
-			s := Service{Platform: "linux/amd64", GitHubProxy: prefix}
-			s.APIHTTP = &http.Client{Transport: coreRoundTripper(func(req *http.Request) (*http.Response, error) {
-				apiCalls++
-				if req.URL.String() != apiURL {
-					t.Fatalf("metadata was rewritten or sent an asset: %s", req.URL)
-				}
-				return coreAPIResponse(req, metadata), nil
-			})}
-			s.HTTP = &http.Client{Transport: coreRoundTripper(func(req *http.Request) (*http.Response, error) {
-				fileCalls++
-				if req.URL.String() != prefix+"/"+assetURL {
-					t.Fatalf("file route changed or received API: %s", req.URL)
-				}
-				body := data
-				if problem == "body" {
-					body = bytes.Repeat([]byte("x"), len(data))
-				}
-				return coreAPIResponse(req, body), nil
-			})}
-			prepared, err := s.artifact("latest", "")
-			if (err == nil) != (problem == "") || apiCalls != 1 {
-				t.Fatalf("artifact: api=%d files=%d err=%v", apiCalls, fileCalls, err)
-			}
-			wantFiles := 0
-			if problem == "" || problem == "body" {
-				wantFiles = 1
-			}
-			if fileCalls != wantFiles || problem == "" && (!bytes.Equal(prepared.data, data) || prepared.expectedVersion != "v1.2.4") {
-				t.Fatalf("validation changed: prepared=%+v files=%d want=%d", prepared, fileCalls, wantFiles)
-			}
-		})
+	apiCalls, fileCalls := 0, 0
+	s := Service{Platform: "linux/amd64", GitHubProxy: prefix}
+	s.APIHTTP = &http.Client{Transport: coreRoundTripper(func(req *http.Request) (*http.Response, error) {
+		apiCalls++
+		if req.URL.String() != apiURL {
+			t.Fatalf("metadata was rewritten or sent an asset: %s", req.URL)
+		}
+		metadata, err := json.Marshal(map[string]any{"tag_name": "v9.8.7"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return coreAPIResponse(req, metadata), nil
+	})}
+	s.HTTP = &http.Client{Transport: coreRoundTripper(func(req *http.Request) (*http.Response, error) {
+		fileCalls++
+		asset, err := pinnedInstallAsset("linux/amd64")
+		if err != nil || req.URL.String() != prefix+"/"+asset.source() {
+			t.Fatalf("file route changed or received API: %s %v", req.URL, err)
+		}
+		return coreAPIResponse(req, []byte("inert invalid core")), nil
+	})}
+	if latest, err := s.Latest(); err != nil || latest != "v9.8.7" || apiCalls != 1 || fileCalls != 0 {
+		t.Fatalf("explicit metadata query: version=%s api=%d files=%d err=%v", latest, apiCalls, fileCalls, err)
+	}
+	if _, err := s.artifact("latest", ""); err == nil || apiCalls != 1 || fileCalls != 1 {
+		t.Fatalf("first install used latest metadata or accepted invalid bytes: api=%d files=%d err=%v", apiCalls, fileCalls, err)
 	}
 }
 

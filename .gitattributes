@@ -4,8 +4,8 @@
 *.yaml text eol=lf
 *.yml text eol=lf
 
-# Development-only files stay in the public repository but are omitted from
-# GitHub Release archives installed under STK_HOME.
+# Source archives omit CI and test fixtures. Formal Nido release archives are
+# built by the Go distribution helper and contain only the nido executable.
 /.github export-ignore
 /.github/** export-ignore
 /tests export-ignore
@@ -13,7 +13,3 @@
 /.editorconfig export-ignore
 /.gitattributes export-ignore
 /.gitignore export-ignore
-/.shellcheckrc export-ignore
-/scripts/check.sh export-ignore
-/scripts/preflight-update.sh export-ignore
-/scripts/public-audit.sh export-ignore

@@ -27,26 +27,8 @@ func response(r *http.Request, status int, data string) *http.Response {
 	return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(data)), ContentLength: int64(len(data)), Request: r}
 }
 
-func TestResolvePriorityAndExplicitEmptyEnvironment(t *testing.T) {
-	for _, tc := range []struct {
-		explicit string
-		env      []string
-		saved    string
-		want     string
-	}{
-		{"", nil, "", "auto"},
-		{"", nil, "direct", "direct"},
-		{"", []string{"NIDO_GITHUB_PROXY="}, "https://saved.invalid", "direct"},
-		{"", []string{"NIDO_GITHUB_PROXY=direct", "NIDO_GITHUB_PROXY=https://last.invalid/prefix/"}, "auto", "https://last.invalid/prefix/"},
-		{"auto", []string{"NIDO_GITHUB_PROXY=direct"}, "https://saved.invalid", "auto"},
-		{"https://explicit.invalid", []string{"NIDO_GITHUB_PROXY=bad"}, "bad", "https://explicit.invalid"},
-	} {
-		got, err := Resolve(tc.explicit, tc.env, tc.saved)
-		if err != nil || got != tc.want {
-			t.Fatalf("Resolve(%q,%v,%q) = %q, %v", tc.explicit, tc.env, tc.saved, got, err)
-		}
-	}
-	for _, value := range []string{"https://user:secret@example.com", "http://example.com", "https://example.com?token=secret", "https://example.com?", "https://example.com#", "https://example.com/#section", "https://example.com/\x1b", "https://example.com/back\\slash", "https://example.com:0", "https://example.com:65536", "https://example.com:", "relative", "DIRECT"} {
+func TestValidateRejectsUnsafePrefixes(t *testing.T) {
+	for _, value := range []string{"https://user:secret@example.com", "http://example.com", "https://example.com?token=secret", "https://example.com?", "https://example.com#", "https://example.com/#section", "https://example.com/\x1b", "https://example.com/back\\slash", "https://example.com:0", "https://example.com:65536", "https://example.com:", "relative", "DIRECT", "auto", "AUTO"} {
 		if err := Validate(value); err == nil {
 			t.Fatalf("accepted %q", value)
 		}
@@ -76,7 +58,7 @@ func TestGetRoutesPublicAPIAndAssetsWithoutChangingOriginalURLs(t *testing.T) {
 	}
 }
 
-func TestAutoFallbackIsBoundedAndNeverRetriesSuccessfulOrInvalidContent(t *testing.T) {
+func TestExplicitRoutesNeverFallbackAndRejectInvalidContent(t *testing.T) {
 	for _, mode := range []string{"network", "403", "429", "503", "success", "404", "oversize", "unbounded", "insecure-redirect"} {
 		t.Run(mode, func(t *testing.T) {
 			calls := []string{}
@@ -117,13 +99,8 @@ func TestAutoFallbackIsBoundedAndNeverRetriesSuccessfulOrInvalidContent(t *testi
 					return response(r, 200, "not JSON; caller must reject"), nil
 				}
 			})}
-			b, err := Get(client, source, 32, "auto")
-			fallback := mode == "network" || mode == "403" || mode == "429" || mode == "503" || mode == "404"
-			if fallback {
-				if err != nil || string(b) != "fallback" || !reflect.DeepEqual(calls, []string{source, defaultPrefix + "/" + source}) {
-					t.Fatalf("%v %q %v", calls, b, err)
-				}
-			} else if len(calls) != 1 || (err == nil) != (mode == "success") {
+			b, err := Get(client, source, 32, "direct")
+			if len(calls) != 1 || (err == nil) != (mode == "success") {
 				t.Fatalf("unexpected route or failure %v %q %v", calls, b, err)
 			}
 			if err != nil && strings.Contains(err.Error(), "secret") {
@@ -140,7 +117,7 @@ func TestRedirectsRejectForeignOriginsAndAuthenticationQueriesBeforeSending(t *t
 		"https://github.com/asset?client_secret=secret", "https://github.com/asset?X-GitHub-Token=secret",
 		"https://github.com/asset?auth=%XX", "https://user:secret@github.com/asset",
 	} {
-		for _, policy := range []string{"direct", "auto", "https://custom.invalid/prefix"} {
+		for _, policy := range []string{"direct", "https://custom.invalid/prefix"} {
 			calls := 0
 			client := &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
 				calls++
@@ -225,30 +202,22 @@ func TestGetRejectsNonGitHubAndAuthenticationBeforeRequest(t *testing.T) {
 		return nil, nil
 	})}
 	for _, source := range []string{"https://chatgpt.com/codex/install.sh", "https://untrusted.invalid/api.github.com", "https://github.com.evil.invalid/a", "http://github.com/a", "https://user:secret@github.com/a", "https://api.github.com/repos/a/b?access_token=secret", "https://api.github.com/repos/a/b?API_KEY=secret", "https://api.github.com/repos/a/b?token=%XX", "https://github.com/a#"} {
-		if _, err := Get(client, source, 32, "auto"); err == nil {
+		if _, err := Get(client, source, 32, "direct"); err == nil {
 			t.Fatalf("accepted %q", source)
 		}
 	}
 }
 
-func TestAutoPresetsKeepAPICapabilitySeparateFromAssets(t *testing.T) {
-	for _, source := range []string{"https://api.github.com/repos/example/tool/releases/latest", "https://github.com/example/tool/releases/download/v1.0.0/tool"} {
-		var calls []string
-		client := &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
-			calls = append(calls, r.URL.String())
-			if r.URL.Host == "ghfast.top" {
-				return response(r, 200, "asset fixture"), nil
-			}
-			return response(r, 503, "unavailable"), nil
-		})}
-		b, err := Get(client, source, 32, "auto")
-		if strings.Contains(source, "api.github.com") {
-			if err == nil || len(calls) != 2 || strings.Contains(strings.Join(calls, " "), "ghfast.top") {
-				t.Fatalf("sent API to asset-only preset: %v %v", calls, err)
-			}
-		} else if err != nil || string(b) != "asset fixture" || len(calls) != 3 || calls[2] != assetPrefix+"/"+source {
-			t.Fatalf("asset fallback failed: %v %q %v", calls, b, err)
+func TestAutoIsRejectedBeforeNetwork(t *testing.T) {
+	calls := 0
+	client := &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) { calls++; return response(r, 200, "unexpected"), nil })}
+	for _, source := range []string{"https://api.github.com/repos/a/b/releases/latest", "https://github.com/a/b/releases/download/v1/file"} {
+		if _, err := Get(client, source, 32, "auto"); err == nil {
+			t.Fatal("Auto was accepted")
 		}
+	}
+	if calls != 0 {
+		t.Fatal("Auto reached the network")
 	}
 }
 
@@ -303,7 +272,7 @@ func TestGetRedirectLoopAndSlowResponseRemainBounded(t *testing.T) {
 		resp.Header.Set("Location", "https://github.com/loop")
 		return resp, nil
 	})}
-	if _, err := Get(client, "https://github.com/start", 32, "auto"); err == nil || calls != 5 {
+	if _, err := Get(client, "https://github.com/start", 32, "direct"); err == nil || calls != 5 {
 		t.Fatalf("redirect loop calls=%d err=%v", calls, err)
 	}
 	client.Timeout = 10 * time.Millisecond
@@ -392,9 +361,9 @@ func TestTransportFailuresClassifyAndRedactWithoutLosingCause(t *testing.T) {
 	}
 }
 
-func TestTransportFailureFallbackPolicyIsUnchanged(t *testing.T) {
+func TestTransportFailureNeverChangesSelectedRoute(t *testing.T) {
 	for _, phase := range []string{"request", "body"} {
-		for _, policy := range []string{"direct", "auto", "https://custom.invalid/prefix"} {
+		for _, policy := range []string{"direct", "https://custom.invalid/prefix"} {
 			t.Run(phase+"/"+policy, func(t *testing.T) {
 				var calls []string
 				client := &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
@@ -414,11 +383,6 @@ func TestTransportFailureFallbackPolicyIsUnchanged(t *testing.T) {
 				b, err := Get(client, source, 32, policy)
 				want := []string{source}
 				switch policy {
-				case "auto":
-					want = append(want, defaultPrefix+"/"+source)
-					if err != nil || string(b) != "recovered" {
-						t.Fatalf("auto failed to recover: %q %v", b, err)
-					}
 				case "direct":
 					if err == nil || b != nil {
 						t.Fatal("direct retried or returned partial bytes")
@@ -494,5 +458,21 @@ func TestLocalTLSHTTP1AndHTTP2CompleteAndTruncatedResponses(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestGetContextCancellationStopsOnlyTheForegroundRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	calls := 0
+	client := &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		return response(r, http.StatusOK, "fixture"), nil
+	})}
+	if _, err := GetContext(ctx, client, "https://api.github.com/repos/example/tool/releases/latest", 1024, "direct"); !errors.Is(err, context.Canceled) || calls != 0 {
+		t.Fatal("cancelled operation made a request", err, calls)
+	}
+	if data, err := GetContext(context.Background(), client, "https://api.github.com/repos/example/tool/releases/latest", 1024, "direct"); err != nil || string(data) != "fixture" || calls != 1 {
+		t.Fatal("cancelling one operation affected the next independent request", err, calls)
 	}
 }

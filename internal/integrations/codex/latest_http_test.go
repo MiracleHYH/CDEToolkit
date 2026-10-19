@@ -2,12 +2,14 @@ package codex
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 type latestHTTPTransport func(*http.Request) (*http.Response, error)
@@ -111,5 +113,34 @@ func TestLatestHTTPRejectsNilClientWithoutUsingDefaultTransport(t *testing.T) {
 	})
 	if version, err := latestHTTPService(t).LatestHTTP(nil); err == nil || version != "" {
 		t.Fatalf("nil client accepted: version=%q err=%v", version, err)
+	}
+}
+
+func TestLatestHTTPOperationContextCancelsOnlySelectedRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := latestHTTPService(t)
+	s.Ctx = ctx
+	started := make(chan struct{})
+	client := &http.Client{Transport: latestHTTPTransport(func(request *http.Request) (*http.Response, error) {
+		close(started)
+		<-request.Context().Done()
+		return nil, request.Context().Err()
+	})}
+	finished := make(chan error, 1)
+	go func() { _, err := s.LatestHTTP(client); finished <- err }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("metadata request did not start")
+	}
+	cancel()
+	select {
+	case err := <-finished:
+		if err == nil {
+			t.Fatal("cancelled metadata request succeeded")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("metadata lookup ignored operation cancellation")
 	}
 }

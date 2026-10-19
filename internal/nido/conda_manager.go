@@ -198,7 +198,13 @@ func (m *Manager) publishCondaMirror(cfg conda.Config) error {
 }
 
 func (m *Manager) ConfigureConda(next conda.Config, scope ...conda.NativeScope) error {
+	if err := m.condaContextError(); err != nil {
+		return err
+	}
 	return m.mutate(false, func() error {
+		if err := m.condaContextError(); err != nil {
+			return err
+		}
 		var err error
 		next, err = m.prepareCondaSource(next, scope...)
 		if err != nil {
@@ -240,6 +246,12 @@ func (m *Manager) ConfigureConda(next conda.Config, scope ...conda.NativeScope) 
 			captureGuard = presetGuard
 		}
 		if err := m.CheckConda(next, scope...); err != nil {
+			return err
+		}
+		// Cancellation stops queries/preflight before the first commit. Once
+		// commit starts, finish the existing compensation path without cutting
+		// across a native-file replacement.
+		if err := m.condaContextError(); err != nil {
 			return err
 		}
 		// Persist the original mirror before the first native channel write.
@@ -350,9 +362,19 @@ func publicCondaVariables(cfg conda.Config, vars map[string]string) map[string]s
 // RecordCondaDefaults only records missing first-use mirror information. Setup
 // must not reapply an active profile or modify native paths/channels.
 func (m *Manager) RecordCondaDefaults(next conda.MirrorDefaults, source ...string) error {
+	if err := m.condaContextError(); err != nil {
+		return err
+	}
 	return m.mutate(false, func() error {
 		return m.recordCondaDefaults(next, source...)
 	})
+}
+
+func (m *Manager) condaContextError() error {
+	if m.Conda.Ctx != nil {
+		return m.Conda.Ctx.Err()
+	}
+	return nil
 }
 
 // CheckCondaDefaults gives setup previews the same ownership and state checks
@@ -397,6 +419,9 @@ func (m *Manager) recordCondaDefaults(next conda.MirrorDefaults, source ...strin
 		next.PipVariables = prior.PipVariables
 	}
 	if err := m.CheckCondaDefaults(next, source...); err != nil {
+		return err
+	}
+	if err := m.condaContextError(); err != nil {
 		return err
 	}
 	previous := m.Config

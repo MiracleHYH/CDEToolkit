@@ -69,11 +69,21 @@ func (w *boundedOutput) Write(data []byte) (int, error) {
 }
 
 func runCommand(name string, args, env []string) ([]byte, error) {
+	return runCommandContext(context.Background(), name, args, env)
+}
+
+func runCommandContext(parent context.Context, name string, args, env []string) ([]byte, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if err := parent.Err(); err != nil {
+		return nil, fmt.Errorf("只读命令已取消: %w", err)
+	}
 	path, err := commandPath(name, env)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, path, args...)
 	command.Env = env
@@ -100,7 +110,7 @@ func runCommand(name string, args, env []string) ([]byte, error) {
 		return nil, fmt.Errorf("命令输出超过 1 MiB")
 	}
 	if ctx.Err() != nil {
-		return nil, fmt.Errorf("只读命令超时或取消（最长 10 秒）")
+		return nil, fmt.Errorf("只读命令超时或取消（最长 10 秒）: %w", ctx.Err())
 	}
 	if err != nil {
 		return nil, fmt.Errorf("只读命令执行失败")

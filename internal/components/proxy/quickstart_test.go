@@ -1,12 +1,67 @@
 package proxy
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
 )
+
+func TestQuickStartControllerAndManualOnlyProviderRefresh(t *testing.T) {
+	o := QuickStartOptions{
+		ProviderURL: "https://provider.invalid/sub", ProxyFilter: ".*", ProxyPort: 17890,
+		Download:   &QuickStartRoute{Filter: "download", Port: 17891},
+		ISP:        &QuickStartISP{NodeURL: quickStartTestNode, Port: 17892, RelayFilter: "relay"},
+		Controller: &ControllerConfig{Address: DefaultControllerAddress, Secret: "synthetic-controller-secret"},
+	}
+	data, err := QuickStart(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := ParseConfig(data, t.TempDir())
+	if err != nil || config.Controller == nil || *config.Controller != *o.Controller {
+		t.Fatalf("quick start controller failed round trip: %v", err)
+	}
+	var document quickStartTestDocument
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	if provider := document.Provider["subscription"]; provider.Interval != 0 || !provider.HealthCheck.Enable || provider.HealthCheck.Interval != 300 {
+		t.Fatal("manual provider refresh disabled health checks or retained polling")
+	}
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	provider := raw["proxy-providers"].(map[string]any)["subscription"].(map[string]any)
+	if interval, explicit := provider["interval"]; !explicit || interval != 0 {
+		t.Fatal("manual provider refresh must emit an explicit zero interval")
+	}
+	for _, group := range document.Groups {
+		if group.Type != "url-test" || group.Interval != 300 {
+			t.Fatal("manual provider refresh disabled group measurements")
+		}
+	}
+	encoded, err := json.Marshal(config)
+	if err != nil || strings.Contains(string(encoded), o.Controller.Secret) {
+		t.Fatal("controller secret leaked through configuration JSON")
+	}
+	for _, controller := range []ControllerConfig{
+		{Address: "127.0.0.1:17890", Secret: "token"},
+		{Address: "127.0.0.1:17891", Secret: "token"},
+		{Address: "127.0.0.1:17892", Secret: "token"},
+		{Address: "0.0.0.0:9090", Secret: "token"},
+		{Address: DefaultControllerAddress},
+		{Address: DefaultControllerAddress, Secret: "bad\nsecret"},
+	} {
+		o.Controller = &controller
+		if _, err := QuickStart(o); err == nil {
+			t.Fatal("quick start accepted unsafe controller or listener conflict")
+		}
+	}
+}
 
 const quickStartTestNode = "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@192.0.2.9:8388#ISP%2Dname"
 
@@ -83,11 +138,20 @@ func TestQuickStartOptionalRoutes(t *testing.T) {
 				if err := yaml.Unmarshal(data, &config); err != nil {
 					t.Fatal(err)
 				}
-				if config.AllowLAN || config.Mode != "rule" || config.LogLevel != "info" || !reflect.DeepEqual(config.Rules, []string{"MATCH,DIRECT"}) {
+				outbound := "proxy"
+				if download {
+					outbound = "download"
+				}
+				expectedRules := []string{
+					"AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,github.com))," + outbound,
+					"AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,release-assets.githubusercontent.com))," + outbound,
+					"MATCH,DIRECT",
+				}
+				if config.AllowLAN || config.Mode != "rule" || config.LogLevel != "info" || !reflect.DeepEqual(config.Rules, expectedRules) {
 					t.Fatalf("unexpected defaults: %+v", config)
 				}
 				provider, ok := config.Provider["subscription"]
-				if !ok || len(config.Provider) != 1 || provider.Type != "http" || provider.URL != o.ProviderURL || provider.Path != "providers/subscription.yaml" || provider.Proxy != "DIRECT" || provider.Interval != 3600 || !provider.HealthCheck.Enable || provider.HealthCheck.URL != DefaultTestURL || provider.HealthCheck.Interval != 300 {
+				if !ok || len(config.Provider) != 1 || provider.Type != "http" || provider.URL != o.ProviderURL || provider.Path != "providers/subscription.yaml" || provider.Proxy != "DIRECT" || provider.Interval != 0 || !provider.HealthCheck.Enable || provider.HealthCheck.URL != DefaultTestURL || provider.HealthCheck.Interval != 300 {
 					t.Fatalf("unexpected provider: %+v", config.Provider)
 				}
 				if !reflect.DeepEqual(config.Listeners, expectedListeners) {

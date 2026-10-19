@@ -2,8 +2,8 @@
 # Acceptance for an independently cosign-verified public Nido Linux amd64 tar.
 # The default mode requires verified public inputs. Explicit pre-release-local
 # mode is separately labelled and never fabricates signature verification.
-# Neither mode runs Nido on the host. API responses and the local API-only
-# CONNECT core are explicit fixtures, not public API proof.
+# Neither mode runs Nido on the host. API/files and the local CONNECT/controller
+# core are explicit loopback fixtures, not proof of any public network provider.
 set -euo pipefail
 umask 077
 fail() { printf 'FAIL release API isolation: %s\n' "$*" >&2; exit 2; }
@@ -39,7 +39,7 @@ chmod 0644 "$output/inputs/"*
 chmod 0555 "$output/inputs/api-fixture"
 chmod 0777 "$output/container-evidence"
 shasum -a 256 "$output/inputs/"* "${BASH_SOURCE[0]}" "$tests_dir/fixtures/nido-api-release/main.go" > "$output/inputs.sha256"
-printf 'version=%s\nnido_input_scope=%s\nplatform=linux/amd64\nuid=10001\nnetwork=none-loopback-only\nmetadata=private-loopback-TLS-fixture\ncore=test-only-api-CONNECT-fixture\nreal_mihomo=not-tested\npublic_api_network=not-tested\nreal_home=not-mounted\nsource=not-mounted\n' "$version" "$input_scope" > "$output/provenance.txt"
+printf 'version=%s\nnido_input_scope=%s\nplatform=linux/amd64\nuid=10001\nnetwork=none-loopback-only\nfile_routes=None,prefix,Proxy-reference\napi_route=independent-Nido-Proxy\nmetadata=private-loopback-TLS-fixture\nassets=trusted-fake-core-gzip\ncore=test-only-api-file-CONNECT-and-native-controller-fixture\nreal_mihomo=not-tested\npublic_api_network=not-tested\nreal_home=not-mounted\nsource=not-mounted\n' "$version" "$input_scope" > "$output/provenance.txt"
 printf 'host_uname=%s\n' "$(uname -srm)" >> "$output/provenance.txt"
 if [[ $input_scope = verified-public ]]; then
   printf 'nido=provided-independently-cosign-verified-public-release\nsource_nido_binary=never-built-or-used\n' >> "$output/provenance.txt"
@@ -65,6 +65,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 cid=$(docker create --pull never --platform linux/amd64 --read-only --network none \
   --cap-drop ALL --security-opt no-new-privileges --user 10001:10001 --pids-limit 128 --memory 1g \
+  --sysctl net.ipv4.ip_unprivileged_port_start=0 \
+  --add-host api.github.com:127.0.0.1 --add-host github.com:127.0.0.1 --add-host gh-proxy.org:127.0.0.1 \
   --tmpfs /case:rw,exec,nosuid,nodev,mode=1777,size=768m \
   --mount "type=bind,source=$output/inputs,target=/inputs,readonly" \
   --mount "type=bind,source=$output/container-evidence,target=/evidence" \

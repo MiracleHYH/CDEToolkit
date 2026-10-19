@@ -47,7 +47,7 @@ func TestSelfUpdateAPIHTTPSeparatesOfficialMetadataFromAcceleratedFiles(t *testi
 }
 
 func TestSelfUpdateAPIHTTPFailureNeverFallsBack(t *testing.T) {
-	for _, policy := range []string{"auto", "https://file-only.invalid"} {
+	for _, policy := range []string{"direct", "https://file-only.invalid"} {
 		for _, version := range []string{"", "0.6.0"} {
 			t.Run(policy+"/"+version, func(t *testing.T) {
 				apiCalls, fileCalls := 0, 0

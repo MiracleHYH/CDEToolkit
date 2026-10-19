@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"debug/elf"
 	"debug/macho"
@@ -25,6 +26,13 @@ type preparedArtifact struct {
 }
 
 func (m *Service) artifact(path, checksum string) (preparedArtifact, error) {
+	return m.artifactContext(context.Background(), path, checksum)
+}
+
+func (m *Service) artifactContext(ctx context.Context, path, checksum string) (preparedArtifact, error) {
+	if err := ctx.Err(); err != nil {
+		return preparedArtifact{}, err
+	}
 	var raw []byte
 	var expected string
 	var err error
@@ -33,7 +41,7 @@ func (m *Service) artifact(path, checksum string) (preparedArtifact, error) {
 	}
 	if path == "" || path == "latest" {
 		var downloaded preparedArtifact
-		downloaded, err = m.downloadProxy(checksum)
+		downloaded, err = m.downloadProxyContext(ctx, checksum)
 		raw, expected = downloaded.data, downloaded.expectedVersion
 	} else {
 		if !filepath.IsAbs(path) {
@@ -47,6 +55,9 @@ func (m *Service) artifact(path, checksum string) (preparedArtifact, error) {
 	if err != nil {
 		return preparedArtifact{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return preparedArtifact{}, err
+	}
 	data := raw
 	if bytes.HasPrefix(raw, []byte{0x1f, 0x8b}) {
 		gz, e := gzip.NewReader(bytes.NewReader(raw))
@@ -58,6 +69,9 @@ func (m *Service) artifact(path, checksum string) (preparedArtifact, error) {
 		if err != nil || closeErr != nil || len(data) > maxProgram {
 			return preparedArtifact{}, fmt.Errorf("gzip 校验失败或展开大小越界")
 		}
+	}
+	if err = ctx.Err(); err != nil {
+		return preparedArtifact{}, err
 	}
 	if err = nativeProgram(data, m.platform()); err != nil {
 		return preparedArtifact{}, err
@@ -76,15 +90,13 @@ type releaseInfo struct {
 	Tag        string `json:"tag_name"`
 	Draft      bool   `json:"draft"`
 	Prerelease bool   `json:"prerelease"`
-	Assets     []struct {
-		Name   string `json:"name"`
-		URL    string `json:"browser_download_url"`
-		Digest string `json:"digest"`
-		Size   int64  `json:"size"`
-	} `json:"assets"`
 }
 
 func (m *Service) release() (releaseInfo, error) {
+	return m.releaseContext(context.Background())
+}
+
+func (m *Service) releaseContext(ctx context.Context) (releaseInfo, error) {
 	api := m.API
 	if api == "" {
 		api = "https://api.github.com"
@@ -93,8 +105,11 @@ func (m *Service) release() (releaseInfo, error) {
 	if m.APIHTTP != nil {
 		client, policy = m.APIHTTP, "direct"
 	}
-	b, err := githubdownload.Get(client, strings.TrimRight(api, "/")+"/repos/MetaCubeX/mihomo/releases/latest", 4<<20, policy)
+	b, err := githubdownload.GetContext(ctx, client, strings.TrimRight(api, "/")+"/repos/MetaCubeX/mihomo/releases/latest", 4<<20, policy)
 	if err != nil {
+		return releaseInfo{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		return releaseInfo{}, err
 	}
 	var release releaseInfo
@@ -105,7 +120,11 @@ func (m *Service) release() (releaseInfo, error) {
 }
 
 func (m *Service) Latest() (string, error) {
-	release, err := m.release()
+	return m.LatestContext(context.Background())
+}
+
+func (m *Service) LatestContext(ctx context.Context) (string, error) {
+	release, err := m.releaseContext(ctx)
 	return release.Tag, err
 }
 
@@ -118,20 +137,30 @@ type UpdateInfo struct {
 // CheckUpdate is explicitly online, whereas ordinary Status remains local.
 // Local version execution uses the same environment restrictions as startup.
 func (m *Service) CheckUpdate() (UpdateInfo, error) {
+	return m.CheckUpdateContext(context.Background())
+}
+
+func (m *Service) CheckUpdateContext(ctx context.Context) (UpdateInfo, error) {
 	result := UpdateInfo{}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	core, err := m.programSnapshot()
 	if err != nil {
 		return result, err
 	}
-	result.Current, err = m.version(core.path)
+	result.Current, err = m.versionContext(ctx, core.path)
 	if err != nil {
 		return result, err
 	}
 	if err = core.check(); err != nil {
 		return result, err
 	}
-	result.Latest, err = m.Latest()
+	result.Latest, err = m.LatestContext(ctx)
 	if err != nil {
+		return result, err
+	}
+	if err := ctx.Err(); err != nil {
 		return result, err
 	}
 	current := "v" + strings.TrimPrefix(result.Current, "v")
@@ -159,57 +188,26 @@ func stableVersionLess(a, b string) bool {
 }
 
 func (m *Service) downloadProxy(supplied string) (preparedArtifact, error) {
-	platform := strings.Split(m.platform(), "/")
-	if len(platform) != 2 || platform[0] != "linux" && platform[0] != "darwin" || platform[1] != "amd64" && platform[1] != "arm64" {
-		return preparedArtifact{}, fmt.Errorf("在线 Proxy 安装仅支持 Linux/macOS 的 amd64/arm64")
+	return m.downloadProxyContext(context.Background(), supplied)
+}
+
+func (m *Service) downloadProxyContext(ctx context.Context, supplied string) (preparedArtifact, error) {
+	if err := ctx.Err(); err != nil {
+		return preparedArtifact{}, err
 	}
-	release, err := m.release()
+	asset, err := pinnedInstallAsset(m.platform())
 	if err != nil {
 		return preparedArtifact{}, err
 	}
-	arches := []string{platform[1]}
-	if platform[1] == "amd64" {
-		// The unsuffixed amd64 package may require v3 instructions.
-		arches = []string{"amd64-v1", "amd64-compatible"}
-	}
-	for _, arch := range arches {
-		name := "mihomo-" + platform[0] + "-" + arch + "-" + release.Tag + ".gz"
-		count := 0
-		var source, digest string
-		var size int64
-		for _, a := range release.Assets {
-			if a.Name == name {
-				count++
-				source, digest, size = a.URL, strings.TrimPrefix(a.Digest, "sha256:"), a.Size
-				if !strings.HasPrefix(a.Digest, "sha256:") {
-					return preparedArtifact{}, fmt.Errorf("官方发布缺少 SHA-256 摘要")
-				}
-			}
-		}
-		if count == 0 {
-			continue
-		}
-		if count != 1 || !validChecksum(digest) || size <= 0 || size > maxProgram {
-			return preparedArtifact{}, fmt.Errorf("官方发布包重复、摘要无效或大小越界")
-		}
-		expected := "https://github.com/MetaCubeX/mihomo/releases/download/" + release.Tag + "/" + name
-		if source != expected || supplied != "" && !strings.EqualFold(supplied, digest) {
-			return preparedArtifact{}, fmt.Errorf("官方包地址或指定摘要不符合发布信息")
-		}
-		data, e := m.get(source, maxProgram)
-		if e != nil {
-			return preparedArtifact{}, e
-		}
-		if int64(len(data)) != size || !strings.EqualFold(hash(data), digest) {
-			return preparedArtifact{}, fmt.Errorf("官方包大小或 SHA-256 校验失败")
-		}
-		return preparedArtifact{data: data, expectedVersion: release.Tag}, nil
-	}
-	return preparedArtifact{}, fmt.Errorf("Mihomo 最新发布没有当前平台的兼容程序")
+	return m.fetchPinnedArtifact(ctx, asset, supplied)
 }
 
 func (m *Service) get(source string, max int64) ([]byte, error) {
-	return githubdownload.Get(m.HTTP, source, max, m.GitHubProxy)
+	return m.getContext(context.Background(), source, max)
+}
+
+func (m *Service) getContext(ctx context.Context, source string, max int64) ([]byte, error) {
+	return githubdownload.GetContext(ctx, m.HTTP, source, max, m.GitHubProxy)
 }
 
 func nativeProgram(data []byte, platform string) error {

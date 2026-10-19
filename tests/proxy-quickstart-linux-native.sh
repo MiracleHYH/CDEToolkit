@@ -27,7 +27,7 @@ output="$output_parent/$(basename "$output")"
 case "$output/" in
   "$source_dir/"*|"$goroot/"*) printf '证据目录不能位于输入源码或 SDK 内\n' >&2; exit 2 ;;
 esac
-inputs=(cmd internal tests scripts .github Makefile VERSION GDS_VERSION .go-version go.mod go.sum vendor)
+inputs=(cmd internal tests scripts .github Makefile VERSION .go-version go.mod go.sum vendor)
 for input in "${inputs[@]}"; do
   [[ -e "$source_dir/$input" && ! -L "$source_dir/$input" ]] || { printf '缺少普通源码输入：%s\n' "$input" >&2; exit 2; }
   [[ -z "$(find "$source_dir/$input" ! -type d ! -type f -print -quit)" ]] || { printf '拒绝源码中的链接或特殊文件：%s\n' "$input" >&2; exit 2; }
@@ -90,9 +90,8 @@ timeout --kill-after=5s 20m bwrap "${flags[@]}" /bin/bash -euo pipefail -c '
   gcc -dumpfullversion -dumpversion | tee /work/cc-version.txt
   { id; for ns in mnt pid net user; do printf "%s=" "$ns"; readlink "/proc/self/ns/$ns"; done; cat /proc/net/dev; } > /work/namespace.txt
   go test -race -json -count=1 -timeout=5m ./internal/components/proxy > /work/proxy-race.json
-  go test -race -json -count=1 -timeout=3m ./internal/integrations/gitproxy > /work/gitproxy-race.json
   go test -race -json -count=1 -timeout=5m ./internal/nido \
-    -run "^Test(Proxy|CodexBuiltin|QuickStart|Node|ParseNode)" \
+    -run "^Test(Proxy|QuickStart|Node|ParseNode)" \
     -skip "^TestProxyRealMihomo(CrossVersion|QuickStart)?$" > /work/nido-proxy-race.json
   go build -race -trimpath -buildvcs=false \
     -ldflags="-X=github.com/MiracleHYH/CDEToolkit/internal/nido.Version=$(cat VERSION)" \
@@ -111,7 +110,7 @@ timeout --kill-after=5s 20m bwrap "${flags[@]}" /bin/bash -euo pipefail -c '
   sha256sum /work/nido /work/fake-mihomo > /work/binary-sha256.txt
 ' 2>&1 | tee "$output/run.log"
 environment_skip_count=0
-for log in proxy-race.json gitproxy-race.json nido-proxy-race.json; do
+for log in proxy-race.json nido-proxy-race.json; do
   [[ -s "$scratch/work/$log" ]] || { printf '缺少实际测试日志：%s\n' "$log" >&2; exit 1; }
   if grep -Eq '"Action":"fail"' "$scratch/work/$log"; then
     printf '专项测试出现失败：%s\n' "$log" >&2
@@ -155,10 +154,12 @@ fi
 for test in TestQuickStartOptionalRoutes TestParseNodeURLSSCredentials; do
   grep -Eq '"Action":"pass".*"Test":"'"$test"'"' "$scratch/work/proxy-race.json" || { printf '缺少实际通过：%s\n' "$test" >&2; exit 1; }
 done
-grep -Eq '"Action":"pass".*"Test":"TestProxyPreservesOtherBytesAndUsesOnlyHTTPProxy"' "$scratch/work/gitproxy-race.json" || { printf '缺少 Git 代理配置实际通过\n' >&2; exit 1; }
-for test in TestProxyQuickStart TestProxyBind; do
+for test in TestProxyQuickStart TestProxyRemediation; do
   grep -Eq '"Action":"pass".*"Test":"'"$test"'[^"/]*"' "$scratch/work/nido-proxy-race.json" || { printf '缺少实际通过：%s\n' "$test" >&2; exit 1; }
 done
 grep -Fxq 'Nido 单目录 CLI 隔离验证通过' "$scratch/work/cli-isolation.log" || { printf '缺少既有 CLI 隔离成功证据\n' >&2; exit 1; }
 grep -Fxq 'Proxy quick start CLI 隔离验证通过' "$scratch/work/quickstart-cli-isolation.log" || { printf '缺少新版 CLI 隔离成功证据\n' >&2; exit 1; }
-printf 'PASS: 普通用户 Linux amd64 Proxy quick start、节点解析、Git/Codex 配置 race 与 CLI 隔离验证通过；证据：%s\n' "$output"
+grep -Fxq 'Proxy quick start 默认 Skip 与重复配置验证通过' "$scratch/work/quickstart-cli-isolation.log" || { printf '缺少当前 Quick Start 默认 Skip 与重复配置证据\n' >&2; exit 1; }
+grep -Fxq 'Proxy 公共 TUI 方向键、密钥隐藏与 Esc 取消验证通过' "$scratch/work/quickstart-cli-isolation.log" || { printf '缺少当前公共 TUI 按键与密钥隐藏证据\n' >&2; exit 1; }
+grep -Fxq 'Proxy 配置、缓存与数据保留及卸载重装隔离验证通过' "$scratch/work/quickstart-cli-isolation.log" || { printf '缺少当前 Proxy 数据保留与卸载重装证据\n' >&2; exit 1; }
+printf 'PASS: 普通用户 Linux amd64 Proxy quick start、节点解析、配置保留与卸载重装 race 及 CLI 隔离验证通过；证据：%s\n' "$output"

@@ -17,7 +17,7 @@ func (s Service) LatestHTTP(client *http.Client) (string, error) {
 	if client == nil {
 		return "", fmt.Errorf("Codex 版本查询需要显式 API 客户端")
 	}
-	data, err := githubdownload.Get(client, LatestURL, 4<<20, "direct")
+	data, err := githubdownload.GetContext(s.Ctx, client, LatestURL, 4<<20, "direct")
 	if err != nil {
 		return "", fmt.Errorf("查询 Codex 最新版本失败: %w", err)
 	}

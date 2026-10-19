@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline Linux amd64 runner for the Proxy bootstrap contract tests.
 # Local artifacts use a fake runner; HTTP uses loopback TLS/CONNECT fixtures.
-# Includes the source-only listener binding and unconfigured API gate.
+# Includes exclusive GitHub file routes and the independent general API proxy.
 # This does not install/start a real Mihomo core or validate public networking.
 set -euo pipefail
 umask 077
@@ -69,24 +69,34 @@ cid=$(docker create --pull never --platform linux/amd64 --read-only --network no
       TestProxyBootstrapLocalArtifactWithoutHTTP
       TestProxyBootstrapRejectsLocalChecksumBeforeCoreExecution
       TestProxyBootstrapOfficialUpdateThroughConnect
-      TestAPIProxyBindingPersistsAndProtectsOtherTools
-      TestAPIProxyBindingRefusesUnknownOrUnsafeFiles
-      TestAPIProxyBindingRejectsUnsupportedAndStaleSelections
-      TestAPIProxyLocalAndDryRunIgnoreBrokenBinding
       TestAPIProxyBindingAutomaticUpdate
-      TestAPIGateDisabledBlocksEveryOnlineEntryPoint
-      TestAPIGateReadOnlyDisabledAndOffState
-      TestAPIGateOneOffProxyRequiresNonemptyBinding
+      TestAPIProxyExplicitRouteEnforcesOfficialAPIBoundary
+      TestAPIProxyExplicitRouteRejectsUntrustedAPI
+      TestNetworkRoutesAreExclusiveAndDirectIgnoresAmbientProxy
+      TestNetworkGitHubPrefixNeverRoutesAPI
+      TestNetworkOldSidecarIsUnownedAndNeverRead
+      TestNetworkFileRouteMatrixAndIndependentAPIRoute
+      TestNetworkTemporaryCommandEnvironmentAndProxyDisable
+      TestNetworkSettingsSaveOnlyCurrentFieldsAndPreserveIndependentChoices
+      TestNetworkConcurrentConfigurationEditsArePreserved
+      TestNetworkResponseCloseRejectsChangedConfigurationWithoutFallback
+      TestNetworkShowDoesNotExposeMalformedCredentials
+      TestNetworkLongLivedManagerRebuildsRouteAfterMenuChanges
+      TestProxyPageReadsOnlyCoreStateAndExistingGroupHistory
+      TestProxyNativeUpdateDoesNotUseNidoDownloadsOrStopFallback
+      TestProxyNativeProviderAllReportsEachResultAndContinues
+      TestProxyNativeReloadUsesFixedFileAndRefreshesRecordWithoutCoreCheck
     )
-    # Fix this contract by complete names: later audit tests run separately,
-    # without silently widening or invalidating this eleven-test entry point.
+    # Explicit names ensure the complete current contract exists. The old
+    # API-only gate is gone; exclusive file routes, general Proxy and response
+    # ownership replace it. Keep exact test names so missing coverage fails.
     test_pattern=$(printf "%s|" "${test_names[@]}")
     test_pattern="^(${test_pattern%|})$"
     /inputs/nido.test -test.list "$test_pattern" > /evidence/test-list.txt
     for test_name in "${test_names[@]}"; do
       grep -Fxq "$test_name" /evidence/test-list.txt
     done
-    [[ $(wc -l < /evidence/test-list.txt) -eq 11 ]]
+    [[ $(wc -l < /evidence/test-list.txt) -eq ${#test_names[@]} ]]
     /inputs/nido.test -test.v -test.count=1 -test.timeout=8m -test.run "$test_pattern" 2>&1 | tee /evidence/tests.log
     if grep -Eq -- "--- (FAIL|SKIP):|WARNING: DATA RACE|^panic:|^fatal error:" /evidence/tests.log; then
       exit 1
@@ -101,7 +111,7 @@ cid=$(docker create --pull never --platform linux/amd64 --read-only --network no
       grep -Fq -- "--- PASS: $test_name (" /evidence/tests.log
     done < /evidence/test-list.txt
     grep -Fxq PASS /evidence/tests.log
-    printf "{\"scope\":\"offline-linux-amd64-proxy-bootstrap-contract\",\"passed\":true,\"persistent_api_binding_tested\":true,\"unconfigured_api_disabled_tested\":true,\"local_artifact_runner\":\"fake\",\"http_fixture\":\"loopback-tls-connect\",\"real_mihomo_start_tested\":false,\"public_network_acceptance\":false}\n" > /evidence/result.json
+    printf "{\"scope\":\"offline-linux-amd64-proxy-bootstrap-contract\",\"passed\":true,\"exclusive_github_file_routes_tested\":true,\"independent_general_api_proxy_tested\":true,\"temporary_command_proxy_tested\":true,\"cross_route_fallback_rejected\":true,\"response_ownership_tested\":true,\"native_core_delegation_tested\":true,\"local_artifact_runner\":\"fake\",\"http_fixture\":\"loopback-tls-connect-and-private-controller\",\"real_mihomo_start_tested\":false,\"public_network_acceptance\":false}\n" > /evidence/result.json
   ')
 [[ $cid =~ ^[0-9a-f]{64}$ ]] || fail 'Docker did not return a container identity'
 printf '%s\n' "$cid" > "$output/container.id"

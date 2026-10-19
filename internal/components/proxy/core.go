@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"regexp"
@@ -33,11 +34,21 @@ func (s *Service) controlledEnv() []string {
 var coreVersionPattern = regexp.MustCompile(`(?i)\bMihomo\s+Meta\s+([A-Za-z0-9.+_-]+)(?:\s|$)`)
 
 func (s *Service) version(program string) (string, error) {
+	return s.versionContext(context.Background(), program)
+}
+
+func (s *Service) versionContext(ctx context.Context, program string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	dir, _, err := s.paths()
 	if err != nil {
 		return "", err
 	}
-	out, err := s.runner().Run(Command{Program: program, Dir: dir, Args: []string{"-v"}, Env: s.controlledEnv(), Timeout: 10 * time.Second})
+	out, err := s.runner().Run(Command{Context: ctx, Program: program, Dir: dir, Args: []string{"-v"}, Env: s.controlledEnv(), Timeout: 10 * time.Second})
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if err != nil || len(out) > 8192 {
 		return "", fmt.Errorf("候选核心版本检查失败")
 	}
@@ -48,7 +59,14 @@ func (s *Service) version(program string) (string, error) {
 	return string(match[1]), nil
 }
 
-func (s *Service) validateConfig(program string, data []byte) error {
+func (s *Service) validateConfig(core fileSnapshot, data []byte, directory directorySnapshot) error {
+	return s.validateConfigContext(context.Background(), core, data, directory)
+}
+
+func (s *Service) validateConfigContext(ctx context.Context, core fileSnapshot, data []byte, directory directorySnapshot) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	dir, _, err := s.paths()
 	if err != nil {
 		return err
@@ -56,7 +74,22 @@ func (s *Service) validateConfig(program string, data []byte) error {
 	if _, err = ParseConfig(data, dir); err != nil {
 		return err
 	}
-	_, err = s.runner().Run(Command{Program: program, Dir: dir, Args: []string{"-t", "-d", dir, "-f", "-"}, Env: s.controlledEnv(), Input: append([]byte(nil), data...), Timeout: 30 * time.Second})
+	if err = s.requireStopped(); err != nil {
+		return fmt.Errorf("核心配置验证需要已停止的 Proxy；运行时只能静态检查：%w", err)
+	}
+	if err = directory.check(); err != nil {
+		return err
+	}
+	if err = core.check(); err != nil {
+		return err
+	}
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	_, err = s.runner().Run(Command{Context: ctx, Program: core.path, Dir: dir, Args: []string{"-t", "-d", dir, "-f", "-"}, Env: s.controlledEnv(), Input: append([]byte(nil), data...), Timeout: 30 * time.Second})
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err != nil {
 		// Core diagnostics may contain provider URLs, node credentials, and
 		// controller secrets. Do not expose unreviewed child output as status.

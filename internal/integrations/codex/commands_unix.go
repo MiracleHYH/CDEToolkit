@@ -20,13 +20,17 @@ const maxCommandOutput = 1 << 20
 // Each command is confined to its own process group. Cancellation only targets
 // this operation and its descendants, never existing Codex processes.
 func runCommand(path string, args, env []string, input []byte) ([]byte, error) {
+	return runCommandContext(context.Background(), path, args, env, input)
+}
+
+func runCommandContext(parent context.Context, path string, args, env []string, input []byte) ([]byte, error) {
 	timeout := 5 * time.Second
 	if path == "/bin/sh" {
 		timeout = 10 * time.Minute
 	} else if filepath.Base(path) == "curl" {
 		timeout = 90 * time.Second
 	}
-	return runCommandTimeout(path, args, env, input, timeout)
+	return runCommandTimeoutContext(parent, path, args, env, input, timeout)
 }
 
 func commandPath(path string, env []string) (string, error) {
@@ -78,11 +82,18 @@ func (w *boundedOutput) Write(p []byte) (int, error) {
 }
 
 func runCommandTimeout(path string, args, env []string, input []byte, timeout time.Duration) ([]byte, error) {
+	return runCommandTimeoutContext(context.Background(), path, args, env, input, timeout)
+}
+
+func runCommandTimeoutContext(parent context.Context, path string, args, env []string, input []byte, timeout time.Duration) ([]byte, error) {
 	resolved, err := commandPath(path, env)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, resolved, args...)
 	cmd.Env, cmd.Stdin = env, bytes.NewReader(input)

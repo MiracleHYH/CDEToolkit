@@ -98,5 +98,6 @@ __pycache__/
 .DS_Store
 
 # Go build outputs
-/build/
+/build/*
+!/build/go.mod
 /dist/

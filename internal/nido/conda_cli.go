@@ -9,12 +9,29 @@ import (
 )
 
 func (c *CLI) conda(m *Manager, o cliOptions, args []string) int {
+	previousContext := m.Conda.Ctx
+	if c.uiSession != nil {
+		m.Conda.Ctx = c.uiSession.Context()
+	}
+	defer func() { m.Conda.Ctx = previousContext }()
+	if err := m.condaContextError(); err != nil {
+		return c.condaOperationError(m, err)
+	}
 	if len(args) == 0 {
+		if c.interactive(o) {
+			return c.condaMenu(m, o)
+		}
 		args = []string{"status"}
+	}
+	if args[0] == "configure" {
+		if len(args) != 1 {
+			return c.condaOperationError(m, fmt.Errorf("conda configure 不接受位置参数"))
+		}
+		return c.condaMenu(m, o)
 	}
 	completed, unchanged, err := c.completeCondaArguments(m, o, args)
 	if err != nil {
-		return c.fail(err)
+		return c.condaOperationError(m, err)
 	}
 	if unchanged {
 		return c.output(o, map[string]string{"operation": "conda " + args[0], "detail": "已保留现有设置；未查询上游或修改配置。"})
@@ -24,12 +41,12 @@ func (c *CLI) conda(m *Manager, o cliOptions, args []string) int {
 	switch action {
 	case "status", "show":
 		if len(rest) != 0 {
-			return c.fail(fmt.Errorf("conda %s 不接受位置参数", action))
+			return c.condaOperationError(m, fmt.Errorf("conda %s 不接受位置参数", action))
 		}
 		return c.output(o, m.CondaStatus())
 	case "mirrors":
 		if len(rest) != 0 {
-			return c.fail(fmt.Errorf("conda mirrors 不接受位置参数"))
+			return c.condaOperationError(m, fmt.Errorf("conda mirrors 不接受位置参数"))
 		}
 		return c.output(o, []struct {
 			Tool   string `json:"tool"`
@@ -50,20 +67,20 @@ func (c *CLI) conda(m *Manager, o cliOptions, args []string) int {
 		})
 	case "validate":
 		if len(rest) != 0 {
-			return c.fail(fmt.Errorf("conda validate 不接受位置参数"))
+			return c.condaOperationError(m, fmt.Errorf("conda validate 不接受位置参数"))
 		}
 		if !m.CondaStatus().Configured {
-			return c.fail(fmt.Errorf("尚未配置 conda/pip 管理项"))
+			return c.condaOperationError(m, fmt.Errorf("尚未配置 conda/pip 管理项"))
 		}
 		if o.dry {
 			return c.output(o, map[string]string{"operation": "conda validate", "detail": "将执行当前环境中的本地 conda/Python 只读配置查询，不联网"})
 		}
 		if err := m.checkCondaMirror(m.Config.Conda, true); err != nil {
-			return c.fail(err)
+			return c.condaOperationError(m, err)
 		}
 		checks, err := m.Conda.Validate(m.Config.Conda)
 		if err != nil {
-			return c.fail(err)
+			return c.condaOperationError(m, err)
 		}
 		return c.output(o, struct {
 			Checks []string `json:"checks"`
@@ -76,7 +93,7 @@ func (c *CLI) conda(m *Manager, o cliOptions, args []string) int {
 	switch action {
 	case "setup":
 		if len(rest) > 1 {
-			return c.fail(fmt.Errorf("用法: nido conda setup [conda|pip|all]"))
+			return c.condaOperationError(m, fmt.Errorf("用法: nido conda setup [conda|pip|all]"))
 		}
 		captureTool = "all"
 		if len(rest) == 1 {
@@ -84,7 +101,7 @@ func (c *CLI) conda(m *Manager, o cliOptions, args []string) int {
 		}
 	case "mirror":
 		if len(rest) != 2 {
-			return c.fail(fmt.Errorf("用法: nido conda mirror conda|pip VALUE；预设见 conda mirrors"))
+			return c.condaOperationError(m, fmt.Errorf("用法: nido conda mirror conda|pip VALUE；预设见 conda mirrors"))
 		}
 		value := rest[1]
 		if value == "off" {
@@ -97,7 +114,7 @@ func (c *CLI) conda(m *Manager, o cliOptions, args []string) int {
 				value = "official"
 			}
 			if value != "" && value != "default" && value != "official" && value != "tuna" {
-				return c.fail(fmt.Errorf("Conda 镜像仅支持 default、official（conda）、tuna、off"))
+				return c.condaOperationError(m, fmt.Errorf("Conda 镜像仅支持 default、official（conda）、tuna、off"))
 			}
 			next.CondaMirror = value
 			if value != "" {
@@ -112,7 +129,7 @@ func (c *CLI) conda(m *Manager, o cliOptions, args []string) int {
 			if value != "" && value != "default" {
 				index, err := conda.PipMirror(value)
 				if err != nil {
-					return c.fail(err)
+					return c.condaOperationError(m, err)
 				}
 				next.PipIndexURL = index
 				if value != "official" && value != "tuna" && value != "ustc" {
@@ -123,15 +140,15 @@ func (c *CLI) conda(m *Manager, o cliOptions, args []string) int {
 				captureTool = "pip"
 			}
 		default:
-			return c.fail(fmt.Errorf("镜像工具必须为 conda 或 pip"))
+			return c.condaOperationError(m, fmt.Errorf("镜像工具必须为 conda 或 pip"))
 		}
 	case "cache":
 		if len(rest) != 2 || rest[0] != "conda" && rest[0] != "pip" {
-			return c.fail(fmt.Errorf("用法: nido conda cache conda|pip DIR|off"))
+			return c.condaOperationError(m, fmt.Errorf("用法: nido conda cache conda|pip DIR|off"))
 		}
 		value, err := condaDirectory(m, rest[1])
 		if err != nil {
-			return c.fail(err)
+			return c.condaOperationError(m, err)
 		}
 		if rest[0] == "conda" {
 			scope.PkgsDir = true
@@ -142,33 +159,33 @@ func (c *CLI) conda(m *Manager, o cliOptions, args []string) int {
 		}
 	case "envs":
 		if len(rest) != 1 {
-			return c.fail(fmt.Errorf("用法: nido conda envs DIR|off"))
+			return c.condaOperationError(m, fmt.Errorf("用法: nido conda envs DIR|off"))
 		}
 		value, err := condaDirectory(m, rest[0])
 		if err != nil {
-			return c.fail(err)
+			return c.condaOperationError(m, err)
 		}
 		next.EnvsDir = value
 		scope.EnvsDir = true
 	case "reset":
 		if len(rest) != 0 {
-			return c.fail(fmt.Errorf("conda reset 不接受位置参数"))
+			return c.condaOperationError(m, fmt.Errorf("conda reset 不接受位置参数"))
 		}
 		next = conda.Config{Defaults: m.Config.Conda.Defaults}
 	default:
-		return c.fail(fmt.Errorf("未知 conda 操作: %s", action))
+		return c.condaOperationError(m, fmt.Errorf("未知 conda 操作: %s", action))
 	}
 	if m.configBytes == nil {
-		return c.fail(fmt.Errorf("尚未初始化，请先运行 nido init"))
+		return c.condaOperationError(m, fmt.Errorf("尚未初始化，请先运行 nido init"))
 	}
 	next, err = m.prepareCondaSource(next, scope)
 	if err != nil {
-		return c.fail(err)
+		return c.condaOperationError(m, err)
 	}
 	if action == "setup" && captureTool != "pip" && m.Config.Conda.CondaMirror == "" {
 		next.SourceCONDARC, err = m.Conda.ResolveSource(m.Config.Conda, next)
 		if err != nil {
-			return c.fail(err)
+			return c.condaOperationError(m, err)
 		}
 	}
 	// Capture before publishing a profile or editing native storage settings.
@@ -176,7 +193,7 @@ func (c *CLI) conda(m *Manager, o cliOptions, args []string) int {
 	if captureTool != "" {
 		captured, err := m.Conda.CaptureAtSource(next, next.Defaults, captureTool)
 		if err != nil {
-			return c.fail(fmt.Errorf("记录本机 default 失败；未切换镜像: %w", err))
+			return c.condaOperationError(m, fmt.Errorf("记录本机 default 失败；未切换镜像: %w", err))
 		}
 		next.Defaults = captured
 	}
@@ -186,7 +203,7 @@ func (c *CLI) conda(m *Manager, o cliOptions, args []string) int {
 			source = []string{next.SourceCONDARC}
 		}
 		if err := m.CheckCondaDefaults(next.Defaults, source...); err != nil {
-			return c.fail(err)
+			return c.condaOperationError(m, err)
 		}
 		if o.dry {
 			return c.output(o, struct {
@@ -195,31 +212,37 @@ func (c *CLI) conda(m *Manager, o cliOptions, args []string) int {
 				Detail    string               `json:"detail"`
 			}{"conda setup", next.Defaults, "只读预览；首次 default 将记录到 Nido，原生配置保持原样"})
 		}
-		if err := c.confirm(o, "记录首次本机镜像为 default，已有记录保留"); err != nil {
-			return c.fail(err)
+		if c.interactive(o) {
+			c.previewCondaChange(m, action, next, nil)
+		}
+		if err := c.condaConfirm(o, "保存首次本机镜像设置，已有记录保留"); err != nil {
+			return c.condaOperationError(m, err)
+		}
+		if err := m.condaContextError(); err != nil {
+			return c.condaOperationError(m, err)
 		}
 		// Confirmation can take arbitrarily long. Record the first effective
 		// configuration at application time, preserving already-saved snapshots.
 		captured, err := m.Conda.CaptureAtSource(next, m.Config.Conda.Defaults, captureTool)
 		if err != nil {
-			return c.fail(err)
+			return c.condaOperationError(m, err)
 		}
 		next.Defaults = captured
 		if err := m.RecordCondaDefaults(next.Defaults, source...); err != nil {
-			return c.fail(err)
+			return c.condaOperationError(m, err)
 		}
 		return c.output(o, map[string]string{"operation": "conda setup", "detail": "已记录本机原始镜像为 default；已有记录、原生配置及数据保留。"})
 	}
 	next, err = m.prepareCondaPreset(next, scope)
 	if err != nil {
-		return c.fail(err)
+		return c.condaOperationError(m, err)
 	}
 	if err := m.CheckConda(next, scope); err != nil {
-		return c.fail(err)
+		return c.condaOperationError(m, err)
 	}
 	files, err := m.Conda.NativePathFiles(m.Config.Conda, next, scope)
 	if err != nil {
-		return c.fail(err)
+		return c.condaOperationError(m, err)
 	}
 	note := ""
 	if next.CondaMirror != "" && next.SourceCONDARC != "" {
@@ -237,18 +260,24 @@ func (c *CLI) conda(m *Manager, o cliOptions, args []string) int {
 	if note != "" {
 		fmt.Fprintln(c.Err, note)
 	}
-	if err := c.confirm(o, "保存 conda/pip 配置；路径直接修改原生配置，镜像 default 永久保留"); err != nil {
-		return c.fail(err)
+	if c.interactive(o) {
+		c.previewCondaChange(m, action, next, files)
+	}
+	if err := c.condaConfirm(o, "保存本次 Conda/pip 设置；保留首次镜像，不搬迁数据"); err != nil {
+		return c.condaOperationError(m, err)
+	}
+	if err := m.condaContextError(); err != nil {
+		return c.condaOperationError(m, err)
 	}
 	if captureTool != "" {
 		captured, err := m.Conda.CaptureAtSource(next, m.Config.Conda.Defaults, captureTool)
 		if err != nil {
-			return c.fail(err)
+			return c.condaOperationError(m, err)
 		}
 		next.Defaults = captured
 	}
 	if err := m.ConfigureConda(next, scope); err != nil {
-		return c.fail(err)
+		return c.condaOperationError(m, err)
 	}
 	detail := "已保存镜像与 default 快照；当前终端执行 . " + shellQuote(filepath.Join(m.Root, "env.sh")) + " 后更新镜像。"
 	if action == "cache" || action == "envs" {

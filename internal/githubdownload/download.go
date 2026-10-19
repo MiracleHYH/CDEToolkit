@@ -19,13 +19,16 @@ import (
 	"time"
 )
 
-const defaultPrefix = "https://gh-proxy.org"
-const assetPrefix = "https://ghfast.top"
+const DefaultPrefix = "https://gh-proxy.org"
 
-// Validate accepts auto, direct, or an unauthenticated HTTPS URL prefix.
+// Validate accepts direct or an unauthenticated HTTPS URL prefix. There is no
+// automatic fallback: the caller makes one explicit routing decision.
 func Validate(value string) error {
-	if value == "" || value == "auto" || value == "direct" {
+	if value == "" || value == "direct" {
 		return nil
+	}
+	if strings.EqualFold(value, "auto") {
+		return fmt.Errorf("Auto 已移除；请选择 None、HTTPS 加速前缀或引用 Proxy")
 	}
 	u, err := url.Parse(value)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || !validPort(u) || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(value, "#") || unsafeURLText(value) {
@@ -34,33 +37,21 @@ func Validate(value string) error {
 	return nil
 }
 
-// Resolve keeps network policy explicit; an empty environment override means
-// direct. A Service which does not call Resolve retains its direct behavior.
-func Resolve(explicit string, env []string, saved string) (string, error) {
-	value := explicit
-	if value == "" {
-		found := false
-		for i := len(env) - 1; i >= 0; i-- {
-			if v, ok := strings.CutPrefix(env[i], "NIDO_GITHUB_PROXY="); ok {
-				value, found = v, true
-				break
-			}
-		}
-		if found && value == "" {
-			value = "direct"
-		} else if !found {
-			value = saved
-			if value == "" {
-				value = "auto"
-			}
-		}
-	}
-	return value, Validate(value)
-}
-
 // Get downloads a public GitHub resource with bounded network and response
 // sizes. Empty policy is direct for independently constructed components.
 func Get(base *http.Client, source string, maximum int64, policy string) ([]byte, error) {
+	return GetContext(context.Background(), base, source, maximum, policy)
+}
+
+// GetContext adds cancellation for an explicit foreground operation while
+// retaining the existing route, response and two-minute timeout boundaries.
+func GetContext(parent context.Context, base *http.Client, source string, maximum int64, policy string) ([]byte, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if err := parent.Err(); err != nil {
+		return nil, transportFailure("GitHub 请求已取消", err)
+	}
 	if err := Validate(policy); err != nil {
 		return nil, err
 	}
@@ -79,44 +70,12 @@ func Get(base *http.Client, source string, maximum int64, policy string) ([]byte
 	if maximum <= 0 || maximum >= 1<<62 {
 		return nil, fmt.Errorf("GitHub 下载大小上限无效")
 	}
-	// Auto is a bounded direct attempt followed by capability-scoped presets.
-	// The second preset is never used for public REST API requests.
-	// No registry, probing, persistent cache, or background health checks.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
 	defer cancel()
-	if policy != "auto" {
-		if policy != "" && policy != "direct" {
-			source = strings.TrimRight(policy, "/") + "/" + source
-		}
-		return fetch(ctx, base, source, maximum, 0)
+	if policy != "" && policy != "direct" {
+		source = strings.TrimRight(policy, "/") + "/" + source
 	}
-	// Limit connecting and receiving headers, not an already progressing
-	// release asset body. A slow but healthy official download need not be
-	// discarded in favor of a third party after eight seconds.
-	b, err := fetch(ctx, base, source, maximum, 8*time.Second)
-	if err == nil {
-		return b, nil
-	}
-	var failure *downloadFailure
-	if !errors.As(err, &failure) || !failure.retry || ctx.Err() != nil {
-		return nil, err
-	}
-	prefixes := []string{defaultPrefix}
-	if u.Host != "api.github.com" {
-		prefixes = append(prefixes, assetPrefix)
-	}
-	for _, prefix := range prefixes {
-		attempt, attemptCancel := context.WithTimeout(ctx, 45*time.Second)
-		b, err = fetch(attempt, base, prefix+"/"+source, maximum, 0)
-		attemptCancel()
-		if err == nil {
-			return b, nil
-		}
-		if !errors.As(err, &failure) || !failure.retry || ctx.Err() != nil {
-			return nil, err
-		}
-	}
-	return nil, err
+	return fetch(ctx, base, source, maximum, 0)
 }
 
 func unsafeURLText(value string) bool {

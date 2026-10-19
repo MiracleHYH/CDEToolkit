@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -28,8 +27,10 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// Explicit opt-in only. Every upstream, provider, health check and origin is a
-// temporary loopback fixture. Neither core is installed as a system service.
+// Explicit opt-in only. This tests pure QuickStart generation injected via
+// Service.Configure and native core forwarding, not an interactive CLI flow or
+// external-tool bindings. Every upstream, provider, health check and origin is
+// a temporary loopback fixture. Neither core is installed as a system service.
 func TestProxyRealMihomoQuickStart(t *testing.T) {
 	artifact := os.Getenv("NIDO_TEST_MIHOMO")
 	if artifact == "" {
@@ -52,8 +53,6 @@ func TestProxyRealMihomoQuickStart(t *testing.T) {
 	}
 	cli := newRealProxyCLI(t, reports)
 	home := filepath.Dir(cli.root)
-	codexHome, gitPath := filepath.Join(home, ".codex"), filepath.Join(home, ".gitconfig")
-	cli.env = append(cli.env, "GIT_CONFIG_GLOBAL="+gitPath, "GIT_CONFIG_NOSYSTEM=1")
 	for name, data := range map[string]string{
 		".codex/.env": "KEEP=literal\n", ".codex/state.sqlite": "DB-SENTINEL\n",
 		".gitconfig": "[user]\n\tname = Quick Start Fixture\n", ".bashrc": "# SHELL-SENTINEL\n",
@@ -68,8 +67,7 @@ func TestProxyRealMihomoQuickStart(t *testing.T) {
 		}
 		cli.sentinels[path] = []byte(data)
 	}
-	quickStartMustInput(t, cli, "", "init", "--yes", "--json")
-	quickStartMustInput(t, cli, "", "codex", "setup", "--home", codexHome, "--yes", "--json")
+	cli.must("init", "--yes", "--json")
 
 	var origins, healthRequests, ispHealth, providerDownloads, deadChecks atomic.Int64
 	origin := httptest.NewServer(realOrigin(&origins))
@@ -122,15 +120,17 @@ func TestProxyRealMihomoQuickStart(t *testing.T) {
 	downloadPort, releaseDownload := realProxyPort(t)
 	ispPort, releaseISP := realProxyPort(t)
 	nodeURL := fmt.Sprintf("ss://aes-128-gcm:p%%2Dass%%3Aword%%40+%%2F%%252D@127.0.0.1:%d#ISP%%2Dnode", ssPort)
-	input := fmt.Sprintf("%s/provider.yaml\n^Daily-\n%d\ny\n^Download-\n%d\ny\n%s\n%d\n%s/isp\ny\n^Relay-\ny\n", provider.URL, proxyPort, downloadPort, nodeURL, ispPort, health.URL)
 	coreData, err := readFile(artifact, 256<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(coreData)
-	quickStartMustInput(t, cli, input, "proxy", "install", "--artifact", artifact, "--sha256", hex.EncodeToString(sum[:]))
-	configPath := filepath.Join(cli.root, "proxy", "config.yaml")
-	generated, err := os.ReadFile(configPath)
+	cli.must("proxy", "install", "--artifact", artifact, "--sha256", hex.EncodeToString(sum[:]), "--yes", "--json")
+	generated, err := proxy.QuickStart(proxy.QuickStartOptions{
+		ProviderURL: provider.URL + "/provider.yaml", ProxyFilter: "^Daily-", ProxyPort: proxyPort,
+		Download: &proxy.QuickStartRoute{Filter: "^Download-", Port: downloadPort},
+		ISP:      &proxy.QuickStartISP{NodeURL: nodeURL, Port: ispPort, TestURL: health.URL + "/isp", RelayFilter: "^Relay-"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,59 +171,8 @@ func TestProxyRealMihomoQuickStart(t *testing.T) {
 	realProxyTraffic(t, ispEndpoint.URL(), ispEndpoint.URL(), origin, tlsOrigin, &origins, &relayTraffic)
 	t.Logf("真实 url-test 选择: dead 检查=%d，daily/download/relay 健康=%d/%d/%d，ISP 自定义测速=%d，目标=%d，daily/download/ISP 前置连接=%d/%d/%d", deadChecks.Load(), dailyHealth.Load(), downloadHealth.Load(), relayHealth.Load(), ispHealth.Load(), origins.Load(), dailyTraffic.Load(), downloadTraffic.Load(), relayTraffic.Load())
 
-	// These are actual CLI writes into the private HOME. Read back their URL
-	// and send traffic through it, without launching Codex or invoking Git.
-	quickStartMustInput(t, cli, "", "proxy", "bind", "ai", "--endpoint", "endpoint-isp", "--yes", "--json")
-	aiURL := quickStartWrittenProxy(t, filepath.Join(codexHome, ".env"), false)
-	if aiURL != ispEndpoint.URL() {
-		t.Fatalf("AI 类别写入错误入口: %s", aiURL)
-	}
-	realProxyTraffic(t, aiURL, aiURL, origin, tlsOrigin, &origins, &relayTraffic)
-	aiBytes, _ := os.ReadFile(filepath.Join(codexHome, ".env"))
-	quickStartMustInput(t, cli, "", "proxy", "bind", "daily", "--endpoint", "endpoint-proxy", "--yes", "--json")
-	gitURL := quickStartWrittenProxy(t, gitPath, true)
-	if gitURL != dailyEndpoint.URL() {
-		t.Fatalf("日常类别写入错误入口: %s", gitURL)
-	}
-	realProxyTraffic(t, gitURL, gitURL, origin, tlsOrigin, &origins, &dailyTraffic)
-	if current, _ := os.ReadFile(filepath.Join(codexHome, ".env")); !bytes.Equal(current, aiBytes) {
-		t.Fatal("日常类别更改了 AI 工具")
-	}
-	gitBytes, _ := os.ReadFile(gitPath)
-	quickStartMustInput(t, cli, "", "proxy", "bind", "--tool", "codex", "--endpoint", "endpoint-download", "--yes", "--json")
-	toolURL := quickStartWrittenProxy(t, filepath.Join(codexHome, ".env"), false)
-	if toolURL != downloadEndpoint.URL() {
-		t.Fatal("单工具选择没有覆盖该工具的类别结果")
-	}
-	realProxyTraffic(t, toolURL, toolURL, origin, tlsOrigin, &origins, &downloadTraffic)
-	if current, _ := os.ReadFile(gitPath); !bytes.Equal(current, gitBytes) {
-		t.Fatal("单工具 Codex 更改了 Git")
-	}
-	custom := "socks5h://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(ispEndpoint.Port))
-	quickStartMustInput(t, cli, "", "proxy", "bind", "--tool", "git", "--proxy", custom, "--yes", "--json")
-	if got := quickStartWrittenProxy(t, gitPath, true); got != custom {
-		t.Fatal("自定义 SOCKS 代理没有按原地址写入")
-	}
-	realProxyTraffic(t, ispEndpoint.URL(), custom, origin, tlsOrigin, &origins, &relayTraffic)
-	beforeDownload, _ := os.ReadFile(filepath.Join(cli.root, "config.toml"))
-	quickStartMustInput(t, cli, "", "proxy", "bind", "download", "--endpoint", "endpoint-download", "--yes", "--json")
-	bindingPath := filepath.Join(cli.root, "download-proxy.toml")
-	if binding, err := os.ReadFile(bindingPath); err != nil || !bytes.Contains(binding, []byte("nido-api-proxy")) || !bytes.Contains(binding, []byte("endpoint-download")) {
-		t.Fatalf("Nido API 绑定没有保存 listener 名称: %s %v", binding, err)
-	}
-	if info, err := os.Stat(bindingPath); err != nil || info.Mode().Perm() != 0600 {
-		t.Fatalf("Nido API 绑定文件权限错误: %v %v", info, err)
-	}
-	if current, _ := os.ReadFile(filepath.Join(cli.root, "config.toml")); !bytes.Equal(current, beforeDownload) {
-		t.Fatal("Nido API 绑定修改了主配置")
-	}
-	quickStartMustInput(t, cli, "", "proxy", "bind", "--tool", "git", "--proxy", "off", "--yes", "--json")
-	quickStartMustInput(t, cli, "", "proxy", "bind", "--tool", "codex", "--proxy", "off", "--yes", "--json")
-	for path, want := range cli.sentinels {
-		if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, want) {
-			t.Fatalf("类别/工具配置未保留哨兵 %s: %v", path, err)
-		}
-	}
+	// Configuration and forwarding must not change any external tool state.
+	realAssertRetainedBytes(t, cli.sentinels)
 
 	// Killing the only permitted relay must break the ISP path while leaving
 	// daily traffic usable. This proves the ISP does not silently dial DIRECT.
@@ -244,10 +193,11 @@ func TestProxyRealMihomoQuickStart(t *testing.T) {
 	// The native file remains freely editable, including all listener names.
 	renamed := bytes.ReplaceAll(localized, []byte("endpoint-proxy"), []byte("off"))
 	cli.configure(renamed)
-	quickStartMustInput(t, cli, "listener:off\ny\n", "proxy", "bind", "daily")
-	// Explicit noninteractive name selection has no reserved listener names.
-	quickStartMustInput(t, cli, "", "proxy", "bind", "daily", "--endpoint", "off", "--yes", "--json")
-	quickStartMustInput(t, cli, "", "proxy", "bind", "--tool", "git", "--proxy", "off", "--yes", "--json")
+	cli.must("proxy", "start", "--yes", "--json")
+	renamedEndpoint := cli.endpoint("off")
+	realProxyTraffic(t, renamedEndpoint.URL(), renamedEndpoint.URL(), origin, tlsOrigin, &origins, &dailyTraffic)
+	cli.must("proxy", "stop", "--yes", "--json")
+	realAssertClosed(t, renamedEndpoint)
 	realQuickStartNodeMatrix(t, artifact, provider.URL+"/provider.yaml", health.URL+"/matrix")
 	retained := realProxyFiles(t, filepath.Join(cli.root, "proxy"))
 	cli.must("proxy", "remove", "--yes", "--json")
@@ -261,37 +211,7 @@ func TestProxyRealMihomoQuickStart(t *testing.T) {
 			t.Fatalf("卸载改动外部哨兵 %s: %v", path, err)
 		}
 	}
-	t.Logf("真实 quick start 完成: provider=%d，health=%d，业务目标=%d；HTTP/SOCKS/HTTPS、类别/单工具/custom、停机和卸载保留均通过", providerDownloads.Load(), healthRequests.Load(), origins.Load())
-}
-
-func quickStartMustInput(t *testing.T, cli *realProxyCLI, input string, args ...string) []byte {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, cli.executable, append([]string{"--root", cli.root}, args...)...)
-	cmd.Env, cmd.Dir = cli.env, filepath.Dir(cli.root)
-	var out, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &stderr
-	var err error
-	if input == "" {
-		err = cmd.Run()
-	} else {
-		var terminal []byte
-		terminal, err = quickStartPTY(t, cmd, input)
-		_, _ = stderr.Write(terminal)
-	}
-	if err != nil {
-		log, _ := os.ReadFile(filepath.Join(cli.root, "proxy", "output.log"))
-		t.Fatalf("真实交互 CLI %v: %v\nstdout: %s\nstderr: %s\n核心日志: %s", args, err, out.Bytes(), stderr.Bytes(), log)
-	}
-	wantJSON := false
-	for _, arg := range args {
-		wantJSON = wantJSON || arg == "--json"
-	}
-	if wantJSON && !json.Valid(out.Bytes()) {
-		t.Fatalf("JSON stdout 被交互输出污染 %v: %s\nstderr: %s", args, out.Bytes(), stderr.Bytes())
-	}
-	return out.Bytes()
+	t.Logf("真实 quick start 完成: provider=%d，health=%d，业务目标=%d；配置生成与注入、HTTP/SOCKS/HTTPS、重命名 listener、停机和卸载保留均通过；未验证交互 CLI 或外部工具绑定", providerDownloads.Load(), healthRequests.Load(), origins.Load())
 }
 
 func quickStartAssertTopology(t *testing.T, data []byte, password string) {
@@ -305,7 +225,10 @@ func quickStartAssertTopology(t *testing.T, data []byte, password string) {
 			t.Fatalf("quick start 启用了非 listener 入口: %s", name)
 		}
 	}
-	if rules := config["rules"].([]any); len(rules) != 1 || rules[0] != "MATCH,DIRECT" {
+	if rules := config["rules"].([]any); len(rules) != 3 ||
+		rules[0] != "AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,github.com)),download" ||
+		rules[1] != "AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,release-assets.githubusercontent.com)),download" ||
+		rules[2] != "MATCH,DIRECT" {
 		t.Fatal("默认规则发生变化")
 	}
 	node := config["proxies"].([]any)[0].(map[string]any)
@@ -324,6 +247,45 @@ func quickStartAssertTopology(t *testing.T, data []byte, password string) {
 		}
 		if filter, exists := wantFilters[group["name"].(string)]; exists && (group["filter"] != filter || group["url"] != proxy.DefaultTestURL) {
 			t.Fatalf("独立 filter 或默认测速地址错误: %+v", group)
+		}
+	}
+}
+
+func TestRealQuickStartFixtureUsesCurrentGeneratedRulesAndLoopbackHealth(t *testing.T) {
+	options := proxy.QuickStartOptions{
+		ProviderURL: "http://127.0.0.1:19100/provider.yaml", ProxyFilter: "^Daily-", ProxyPort: 19101,
+		Download: &proxy.QuickStartRoute{Filter: "^Download-", Port: 19102},
+		ISP: &proxy.QuickStartISP{
+			NodeURL: "ss://aes-128-gcm:p%2Dass%3Aword%40+%2F%252D@127.0.0.1:19104#ISP%2Dnode",
+			Port:    19103, TestURL: "http://127.0.0.1:19105/isp", RelayFilter: "^Relay-",
+		},
+	}
+	generated, err := proxy.QuickStart(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quickStartAssertTopology(t, generated, "p-ass:word@+/%2D")
+	localized := realQuickStartHealthConfig(t, generated, "http://127.0.0.1:19105/health")
+	parsed, err := proxy.ParseConfig(localized, t.TempDir())
+	if err != nil || len(parsed.Endpoints) != 3 {
+		t.Fatalf("迁移后的纯生成配置无效: %+v %v", parsed.Endpoints, err)
+	}
+	var document map[string]any
+	if err := yaml.Unmarshal(localized, &document); err != nil {
+		t.Fatal(err)
+	}
+	provider := document["proxy-providers"].(map[string]any)["subscription"].(map[string]any)
+	if provider["url"] != options.ProviderURL || provider["health-check"].(map[string]any)["url"] != "http://127.0.0.1:19105/health" {
+		t.Fatal("provider 夹具目标未保持回环地址")
+	}
+	for _, value := range document["proxy-groups"].([]any) {
+		group := value.(map[string]any)
+		want := "http://127.0.0.1:19105/health"
+		if group["name"] == "isp" {
+			want = options.ISP.TestURL
+		}
+		if group["url"] != want || group["type"] != "url-test" {
+			t.Fatalf("url-test 夹具目标未保持回环地址: %+v", group)
 		}
 	}
 }
@@ -391,28 +353,6 @@ func quickStartRejectTraffic(t *testing.T, endpoint proxy.Endpoint, target strin
 			t.Fatal("ISP 前置不可用仍转发成功")
 		}
 	}
-}
-
-func quickStartWrittenProxy(t *testing.T, path string, git bool) string {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if git {
-			if value, ok := strings.CutPrefix(line, "\tproxy = "); ok {
-				address, err := strconv.Unquote(value)
-				if err == nil {
-					return address
-				}
-			}
-		} else if value, ok := strings.CutPrefix(line, "http_proxy='"); ok && strings.HasSuffix(value, "'") {
-			return strings.TrimSuffix(value, "'")
-		}
-	}
-	t.Fatalf("没有读回实际写入的代理地址: %s", data)
-	return ""
 }
 
 func quickStartConnectProxy(t *testing.T, business, health *atomic.Int64, targets []string, healthTarget string) *httptest.Server {

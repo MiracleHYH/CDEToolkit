@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"bytes"
-	"compress/gzip"
 	"debug/elf"
 	"encoding/binary"
 	"encoding/json"
@@ -24,43 +23,15 @@ func (f coreRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { r
 
 func coreReleaseFixture(t *testing.T, problem string) (*http.Client, string, *int) {
 	t.Helper()
-	var compressed bytes.Buffer
-	gz := gzip.NewWriter(&compressed)
-	if _, err := gz.Write(coreNativeFixture("linux", "amd64")); err != nil {
-		t.Fatal(err)
-	}
-	if err := gz.Close(); err != nil {
-		t.Fatal(err)
-	}
-	payload := compressed.Bytes()
 	count := new(int)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		*count++
-		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
-			name := "mihomo-linux-amd64-v1-v1.2.4.gz"
-			digest := hash(payload)
-			size := len(payload)
-			address := "https://github.com/MetaCubeX/mihomo/releases/download/v1.2.4/" + name
-			if problem == "digest" {
-				digest = strings.Repeat("0", 64)
-			}
-			if problem == "size" {
-				size = maxProgram + 1
-			}
-			if problem == "source" {
-				address = "https://untrusted.invalid/" + name
-			}
-			json.NewEncoder(w).Encode(map[string]any{"tag_name": "v1.2.4", "prerelease": problem == "prerelease", "assets": []any{map[string]any{"name": name, "browser_download_url": address, "digest": "sha256:" + digest, "size": size}}})
-			return
-		}
-		if !strings.HasSuffix(r.URL.Path, ".gz") {
+		if r.URL.Path != "/repos/MetaCubeX/mihomo/releases/latest" {
 			t.Errorf("unexpected release request %s", r.URL.Path)
-		}
-		if problem == "download" {
-			w.WriteHeader(http.StatusServiceUnavailable)
+			http.NotFound(w, r)
 			return
 		}
-		w.Write(payload)
+		json.NewEncoder(w).Encode(map[string]any{"tag_name": "v1.2.4", "prerelease": problem == "prerelease"})
 	}))
 	t.Cleanup(server.Close)
 	client := server.Client()
@@ -75,95 +46,34 @@ func coreReleaseFixture(t *testing.T, problem string) (*http.Client, string, *in
 	return client, "https://api.github.com", count
 }
 
-func TestCoreOfficialArtifactAndVersionChecksUseIsolatedRelease(t *testing.T) {
-	for _, problem := range []string{"", "digest", "size", "source", "prerelease", "download"} {
+func TestCoreLatestUsesIsolatedStableRelease(t *testing.T) {
+	for _, problem := range []string{"", "prerelease"} {
 		t.Run(problem, func(t *testing.T) {
 			client, api, count := coreReleaseFixture(t, problem)
-			s, r, _ := coreService(t)
-			r.run = func(c Command) ([]byte, error) { return []byte("Mihomo Meta v1.2.4"), nil }
-			s.Platform, s.HTTP, s.API = "linux/amd64", client, api
-			err := s.Install("latest", "")
-			if problem == "" && err != nil || problem != "" && err == nil {
-				t.Fatalf("release result %v", err)
-			}
-			if r.starts != 0 || r.stops != 0 {
-				t.Fatal("release operation changed runtime")
-			}
-			if problem != "" {
-				if len(r.commands) != 0 {
-					t.Fatal("invalid download reached core execution")
-				}
-				return
-			}
-			if *count != 2 {
-				t.Fatalf("release download requests %d", *count)
-			}
-			info, err := s.CheckUpdate()
-			if err != nil || info.Current != "v1.2.4" || info.Latest != "v1.2.4" || info.Available {
-				t.Fatalf("update info %+v %v", info, err)
-			}
-			if *count != 3 {
-				t.Fatalf("check downloaded an asset: %d", *count)
-			}
-		})
-	}
-}
-
-func TestCoreGitHubProxyRoutesAPIAndAssetWithoutRelaxingMetadata(t *testing.T) {
-	for _, problem := range []string{"", "digest", "source"} {
-		t.Run(problem, func(t *testing.T) {
-			client, api, _ := coreReleaseFixture(t, problem)
-			base := client.Transport
-			var routes []string
-			client.Transport = coreRoundTripper(func(r *http.Request) (*http.Response, error) {
-				routes = append(routes, r.URL.String())
-				return base.RoundTrip(r)
-			})
 			s, runner, _ := coreService(t)
-			s.Platform, s.HTTP, s.API, s.GitHubProxy = "linux/amd64", client, api, "https://accelerator.invalid/prefix"
-			runner.run = func(Command) ([]byte, error) { return []byte("Mihomo Meta v1.2.4"), nil }
-			err := s.Install("latest", "")
-			if (err == nil) != (problem == "") {
-				t.Fatalf("installation result: %v", err)
+			s.HTTP, s.API = client, api
+			version, err := s.Latest()
+			if (err == nil) != (problem == "") || problem == "" && version != "v1.2.4" || *count != 1 {
+				t.Fatalf("explicit metadata query: version=%s requests=%d err=%v", version, *count, err)
 			}
-			for _, route := range routes {
-				if !strings.HasPrefix(route, s.GitHubProxy+"/https://") {
-					t.Fatalf("bypassed configured GitHub route: %s", route)
-				}
-			}
-			if problem != "" && len(runner.commands) != 0 {
-				t.Fatal("invalid release reached candidate execution")
-			}
-			if runner.starts != 0 || runner.stops != 0 {
-				t.Fatal("download changed runtime")
+			if len(runner.commands) != 0 || runner.starts != 0 || runner.stops != 0 {
+				t.Fatal("metadata query executed or controlled core")
 			}
 		})
 	}
 }
 
-func TestCoreAutoGitHubProxyFallsBackOnlyForTransportNotDigest(t *testing.T) {
-	for _, badDigest := range []bool{false, true} {
-		client, api, _ := coreReleaseFixture(t, map[bool]string{false: "", true: "digest"}[badDigest])
-		base := client.Transport
-		var routes []string
-		client.Transport = coreRoundTripper(func(r *http.Request) (*http.Response, error) {
-			routes = append(routes, r.URL.String())
-			if !badDigest && (r.URL.Host == "api.github.com" || r.URL.Host == "github.com") {
-				return nil, errors.New("isolated direct route unavailable")
-			}
-			return base.RoundTrip(r)
-		})
-		s, runner, _ := coreService(t)
-		s.Platform, s.HTTP, s.API, s.GitHubProxy = "linux/amd64", client, api, "auto"
-		runner.run = func(Command) ([]byte, error) { return []byte("Mihomo Meta v1.2.4"), nil }
-		err := s.Install("latest", "")
-		if badDigest {
-			if err == nil || len(routes) != 2 || len(runner.commands) != 0 {
-				t.Fatalf("digest failure was retried or executed: %v %v", routes, err)
-			}
-		} else if err != nil || len(routes) != 4 || !strings.HasPrefix(routes[1], "https://gh-proxy.org/https://api.github.com/") || !strings.HasPrefix(routes[3], "https://gh-proxy.org/https://github.com/") {
-			t.Fatalf("auto route failed: %v %v", routes, err)
-		}
+func TestCoreAutoGitHubProxyIsRejectedBeforeNetworkOrExecution(t *testing.T) {
+	client, api, _ := coreReleaseFixture(t, "")
+	calls := 0
+	client.Transport = coreRoundTripper(func(r *http.Request) (*http.Response, error) {
+		calls++
+		return nil, errors.New("network must not be used")
+	})
+	s, runner, _ := coreService(t)
+	s.Platform, s.HTTP, s.API, s.GitHubProxy = "linux/amd64", client, api, "auto"
+	if err := s.Install("latest", ""); err == nil || calls != 0 || len(runner.commands) != 0 {
+		t.Fatalf("removed Auto mode reached network/execution: calls=%d err=%v", calls, err)
 	}
 }
 
@@ -193,7 +103,7 @@ func TestCoreGitHubDownloadFailurePreservesInstalledProgramConfigAndUnknownData(
 		requests++
 		return &http.Response{StatusCode: 302, Header: http.Header{"Location": []string{"https://api.github.com/user?access_token=secret"}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
 	})}
-	if err := s.Update("latest", ""); err == nil || strings.Contains(err.Error(), "secret") || requests != 1 {
+	if err := s.Update("latest", ""); err == nil || strings.Contains(err.Error(), "secret") || requests != 0 {
 		t.Fatalf("unsafe update result: requests=%d err=%v", requests, err)
 	}
 	for path, before := range want {
@@ -225,44 +135,25 @@ func TestCoreGitHubRoutingDoesNotAffectLocalArtifactsOrDryRun(t *testing.T) {
 	if err := s.Install(artifact, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Preflight("update", "latest", ""); err != nil {
-		t.Fatal(err)
+	if err := s.Preflight("update", "latest", ""); err == nil {
+		t.Fatal("native update preview accepted an unbound stopped core")
 	}
-	if err := s.Update(artifact, ""); err != nil {
-		t.Fatal(err)
+	if err := s.Update(artifact, ""); err == nil {
+		t.Fatal("legacy local update accepted")
 	}
 	if runner.starts != 0 || runner.stops != 0 {
 		t.Fatal("local management controlled a process")
 	}
 }
 
-func TestCoreOfficialCandidateVersionMustMatchSelectedRelease(t *testing.T) {
-	client, api, _ := coreReleaseFixture(t, "")
-	s, r, _ := coreService(t)
-	s.Platform, s.HTTP, s.API = "linux/amd64", client, api
-	r.run = func(c Command) ([]byte, error) { return []byte("Mihomo Meta v1.2.3"), nil }
-	if err := s.Install("latest", ""); err == nil {
-		t.Fatal("official release committed a candidate reporting a different version")
-	}
-	_, program, _ := s.paths()
-	if _, err := os.Lstat(program); !os.IsNotExist(err) {
-		t.Fatalf("mismatched release left an installed program: %v", err)
-	}
-}
-
-func TestCoreOfficialCandidateVersionMustMatchWholeReportedToken(t *testing.T) {
-	for _, version := range []string{"v1.2.4-", "v1.2.4+", "v1.2.4.", "v1.2.4/other"} {
+func TestCoreVersionPreservesWholeReportedTokenForPinnedComparison(t *testing.T) {
+	for _, version := range []string{"v1.19.32-", "v1.19.32+", "v1.19.32.", "v1.19.32/other"} {
 		t.Run(version, func(t *testing.T) {
-			client, api, _ := coreReleaseFixture(t, "")
-			s, r, _ := coreService(t)
-			s.Platform, s.HTTP, s.API = "linux/amd64", client, api
+			s, r, artifact := coreService(t)
 			r.run = func(c Command) ([]byte, error) { return []byte("Mihomo Meta " + version + " linux amd64"), nil }
-			if err := s.Install("latest", ""); err == nil {
-				t.Fatal("official candidate version was truncated to the expected stable tag")
-			}
-			_, program, _ := s.paths()
-			if _, err := os.Lstat(program); !os.IsNotExist(err) {
-				t.Fatalf("mismatched release left an installed program: %v", err)
+			reported, err := s.version(artifact)
+			if err == nil && reported == pinnedInstallVersion {
+				t.Fatal("candidate version was truncated to the pinned stable tag")
 			}
 		})
 	}
@@ -292,19 +183,13 @@ func TestCoreCheckUpdateDoesNotProposeDowngrade(t *testing.T) {
 	}
 }
 
-func TestCoreUpdateDoesNotExecuteCandidateReplacedDuringVersionCheck(t *testing.T) {
+func TestCoreInstallDoesNotExecuteCandidateReplacedDuringVersionCheck(t *testing.T) {
 	s, r, artifact := coreService(t)
-	if err := s.Install(artifact, ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.ConfigureBytes([]byte(coreConfig)); err != nil {
-		t.Fatal(err)
-	}
 	calls := 0
 	r.run = func(c Command) ([]byte, error) {
 		calls++
 		if c.Args[0] != "-v" {
-			t.Fatal("a replaced candidate was executed for configuration validation")
+			t.Fatal("replaced candidate reached config validation")
 		}
 		if err := os.Rename(c.Program, c.Program+"-original"); err != nil {
 			t.Fatal(err)
@@ -312,80 +197,39 @@ func TestCoreUpdateDoesNotExecuteCandidateReplacedDuringVersionCheck(t *testing.
 		coreWrite(t, c.Program, []byte("unknown replacement"))
 		return []byte("Mihomo Meta v1.2.4"), nil
 	}
-	if err := s.Update(artifact, ""); err == nil || calls != 1 {
+	if err := s.Install(artifact, ""); err == nil || calls != 1 {
 		t.Fatalf("candidate replacement accepted: calls=%d error=%v", calls, err)
 	}
 }
 
-func TestCoreUpdateRechecksStoppedBeforeCandidateExecution(t *testing.T) {
-	for _, stage := range []string{"download", "version"} {
-		t.Run(stage, func(t *testing.T) {
-			s, r, artifact := coreService(t)
-			if stage == "download" {
-				s.Platform = "linux/amd64"
-				if err := os.WriteFile(artifact, coreNativeFixture("linux", "amd64"), 0700); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := s.Install(artifact, ""); err != nil {
-				t.Fatal(err)
-			}
-			if err := s.ConfigureBytes([]byte(coreConfig)); err != nil {
-				t.Fatal(err)
-			}
-			record := coreStoppedRecord(t, s)
-			_, program, _ := s.paths()
-			before, _ := os.ReadFile(program)
-			activated := false
-			activate := func() {
-				activated = true
-				record.Phase = "running"
-				r.process = record.Process
-				if err := s.saveRecord(record); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if stage == "download" {
-				client, api, _ := coreReleaseFixture(t, "")
-				base := client.Transport
-				client.Transport = coreRoundTripper(func(req *http.Request) (*http.Response, error) {
-					response, err := base.RoundTrip(req)
-					if err == nil && strings.HasSuffix(req.URL.Path, ".gz") {
-						activate()
-					}
-					return response, err
-				})
-				s.Platform, s.HTTP, s.API, artifact = "linux/amd64", client, api, "latest"
-			} else {
-				r.run = func(c Command) ([]byte, error) {
-					if c.Args[0] != "-v" {
-						t.Fatal("configuration validation ran after component became active")
-					}
-					activate()
-					return []byte("Mihomo Meta v1.2.4"), nil
-				}
-			}
-			commands := len(r.commands)
-			if err := s.Update(artifact, ""); err == nil {
-				t.Fatal("update committed after component became active")
-			}
-			if !activated {
-				t.Fatal("fixture did not reach the requested transition")
-			}
-			wantCommands := commands
-			if stage == "version" {
-				wantCommands++
-			}
-			if len(r.commands) != wantCommands {
-				t.Fatalf("unexpected core execution: got=%d want=%d", len(r.commands), wantCommands)
-			}
-			if after, _ := os.ReadFile(program); !bytes.Equal(after, before) {
-				t.Fatal("active component program was replaced")
-			}
-			if r.starts != 0 || r.stops != 0 {
-				t.Fatal("update controlled a process implicitly")
-			}
-		})
+func TestCoreLegacyLocalUpdateDoesNotDownloadExecuteOrReplace(t *testing.T) {
+	s, r, artifact := coreService(t)
+	if err := s.Install(artifact, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ConfigureBytes([]byte(coreConfig)); err != nil {
+		t.Fatal(err)
+	}
+	_, program, _ := s.paths()
+	before, err := capture(program, maxProgram, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.HTTP = &http.Client{Transport: coreRoundTripper(func(*http.Request) (*http.Response, error) {
+		t.Fatal("legacy update downloaded an artifact")
+		return nil, nil
+	})}
+	commands := len(r.commands)
+	for _, check := range []func() error{func() error { return s.Update(artifact, "") }, func() error { return s.Update("latest", strings.Repeat("0", 64)) }, func() error { return s.Preflight("update", artifact, "") }} {
+		if err := check(); err == nil {
+			t.Fatal("legacy local update was accepted")
+		}
+	}
+	if err := before.check(); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.commands) != commands || r.starts != 0 || r.stops != 0 {
+		t.Fatal("legacy update executed or controlled core")
 	}
 }
 
@@ -428,19 +272,15 @@ func TestCoreLocalArtifactRejectsWrongPlatformAndChecksums(t *testing.T) {
 	}
 }
 
-func TestCoreCandidateVersionIdentityAndConfigRejectsKeepCurrentProgram(t *testing.T) {
+func TestCoreCandidateVersionAndConfigRejectionPreserveConfiguration(t *testing.T) {
 	for _, failure := range []string{"identity", "version-error", "config"} {
 		t.Run(failure, func(t *testing.T) {
 			s, r, artifact := coreService(t)
-			if err := s.Install(artifact, ""); err != nil {
-				t.Fatal(err)
-			}
-			if err := s.ConfigureBytes([]byte(coreConfig)); err != nil {
-				t.Fatal(err)
-			}
-			_, program, _ := s.paths()
-			before, _ := os.ReadFile(program)
-			if err := os.WriteFile(artifact, append(append([]byte(nil), before...), 1), 0700); err != nil {
+			dir, program, _ := s.paths()
+			config := filepath.Join(dir, "config.yaml")
+			coreWrite(t, config, []byte(coreConfig))
+			before, err := capture(config, maxConfig, false)
+			if err != nil {
 				t.Fatal(err)
 			}
 			r.run = func(c Command) ([]byte, error) {
@@ -455,25 +295,23 @@ func TestCoreCandidateVersionIdentityAndConfigRejectsKeepCurrentProgram(t *testi
 				}
 				return []byte("SECRET provider URL"), io.ErrUnexpectedEOF
 			}
-			err := s.Update(artifact, "")
+			err = s.Install(artifact, "")
 			if err == nil || strings.Contains(err.Error(), "SECRET") {
-				t.Fatalf("unsafe/absent candidate error %v", err)
+				t.Fatalf("unsafe/absent candidate error: %v", err)
 			}
-			after, _ := os.ReadFile(program)
-			if !bytes.Equal(before, after) {
-				t.Fatal("rejected candidate replaced current program")
+			if err := before.check(); err != nil {
+				t.Fatal("candidate rejection changed existing config", err)
 			}
-			matches, _ := filepath.Glob(filepath.Join(filepath.Dir(program), ".nido-core-*"))
-			if len(matches) != 0 {
-				t.Fatal("candidate temporary file leaked", matches)
+			if _, err := os.Lstat(program); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("rejected install created core", err)
+			}
+			if matches, _ := filepath.Glob(filepath.Join(dir, ".nido-core-*")); len(matches) != 0 {
+				t.Fatal("failed install leaked temporary core", matches)
 			}
 		})
 	}
 }
 
-// These are deliberately non-runnable format fixtures. A single PT_LOAD maps
-// the table and string bytes, so both section readers and an ELF loader would
-// resolve the same dependency metadata.
 func coreDynamicELFFixture(arch string, tag elf.DynTag, value, loader string) []byte {
 	const base = 0x400000
 	programs := 2

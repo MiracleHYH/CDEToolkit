@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -51,7 +52,7 @@ func TestCLISetupReusesRegisteredHomeWithoutFollowingChangedShell(t *testing.T) 
 	}
 }
 
-func TestCLIJSONPromptsStayOnStderr(t *testing.T) {
+func TestCLIJSONRequiresExplicitConfirmationWithoutReadingInput(t *testing.T) {
 	m, home := fixture(t)
 	t.Setenv("PATH", "/usr/bin:/bin")
 	if err := m.Init(); err != nil {
@@ -61,9 +62,19 @@ func TestCLIJSONPromptsStayOnStderr(t *testing.T) {
 	if err := os.Mkdir(external, 0700); err != nil {
 		t.Fatal(err)
 	}
-	code, out, stderr := isolatedCLI(t, m, []string{"codex", "setup", "--home", external, "--json"}, "y\n", nil)
-	if code != 0 || !json.Valid([]byte(out)) || !strings.Contains(stderr, "是否继续") {
-		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, stderr)
+	before := proxyBootstrapSnapshot(t, "", m.Root, home)
+	reader := &apiGateReader{}
+	var out, stderr bytes.Buffer
+	c := CLI{In: reader, Out: &out, Err: &stderr}
+	if code := c.Run([]string{"--root", m.Root, "codex", "setup", "--home", external, "--json"}); code == 0 || reader.reads != 0 || out.Len() != 0 || !strings.Contains(stderr.String(), "--yes") {
+		t.Fatalf("code=%d reads=%d stdout=%q stderr=%q", code, reader.reads, out.String(), stderr.String())
+	}
+	if !reflect.DeepEqual(before, proxyBootstrapSnapshot(t, "", m.Root, home)) {
+		t.Fatal("JSON without explicit confirmation wrote configuration")
+	}
+	code, result, diagnostic := isolatedCLI(t, m, []string{"codex", "setup", "--home", external, "--json", "--yes"}, "", nil)
+	if code != 0 || !json.Valid([]byte(result)) || diagnostic != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, result, diagnostic)
 	}
 }
 
@@ -86,7 +97,7 @@ func TestCLIDoctorJSONReportsErrorsWithoutChangingEnvironmentFile(t *testing.T) 
 		Components []Status `json:"components"`
 		Issues     []string `json:"issues"`
 	}
-	if code != 1 || json.Unmarshal([]byte(out), &report) != nil || len(report.Components) != 4 || len(report.Issues) == 0 {
+	if code != 1 || json.Unmarshal([]byte(out), &report) != nil || len(report.Components) != 3 || len(report.Issues) == 0 {
 		t.Fatalf("code=%d out=%q err=%q", code, out, stderr)
 	}
 	got, err := os.ReadFile(path)
@@ -152,7 +163,7 @@ func unsetForCLI(t *testing.T, key string) {
 	})
 }
 
-func TestCLIExplicitProxyPreservesNoProxyInOfficialInstall(t *testing.T) {
+func TestCLIExplicitProxyUsesIsolatedLoopbackNoProxyInOfficialInstall(t *testing.T) {
 	m, home := fixture(t)
 	t.Setenv("PATH", "/usr/bin:/bin")
 	for _, key := range []string{"http_proxy", "https_proxy", "all_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"} {
@@ -176,8 +187,8 @@ func TestCLIExplicitProxyPreservesNoProxyInOfficialInstall(t *testing.T) {
 			key, value, _ := strings.Cut(entry, "=")
 			values[key] = value
 		}
-		if values["no_proxy"] != "localhost,127.0.0.1" || values["NO_PROXY"] != values["no_proxy"] {
-			t.Fatal("explicit endpoint discarded NO_PROXY")
+		if values["no_proxy"] != "localhost,127.0.0.1,::1" || values["NO_PROXY"] != values["no_proxy"] {
+			t.Fatal("official installer did not get the operation's isolated loopback bypass")
 		}
 		for _, key := range []string{"http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"} {
 			if values[key] != "http://127.0.0.1:17890" {

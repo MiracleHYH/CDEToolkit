@@ -8,24 +8,16 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
 
-// enabledAPIFixture preserves the real CLI's enablement gate and proxy/TLS
-// path. Only the final official-name origin is replaced by an existing fixture
-// transport. It never starts a core, accesses the public network, or configures
-// proxy variables for another process. Callers must pass the returned URL as
-// their one-off --proxy after this explicit, private nonempty binding exists.
+// enabledAPIFixture exposes only an isolated TLS origin and loopback CONNECT
+// proxy. It never starts a component or reaches the public network.
 func enabledAPIFixture(t *testing.T, m *Manager, client *http.Client) string {
 	t.Helper()
 	if m.configBytes == nil || client == nil || client.Transport == nil {
 		t.Fatal("enabled API fixture requires an initialized root and explicit transport")
-	}
-	if err := os.WriteFile(filepath.Join(m.Root, apiProxyFile), []byte("schema = 1\nproduct = \"nido-api-proxy\"\nlistener = \"unit-api\"\n"), 0600); err != nil {
-		t.Fatal(err)
 	}
 	fixtureTransport := client.Transport
 	origin, certificate := proxyBootstrapTLS(t, http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {

@@ -23,13 +23,15 @@ type RuntimeStatus struct {
 }
 
 type processRecord struct {
-	Process     Process  `json:"process"`
-	Program     string   `json:"program"`
-	Launcher    string   `json:"launcher"`
-	ProgramHash string   `json:"program_hash"`
-	ConfigHash  string   `json:"config_hash"`
-	Endpoints   []string `json:"endpoints"`
-	Phase       string   `json:"phase"`
+	Process           Process  `json:"process"`
+	Program           string   `json:"program"`
+	Launcher          string   `json:"launcher"`
+	ProgramHash       string   `json:"program_hash"`
+	ConfigHash        string   `json:"config_hash"`
+	Endpoints         []string `json:"endpoints"`
+	Phase             string   `json:"phase"`
+	ControllerAddress string   `json:"controller_address,omitempty"`
+	ControllerDigest  string   `json:"controller_digest,omitempty"`
 }
 
 func (s *Service) recordPath() (string, error) {
@@ -79,6 +81,14 @@ func (s *Service) readRecordSnapshot() (processRecord, fileSnapshot, error) {
 		port, portErr := strconv.Atoi(u.Port())
 		if ip == nil || !ip.IsLoopback() || u.User != nil || portErr != nil || port < 1 || port > 65535 || u.Scheme != "http" && u.Scheme != "socks5h" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
 			return r, before, fmt.Errorf("Proxy 进程记录端点无效")
+		}
+	}
+	if (r.ControllerAddress == "") != (r.ControllerDigest == "") {
+		return r, before, fmt.Errorf("Proxy controller 记录不完整")
+	}
+	if r.ControllerAddress != "" {
+		if _, _, err := localAddress(r.ControllerAddress); err != nil || !validChecksum(r.ControllerDigest) {
+			return r, before, fmt.Errorf("Proxy controller 记录无效")
 		}
 	}
 	return r, before, nil
@@ -294,7 +304,7 @@ func (s *Service) startLocked(directory directorySnapshot) error {
 	if err := directory.check(); err != nil {
 		return err
 	}
-	if err := s.validateConfig(program, config.Data); err != nil {
+	if err := s.validateConfig(programSnapshot, config.Data, directory); err != nil {
 		return err
 	}
 	if err := programSnapshot.check(); err != nil {
@@ -327,6 +337,9 @@ func (s *Service) startLocked(directory directorySnapshot) error {
 		return fmt.Errorf("无法定位 Proxy 启动器")
 	}
 	r := processRecord{Program: program, Launcher: launcher, ProgramHash: hash(programSnapshot.data), ConfigHash: config.Digest, Phase: "starting"}
+	if config.Controller != nil {
+		r.ControllerAddress, r.ControllerDigest = config.Controller.Address, config.Controller.Digest()
+	}
 	for _, endpoint := range config.Endpoints {
 		r.Endpoints = append(r.Endpoints, endpoint.URL())
 	}
@@ -495,6 +508,13 @@ func (s *Service) Stop() error {
 }
 
 func (s *Service) stopRecord(r processRecord, before fileSnapshot, directory directorySnapshot) error {
+	_, err := s.stopRecordSnapshot(r, before, directory)
+	return err
+}
+
+// Return the exact stopped record written by this operation. A caller that
+// subsequently removes the program must not adopt a different writer's record.
+func (s *Service) stopRecordSnapshot(r processRecord, before fileSnapshot, directory directorySnapshot) (fileSnapshot, error) {
 	check := func() error {
 		if err := directory.check(); err != nil {
 			return err
@@ -505,14 +525,13 @@ func (s *Service) stopRecord(r processRecord, before fileSnapshot, directory dir
 		return nil
 	}
 	if err := s.stopIdentity(r, check); err != nil {
-		return err
+		return before, err
 	}
 	if err := check(); err != nil {
-		return err
+		return before, err
 	}
 	r.Phase = "stopped"
-	_, err := s.saveRecordExpected(r, before, directory)
-	return err
+	return s.saveRecordExpected(r, before, directory)
 }
 
 func (s *Service) stopIdentity(r processRecord, check func() error) error {
@@ -584,7 +603,7 @@ func (s *Service) Restart() error {
 		if err := directory.check(); err != nil {
 			return err
 		}
-		dir, program, err := s.paths()
+		dir, _, err := s.paths()
 		if err != nil {
 			return err
 		}
@@ -608,9 +627,6 @@ func (s *Service) Restart() error {
 			return fmt.Errorf("Proxy 配置在重启验证前发生变化")
 		}
 		if err := directory.check(); err != nil {
-			return err
-		}
-		if err := s.validateConfig(program, config.Data); err != nil {
 			return err
 		}
 		if err := core.check(); err != nil {

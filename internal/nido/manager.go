@@ -14,9 +14,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/MiracleHYH/CDEToolkit/internal/components/gds"
 	"github.com/MiracleHYH/CDEToolkit/internal/components/proxy"
-	"github.com/MiracleHYH/CDEToolkit/internal/githubdownload"
 	"github.com/MiracleHYH/CDEToolkit/internal/integrations/codex"
 	"github.com/MiracleHYH/CDEToolkit/internal/integrations/conda"
 	"github.com/MiracleHYH/CDEToolkit/internal/integrations/gitproxy"
@@ -41,7 +39,13 @@ type Config struct {
 }
 
 type DownloadConfig struct {
+	GitHubAccelerate string `toml:"github_accelerate,omitempty"`
+	ProxyURL         string `toml:"proxy_url,omitempty"`
+	// Read-only compatibility for configurations written before independent
+	// GitHub routes and the general Nido proxy were introduced.
+	Mode        string `toml:"mode,omitempty"`
 	GitHubProxy string `toml:"github_proxy,omitempty"`
+	Listener    string `toml:"listener,omitempty"`
 }
 
 type Manager struct {
@@ -51,7 +55,6 @@ type Manager struct {
 	Codex                      codex.Service
 	Conda                      conda.Service
 	Git                        gitproxy.Service
-	GDS                        gds.Service
 	Proxy                      proxy.Service
 	configBytes                []byte
 	rootInfo                   os.FileInfo
@@ -116,7 +119,6 @@ func New(root string) (*Manager, error) {
 	m.Codex = codex.Service{Root: root, UserHome: home, Env: m.Env}
 	m.Conda = conda.Service{Root: root, UserHome: home, Env: m.Env}
 	m.Git = gitproxy.Service{Root: root, UserHome: home, Env: m.Env}
-	m.GDS = gds.Service{Root: root, Env: m.Env}
 	m.Proxy = proxy.Service{Root: root, Env: m.Env, Launcher: exe}
 	b, err := readFile(filepath.Join(root, "config.toml"), 1<<20)
 	if err == nil {
@@ -130,7 +132,7 @@ func New(root string) (*Manager, error) {
 				return nil, fmt.Errorf("Nido 环境文件归属记录无效")
 			}
 		}
-		if e := m.Codex.ValidateConfig(config.Codex); e != nil {
+		if e := m.Codex.ValidateRecord(config.Codex); e != nil {
 			return nil, fmt.Errorf("Codex 关联配置无效: %w", e)
 		}
 		if e := m.Git.ValidateConfig(config.Git); e != nil {
@@ -537,9 +539,24 @@ func (m *Manager) Init() error {
 // InitWithDownload persists only an explicitly supplied download preference.
 // Re-running the installer without one preserves the existing configuration.
 func (m *Manager) InitWithDownload(policy string) error {
-	if err := githubdownload.Validate(policy); err != nil {
+	nextDownload, err := normalizeDownload(policy)
+	if err != nil {
 		return err
 	}
+	return m.initNetwork(nextDownload, policy != "")
+}
+
+// InitWithNetwork installs only Nido and records the explicitly selected route
+// in the same configuration write. It never starts or configures a component.
+func (m *Manager) InitWithNetwork(config DownloadConfig) error {
+	config, err := canonicalNetwork(config)
+	if err != nil {
+		return err
+	}
+	return m.initNetwork(config, true)
+}
+
+func (m *Manager) initNetwork(nextDownload DownloadConfig, explicit bool) error {
 	if m.configBytes == nil {
 		if err := m.emptyRoot(); err != nil {
 			return err
@@ -568,9 +585,9 @@ func (m *Manager) InitWithDownload(policy string) error {
 		// refreshes still use the existing repair path.
 		previous := m.Config
 		before := append([]byte(nil), m.configBytes...)
-		changed := policy != "" && policy != m.Config.Download.GitHubProxy
+		changed := explicit && nextDownload != m.Config.Download
 		if changed {
-			m.Config.Download.GitHubProxy = policy
+			m.Config.Download = nextDownload
 		}
 		env, envErr := readFile(filepath.Join(m.Root, "env.sh"), 1<<20)
 		needsSave := changed || m.configBytes == nil || envErr != nil || !bytes.Equal(env, []byte(m.Environment())) || m.Config.EnvDigest != digest(env)
@@ -752,30 +769,8 @@ func (m *Manager) Status() []Status {
 	}
 	detail := strings.Join(p.Problems, "；")
 	if p.ConfigChanged {
-		detail += " 配置已修改，请显式 restart"
+		detail += " 配置已修改，请显式 reload 或 restart"
 	}
 	rows = append(rows, Status{Name: "proxy", Kind: "builtin", Configured: p.Config == "readable", State: state, Directory: filepath.Join(m.Root, "proxy"), Detail: strings.TrimSpace(detail)})
-	g := m.GDS.Status()
-	state = "未安装"
-	if g.Program == "present" {
-		state = "已停止"
-		if g.Config != "readable" {
-			state = "待配置"
-		}
-		if g.Runtime == "running" {
-			state = "运行中"
-		}
-		if g.Runtime == "starting" {
-			state = "启动中"
-		}
-		if g.Runtime == "exited" {
-			state = "已退出"
-		}
-	}
-	if len(g.Problems) != 0 {
-		state = "异常"
-	}
-	rows = append(rows, Status{Name: "gds", Kind: "builtin", Configured: g.Config == "readable", State: state, Directory: filepath.Join(m.Root, "gds"), Detail: strings.Join(g.Problems, "；")})
-
 	return rows
 }

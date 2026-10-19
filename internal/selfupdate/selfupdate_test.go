@@ -78,7 +78,7 @@ func TestCheckStableVersionsUsesOnlyMetadata(t *testing.T) {
 		t.Run(tc.current, func(t *testing.T) {
 			r := release{Tag: "v0.6.0"}
 			client, calls := fakeClient(t, r, nil, "")
-			info, err := (Service{HTTP: client}).Check(tc.current)
+			info, err := (Service{HTTP: client, Platform: "linux/amd64"}).Check(tc.current)
 			if err != nil || info.Current != tc.current || info.Latest != "0.6.0" || info.Available != tc.available || len(*calls) != 1 {
 				t.Fatalf("info=%+v calls=%v err=%v", info, *calls, err)
 			}
@@ -205,6 +205,9 @@ func archiveFixture(t *testing.T, data []byte, mutate func(*tar.Header), extra b
 }
 
 func TestPrepareValidatesNativeReleaseWithoutExecution(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("native release identity targets isolated Linux amd64")
+	}
 	binary, marker := nativeFixture(t)
 	platform := runtime.GOOS + "/" + runtime.GOARCH
 	archive := archiveFixture(t, binary, nil, false)

@@ -3,6 +3,7 @@
 package codex
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,6 +27,9 @@ type Service struct {
 	Root     string
 	Env      []string
 	Run      Runner
+	// Ctx applies only to commands started by this operation. Cancellation
+	// never targets an existing Codex process or daemon.
+	Ctx context.Context
 }
 
 type Candidate struct {
@@ -74,7 +78,7 @@ func (s Service) run(path string, args []string, env []string, input []byte) ([]
 	if s.Run != nil {
 		out, err = s.Run(path, args, env, input)
 	} else {
-		out, err = runCommand(path, args, env, input)
+		out, err = runCommandContext(s.Ctx, path, args, env, input)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("外部命令执行失败")
@@ -185,17 +189,37 @@ func (s Service) home(path string, existing bool) (string, error) {
 // Missing external directories and commands remain readable so status and
 // detachment can still work after the user removes an external installation.
 func (s Service) ValidateConfig(c Config) error {
+	return s.validateConfig(c, true)
+}
+
+// ValidateRecord checks the saved record without resolving external paths.
+// An unavailable mount or broken external link is a component problem, and
+// must not prevent opening Nido or configuring unrelated integrations.
+func (s Service) ValidateRecord(c Config) error {
+	return s.validateConfig(c, false)
+}
+
+func (s Service) validateConfig(c Config, checkPaths bool) error {
 	if c.Home == "" {
 		if c.Command != "" || c.Channel != "" || c.ProxyBlock != "" {
 			return fmt.Errorf("未关联 Codex 时不能记录命令、渠道或代理配置")
 		}
 		return nil
 	}
-	if !filepath.IsAbs(c.Home) || filepath.Clean(c.Home) != c.Home {
+	if !filepath.IsAbs(c.Home) || filepath.Clean(c.Home) != c.Home || invalidPath(c.Home) {
 		return fmt.Errorf("CODEX_HOME 必须为规范的绝对路径")
 	}
-	if _, err := s.homePath(c.Home); err != nil {
-		return err
+	if checkPaths {
+		if _, err := s.homePath(c.Home); err != nil {
+			return err
+		}
+	} else {
+		if c.Home == "/" || s.UserHome != "" && inside(c.Home, filepath.Clean(s.UserHome)) {
+			return fmt.Errorf("CODEX_HOME 不能使用用户 HOME 或其父目录")
+		}
+		if s.Root != "" && (inside(s.Root, c.Home) || inside(c.Home, s.Root)) {
+			return fmt.Errorf("CODEX_HOME 必须位于 Nido 软件目录之外")
+		}
 	}
 	if c.Command == "" {
 		if c.Channel != "" {
@@ -211,13 +235,22 @@ func (s Service) ValidateConfig(c Config) error {
 			return fmt.Errorf("Codex 安装渠道无效")
 		}
 		if s.Root != "" {
-			root, err := canonical(s.Root)
-			parent, e := canonical(filepath.Dir(c.Command))
-			if err != nil || e != nil || inside(root, parent) {
+			root, parent := filepath.Clean(s.Root), filepath.Dir(c.Command)
+			if checkPaths {
+				var err, e error
+				root, err = canonical(s.Root)
+				parent, e = canonical(parent)
+				if err != nil || e != nil {
+					return fmt.Errorf("Codex 命令目录不可用")
+				}
+			}
+			if inside(root, parent) {
 				return fmt.Errorf("Codex 命令必须位于 Nido 软件目录之外")
 			}
-			if target, e := filepath.EvalSymlinks(c.Command); e == nil && inside(root, target) {
-				return fmt.Errorf("Codex 命令不能指向 Nido 软件目录")
+			if checkPaths {
+				if target, e := filepath.EvalSymlinks(c.Command); e == nil && inside(root, target) {
+					return fmt.Errorf("Codex 命令不能指向 Nido 软件目录")
+				}
 			}
 		}
 	}

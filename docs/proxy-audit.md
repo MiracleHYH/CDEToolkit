@@ -1,6 +1,87 @@
 # Proxy 组件审查
 
-审查基线为 `9dd3951`，日期为 2026 年 10 月 17 日。基线结论为 Proxy 只有基本生命周期骨架，不能据此宣称组件构建完成。当前源码已改用独立的 `internal/components/proxy`，后续补充了临时 HOME 中的真实核心验证。后文保留各轮发现、修复和验证证据；审计与核心隔离验证阶段没有发布或切换入口，后续发行另行验收。
+审查基线为 `9dd3951`，日期为 2026 年 10 月 17 日。基线结论为 Proxy 只有基本生命周期骨架，不能据此宣称组件构建完成。后续已改用独立的 `internal/components/proxy` 并逐轮验证。本文按阶段保留发现、修复和证据；各历史章节中的“当前实现”“最终”“已通过”只对应其当时冻结的源码。当前以紧接的“体验后精简”记录为准；它取代同日较早页面与绑定设计，不借用旧真实核心、跨版本、make check 或发行验收结论。
+
+## 体验后精简、固定首装与安全删除（2026-10-19，未发布）
+
+本轮只修改源码、假核心隔离测试和文档，不提交、推送、发布、SSH、下载或执行真实 Mihomo，不安装系统服务，不切换入口，也不读取或修改宿主现有配置、认证、会话和数据。官方只读元数据核验与 HEAD 请求不属于核心下载或兼容性执行。当前项目要求 Go >= 1.26.0，下表局部测试使用 Go 1.27.2；整体 Linux amd64 与 CI 仍由 Dev 根会话统一验收。
+
+最新契约如下，优先于下方同日精简前的历史记录：
+
+- 确认未安装且运行已停止时，一级 Proxy 页面只有“安装 Proxy”；已安装页面只有 Quick Start、更新内核、更新订阅、重载配置、重启、停止、启动、删除。公共动态动作回调在每次操作后重新读取状态和动作，安装、删除后立即更新页面。core、组选择链与已有延迟只做状态展示；同页只读显示 HTTP/file provider 的名称、类型和核心报告的更新时间，缺失标为未报告，不据此推断节点健康或刷新实连成功。
+- Proxy 页面及 CLI 移除工具代理绑定、`--tool`、YAML 导入与文件日志入口。`proxy bind`、`--file` 和 `proxy logs` 不再可用；高级用户直接编辑固定 `config.yaml`，查看状态所示 `output.log` 路径。端点只导出原生 listeners，`chooseProxy` 由 Codex／根菜单承担。历史类别和单工具绑定测试不能代替本轮已精简入口的验收。
+- 空来源及 `latest` 首次安装均选择固定 v1.19.32 官方包，经文件 HTTP 与 GitHub 加速 policy 直接 GET，不调用 Release API、Latest 或 APIHTTP。保留本地 `--artifact` 首装与原有 gzip、原生格式和版本检查；显式 Latest／CheckUpdate 仍可联网查询，但不参与首装。固定元数据按值返回，不增加可变 Service 描述符或生产测试开关。
+- 根网络为两个独立设置：GitHubAccelerate 取 `none`、`proxy` 或 HTTPS 前缀，另存通用 ProxyURL。`proxy` 引用必须有 ProxyURL；前缀请求直连前缀，不叠通用代理，API／其他 Nido HTTP 则独立使用 ProxyURL。因此前缀与 ProxyURL 可以并存，`--proxy none` 不改变已选前缀，固定核心首装只走文件路线且 API 请求为零。旧 sidecar 退役，仅保留路径以保护未知数据，不读取、迁移或采用旧 listener 路线；Nido 不持久化 listener 名称，受管 listener 只是 Codex 的候选 URL。旧三模式互斥和 API／资产共路线均属于下方历史契约。
+- remove 在同一组件锁内停止原记录的出生实例，确认退出、程序及运行记录快照未变后，只删除固定核心文件。停止失败、身份不明、PID 复用或并发替换均不删程序。配置、`.back`、provider、缓存、日志、未知文件和原生升级数据保留；正常停止可更新受管运行记录。再次安装复用这些数据，不重置 YAML 或 provider，不自动启动。
+- Quick Start 保留分享链接、provider/filter、url-test、listeners、ISP 和前置链能力；新模板为 `IN-TYPE=INNER`、目标端口 443、精确域名 `github.com` 或 `release-assets.githubusercontent.com` 的两条 AND 规则指定 `download`，无该组时指定 `proxy`，最后 `MATCH,DIRECT`。普通 listener 仍使用自己的显式出站组，provider 引导仍为 DIRECT。已有配置不自动增加规则。
+- 两条规则只建议正常初始化后的核心内部 HTTPS 更新流量，不将 Nido 网络模式传给核心，也不保证所有未来官方重定向经过代理。v1.19.32 的 `HandleTcp` 在 inner 未初始化或地址设置失败时同步报错，HTTP helper 才进入直拨分支；成功返回 INNER 管道后的异步代理拨号失败不会触发直拨重试。重定向到未覆盖的新域名仍可落到 `MATCH,DIRECT`。[HTTP helper](https://github.com/MetaCubeX/mihomo/blob/v1.19.32/component/http/http.go#L74-L81)、[INNER 管道](https://github.com/MetaCubeX/mihomo/blob/v1.19.32/listener/inner/tcp.go#L21-L40)、[updater 内部 HTTP](https://github.com/MetaCubeX/mihomo/blob/v1.19.32/component/updater/update_core.go#L164-L188)。
+
+固定安装信息于本轮重新核验，来源是[官方 v1.19.32 Release API](https://api.github.com/repos/MetaCubeX/mihomo/releases/tags/v1.19.32)，发布时间 `2026-09-30T17:09:36Z`，各资产状态 `uploaded`。官方[资产 HTML](https://github.com/MetaCubeX/mihomo/releases/expanded_assets/v1.19.32) 独立显示相同 SHA-256；精确字节数来自本次 API，而非 HTML 的四舍五入 MB。Linux amd64 资产的纯 HEAD 最终响应为 200，Content-Length 另确认 22,877,876。历史 receipt 只用于定位候选，没有被当作本次新信任来源。
+
+| 固定资产 | 压缩包字节数 | 压缩包 SHA-256 |
+| --- | ---: | --- |
+| `mihomo-linux-amd64-compatible-v1.19.32.gz` | 22877876 | `ba3ce607747a07f948fc35780e108a4a7c7f552a38b9bd4d115f313ebcb89c20` |
+| `mihomo-linux-arm64-v1.19.32.gz` | 20809592 | `9dd862e28b46ff7d775f169cceebc28deccaa0a9e804237d421cd2571e0caba0` |
+| `mihomo-darwin-amd64-compatible-v1.19.32.gz` | 22302953 | `18b382df77bded2ad0fb3db27db5636cb15b20729d5ba995a357eeb9b46bf507` |
+| `mihomo-darwin-arm64-v1.19.32.gz` | 20756622 | `3312a6780652c622890fd4357c6a853bbf865464fd047ac7b7f52dab8de18652` |
+
+下载来源固定为 `https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/<资产名>`。SHA-256 pin 是源码审查后的完整性边界，不等于上游签名；同名包发生变化时应拒绝安装，不能从最新 API 自动更新摘要绕过固定值。原生升级仍由运行核心负责，不从这张首装表推导其升级校验结论。
+
+当前新增定向结果如下，仅为假核心／临时 HOME／回环或纯 mock；不是整包、全项目、原生 Linux 或真实核心通过：
+
+| 本轮定向检查 | 结果与边界 |
+| --- | --- |
+| Remove 生命周期 race | 2.411 秒通过；同锁停机后删除、失败保程序、身份复核与重装数据复用 |
+| 固定安装与取消 race | 1.867 秒通过；固定 GET、APIHTTP 零调用、同长度错误 SHA 拒绝执行、配置/备份/未知数据不变、私有合成描述符成功 fetch 后本地惰性 gzip 安装、取消边界 |
+| Quick Start／整改专项 race | 4.763 秒通过；新 INNER HTTPS 规则的下载组／默认组与普通 listener、provider 引导边界 |
+| Linux 验证入口 mock | 19.496 秒通过；只证明入口契约及证据拒绝，未原生运行 Linux 或真实 Mihomo |
+| 页面／CLI 专项 race | 3.726 秒通过；精简页面及移除旧入口的定向回归 |
+| 新规则专项 race | 2.000 秒通过；同步修正固定 Template 的旧单规则期望后，模板专项 race 1.465 秒通过，不代表核心实连 |
+| 首装与独立网络专项 race | 2.347 秒通过；单次确认、API 零请求、`--proxy none` 及前缀与独立 ProxyURL 共存 |
+| 最终同页状态与动作专项 race | 2.981 秒通过；HTTP/file provider 名称、类型、核心更新时间展示及动态动作、删除、固定首装回归 |
+| 当前真实 QS 夹具迁移 | 改为纯生成＋Service.Configure，无旧 PTY 菜单或绑定业务；只完成编译、三个纯辅助用例 race 1.502 秒和 Linux amd64 测试程序交叉编译，没有执行真实核心 |
+
+固定下载变更的 `gofmt -l` 和定向 `git diff --check` 无输出。Proxy 源码已冻结交由 Dev 统一整合；Dev shell 的最终真实 PTY、原生 Linux 和整体 CI 验收仍待完成。下方较早整包 race、完整 PTY 和 `make check` 对应精简前源码，不能补作本轮通过。旧公网发行与真实核心章节均为对应历史源码的事实，已删除的类别／单工具业务不再作为当前可用验收；目前没有新增真实 provider、业务转发、原生更新／reload 或各平台兼容性执行证据，也尚无本轮可发布结论。
+
+## 原生 controller 与一级 Proxy 页面阶段记录（2026-10-19，精简前，未发布）
+
+本节保留当时的页面、绑定与测试事实，已由上一节取代当前产品契约；尤其工具绑定入口、YAML 导入、日志 CLI 与此前测试结果不代表体验后精简实现。
+
+本轮根据后续确认的轻量原生方案修改源码、假核心隔离测试和文档。本 session 不提交、推送或发布，统一提交与发行交由 Dev 根会话在整体重构完成验收后执行；本阶段不 SSH，不运行真实 Mihomo、系统服务、发行包或公网安装，不读取或修改宿主现有配置、认证、会话及数据。Proxy 自有实现及对接的本地验收已按下表收尾，与整体项目、原生 Linux 和发行验收分开判断。当前共享 v2 框架要求 Go >= 1.26.0，旧 Go 1.23 的通过结果只属于历史实现。
+
+本轮变更的责任和契约：
+
+- Proxy 使用公共 `componentPage` 的一级页面，动作直接呈现 Quick Start、工具代理配置、核心原生 release 升级、provider 手动更新、reload、显式启停和核心/分组选择链与已有延迟。四个绑定入口合并为单个“配置工具代理”，先选 Codex/Git/Nido，再选 listener 或自定义地址；类别及单工具 CLI 保留。不增加 listener 探测、节点编辑、selector、测速榜或连接面板。
+- 新 Quick Start 模板保留 provider/filter/listener/分流、全部已支持分享链接、ISP 和前置代理能力。CLI 提供回环 controller 与随机 secret；重复 Quick Start 复用安全的既有 controller 设置。纯生成器的 nil controller 仅为调用兼容，高级用户没有 controller 的原生 YAML 仍被接受，原生操作明确不可用，不自动补配置。
+- 新模板 HTTP provider 使用 `interval: 0`，只取消定时拉取，健康检查和 URLTest 仍启用 300 秒周期；有效缓存缺失或损坏时，核心初始化仍可能下载。provider 更新通过原生接口，不删除缓存，不将一次 204 当作节点实连证明。用户已有 YAML 不自动改 interval。
+- 分组只沿核心 `GET /proxies` 的 `now` 读取选择链，展示已有 history 的最近延迟和时间。负载均衡、循环、缺失、未知与未测量明确区分；不主动测速、不相加延迟、不据此推断 ISP dialer-proxy 的完整链路。
+- 常规更新统一为原生 `POST /upgrade?channel=release`，不加 force，不将 Nido 的网络 mode 传入核心，不保留重复的 PrepareUpdate/CommitUpdate 下载和停机替换机制。首次 Install 仍可导入本地核心；本地 artifact 更新明确拒绝。原生响应 200 后仍须确认受管出生身份、固定程序与运行映像、版本及 controller/代理监听稳定，才能刷新记录；未知或失败不启动另一个实例掩盖结果。实现仅对 Linux amd64/arm64 开放原生升级，macOS 缺少等价映像证明时在请求前拒绝，不以历史 macOS 测试替代该边界。
+- 升级前 `meta-update` 必须不存在；`meta-backup` 允许可证明属于当前用户的固定原生核心备份结构，避免正常重复升级被自身备份阻断。链接、共享硬链接、特殊对象、未知文件或归属不明均拒绝；Nido 不主动清理这些目录。核心原生下载与替换由上游执行，不声称 Nido 另行校验了该次资产 SHA-256，也不承诺上游失败时没有触碰程序。
+- reload 固定 `PUT /configs?force=true`，body 只引用当前根内 `config.yaml`；controller 控制字段必须与运行快照一致，漂移时要求本地 restart。204 不代表全部 provider 或监听成功，更没有完整 YAML 读回核验。reload 可能中断连接，后续复核失败时报告未确认，不自动回滚、重试或重启。
+- 配置替换保留旧原文到单份 `config.yaml.back` 的边界不变：无旧配置、同内容、取消或校验失败不改备份，锁内复核并发与安全文件，先备份再原子替换主文件；两个文件不是跨掉电事务。写配置仍明确要求停止。运行中的 Validate 不执行 `-t`，Restart 先静态检查、显式停止，再由 Start 执行核心检查；失败保持停止。
+- 当前真实核心夹具同步移除旧语义：本地 artifact 更新只验证拒绝与原程序/数据保留；restart 的核心语义错误在停止旧出生实例后失败，恢复原配置后须显式 start。`TestProxyRealMihomoCrossVersion` 与第二核心输入变量保留兼容，但改为 `stop → remove → install` 的两个版本首次重装与缓存复用，不称为原生 updater 验证。本轮未执行真实 Mihomo；原生 updater 成功路径只有 fake controller 与 fake image 测试，旧真实停机更新的历史事实保持原样。
+
+官方能力核对固定为 v1.19.32：[provider 路由](https://github.com/MetaCubeX/mihomo/blob/v1.19.32/hub/route/provider.go)、[配置重载参数](https://github.com/MetaCubeX/mihomo/blob/v1.19.32/hub/route/configs.go#L385-L430)、[force 与监听应用](https://github.com/MetaCubeX/mihomo/blob/v1.19.32/hub/executor/executor.go#L177-L198)、[原生升级和异步 exec](https://github.com/MetaCubeX/mihomo/blob/v1.19.32/hub/route/upgrade.go#L24-L49)、[固定备份目录](https://github.com/MetaCubeX/mihomo/blob/v1.19.32/component/updater/update_core.go#L117-L159)、[interval 与初始化](https://github.com/MetaCubeX/mihomo/blob/v1.19.32/component/resource/fetcher.go#L53-L106)。没有 `/listeners` 路由；`GET /configs` 只返回 General，不能读回完整配置。此核对不等于实际运行该核心，也不自动推及其他版本。
+
+本轮 Proxy 自有范围的最终本地检查如下。均使用 Go 1.27.2、假核心、临时 HOME 或本地 HTTP 夹具，没有执行真实 Mihomo：
+
+| 本地检查 | 结果与边界 |
+| --- | --- |
+| Proxy 整包 race | 服务 Context 完成后 14.164 秒通过，取代较早 11.757 秒的阶段结果 |
+| Nido 专项 race | Proxy、APIBindingAudit、APIProxy 专项 66.061 秒通过；随后删除未来 TaskContext 分支及旧 Interactive 测试字段，定向 race 3.391 秒通过，不扩称全项目 race |
+| 当前 race CLI＋惰性核心的完整 PTY | 26.18 秒通过；公共 v2 InputSecret/secretPrompt 已接入，实际方向键、Enter、隐藏输入、Esc、默认 Skip、重复配置、工具与下载绑定及数据保留均完成 |
+| PTY 夹具修复回归 | printf 八进制转义原会吞并后随数字，改用四位 octal；新增含默认值的真实 PTY 惰性 UI 契约 race 3.209 秒通过。该问题只在夹具编码，不改生产输入语义 |
+| 格式、静态检查 | 全部相关源码 `gofmt -l` 无输出、`git diff --check` 通过；`go vet ./internal/components/proxy ./internal/nido` 通过 |
+| Linux amd64 构建 | CGO=0 CLI、Nido 和 Proxy 测试程序交叉编译通过；没有 Linux 原生执行，不计为原生 race |
+| 当前真实核心夹具 | 已迁移到新合同，只做编译和辅助假核心测试；没有执行真实核心、原生 updater 或两版本重装场景 |
+
+Dev 随后在本次精简前完成整体本机 `make check`，退出 0，记录为 `build/refactor-evidence/make-check-tui-final-r2.log`。已只读核对全项目 vet/race，以及 Nido、Conda/pip、Proxy 三个 CLI 隔离流程均通过；其中 Proxy 包为 15.995 秒、Nido 包为 133.942 秒，Proxy 真实 PTY 的四类完成标记齐全。该次构建与执行目标为宿主 Darwin arm64，不扩称 Linux amd64 原生验证或 GitHub CI；本 session 未重复执行相同测试，也不将它视为后续精简变更通过。
+
+完整 PTY 日志为 `build/proxy-native-20261019/cli-tui-fixed.log`，已逐项核对以下四类完成标记：默认 Skip 与重复配置；公共 TUI 方向键、密钥隐藏和 Esc 取消；主 TOML Mode/Listener 与下载绑定隔离；quick start CLI 隔离。只有四类均出现且命令退出成功，才计为该完整流程通过；较早纯脚本、入口 mock 和局部方向键测试不替代它。
+
+公共私密输入现在直接走共享桥，不再保留 Proxy 自己的 Secret 能力探测；Install、CheckUpdate 和 controller 操作接入 Context。取消只影响本地等待和后续请求，不能撤销核心已受理的写操作；取消、超时或 EOF 后不自动重发。
+
+本轮没有新增原生 Linux、真实核心升级/重载、真实外部 provider、业务转发或跨平台通过结论；整体原生 Linux 和 CI 验收仍由 Dev 根会话完成后另行记录，尚未提交或发布。下文旧源码的 Linux amd64/arm64 原生 race、真实核心和发行记录继续作为历史证据保留。
 
 ## v0.6.0 发行验收（2026-10-18）
 

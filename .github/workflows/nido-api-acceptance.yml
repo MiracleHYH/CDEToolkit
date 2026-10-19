@@ -91,7 +91,7 @@ jobs:
               .browser_download_url == ("https://github.com/" + $repo + "/releases/download/" + $tag + "/" + .name) and
               (if .name == "nido-linux-amd64.tar.gz" then .size <= 134217728
                elif .name == "nido-linux-amd64.tar.gz.sha256" then .size <= 256
-               elif .name == "install.sh" then .size <= 65536
+               elif .name == "install.sh" then .size <= 188743680
                else .size <= 8388608 end))
           ' "$evidence/release.json" > "$evidence/release-metadata-valid.txt"
           mkdir "$evidence/assets"
@@ -123,10 +123,10 @@ jobs:
               --certificate-github-workflow-trigger push \
               --certificate-github-workflow-name release > "$evidence/cosign-$name.log" 2>&1
           done
-          cmp scripts/install.sh "$evidence/assets/install.sh"
           go mod download
           go mod verify > "$evidence/go-mod-verify.txt"
           go run ./cmd/nido-dist verify --archive "$evidence/assets/nido-linux-amd64.tar.gz" --platform linux/amd64 > "$evidence/static-package-verify.txt"
+          go run ./cmd/nido-dist installer --out "$evidence/assets" --verify > "$evidence/installer-source-package-verify.txt"
           mkdir "$evidence/fixture"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1 go build -trimpath -buildvcs=false -o "$evidence/fixture/api-fixture" ./tests/fixtures/nido-api-release
           sha256sum tests/fixtures/nido-api-release/main.go "$evidence/fixture/api-fixture" > "$evidence/fixture.sha256"

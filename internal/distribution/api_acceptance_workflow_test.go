@@ -80,12 +80,12 @@ func TestNativeAPIAcceptanceWorkflowsKeepPublicAndLocalScopes(t *testing.T) {
 	if !request || !checkout || !signedScope || !uploaded || tokenSteps != 1 {
 		t.Fatal("missing version/tag gate, public-only scope, token boundary or failure evidence")
 	}
-	for _, required := range []string{".draft == false", ".prerelease == false", ".assets | length == 6", "^sha256:[0-9a-f]{64}$", "git/ref/tags/", "[[ $kind = commit && $object = \"$commit\" ]]", "sha256sum"} {
+	for _, required := range []string{".draft == false", ".prerelease == false", ".assets | length == 6", "^sha256:[0-9a-f]{64}$", "git/ref/tags/", "[[ $kind = commit && $object = \"$commit\" ]]", "sha256sum", fmt.Sprintf("elif .name == \"install.sh\" then .size <= %d", maxInstaller)} {
 		if !strings.Contains(metadata, required) {
 			t.Fatal("missing public metadata boundary", required)
 		}
 	}
-	for _, required := range []string{"--certificate-identity", "--certificate-oidc-issuer", "--certificate-github-workflow-sha", "--certificate-github-workflow-ref", "--certificate-github-workflow-repository", "cmp scripts/install.sh", "go run ./cmd/nido-dist verify", "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1"} {
+	for _, required := range []string{"--certificate-identity", "--certificate-oidc-issuer", "--certificate-github-workflow-sha", "--certificate-github-workflow-ref", "--certificate-github-workflow-repository", "go run ./cmd/nido-dist installer --out \"$evidence/assets\" --verify", "go run ./cmd/nido-dist verify", "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1"} {
 		if !strings.Contains(signatures, required) {
 			t.Fatal("missing signature/source/package gate", required)
 		}

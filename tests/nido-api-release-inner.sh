@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Runs only inside the dedicated Linux amd64 release-acceptance container.
-# Nido is either the explicitly labelled pre-release local input or a provided
-# verified public release. API metadata and proxy are loopback fixtures. This
-# is not a public API or real Mihomo acceptance.
-set -euo pipefail
+# Only trusted local/public Nido inputs; private loopback TLS and a fake core.
+# All three routes terminate inside this container's network namespace.
+set -Eeuo pipefail
+trap 'printf "FAIL API contract at line %s\n" "$LINENO" >&2' ERR
 umask 077
 [[ $(uname -s) = Linux && $(uname -m) = x86_64 && $(id -u) = 10001 ]]
 input=${NIDO_API_RELEASE_INPUT:?}
@@ -14,10 +13,23 @@ input_scope=${NIDO_API_RELEASE_INPUT_SCOPE:?}
 fixture="$input/api-fixture"
 case_root=$(mktemp -d /case/nido-api-release.XXXXXX)
 origin_pid=''
+manual_core_pid=''
+connect_log=''
 core_active=false
 checks_complete=false
-disabled_cases=0
+rejected_calls=0
 positive_queries=0
+asset_installs=0
+asset_candidates=0
+failed_installs=0
+native_rejections=0
+routes_verified=false
+fallback_verified=false
+codex_independent=false
+gds_unregistered=false
+builtin_verified=false
+native_upgrade_verified=false
+native_reload_verified=false
 export HOME="$case_root/home" TMPDIR="$case_root/tmp" PATH=/usr/bin:/bin
 export NIDO_HOME="$HOME/.nido" CODEX_HOME="$HOME/.codex"
 export XDG_CONFIG_HOME="$HOME/.config" XDG_CACHE_HOME="$HOME/.cache" XDG_DATA_HOME="$HOME/.local/share"
@@ -38,18 +50,23 @@ cleanup() {
     if kill -0 "$origin_pid" 2>/dev/null; then kill "$origin_pid"; fi
     wait "$origin_pid" 2>/dev/null
   fi
+  if [[ -n $manual_core_pid ]]; then
+    if kill -0 "$manual_core_pid" 2>/dev/null; then kill "$manual_core_pid"; fi
+    wait "$manual_core_pid" 2>/dev/null
+  fi
   [[ $cleanup_status = 0 ]] || status=1
+  if [[ -f $case_root/origin/requests.jsonl ]]; then cp "$case_root/origin/requests.jsonl" "$output/network-requests.jsonl" || status=1; fi
+  if [[ -f $case_root/manual-proxy/nido-test-connect.jsonl ]]; then cp "$case_root/manual-proxy/nido-test-connect.jsonl" "$output/custom-proxy-connects.jsonl" || status=1; fi
+  if [[ -f $NIDO_HOME/proxy/nido-test-connect.jsonl ]]; then cp "$NIDO_HOME/proxy/nido-test-connect.jsonl" "$output/proxy-connects.jsonl" || status=1; fi
+  if [[ -f $NIDO_HOME/proxy/nido-test-controller.jsonl ]]; then cp "$NIDO_HOME/proxy/nido-test-controller.jsonl" "$output/controller-requests.jsonl" || status=1; fi
   write_result() {
     passed=false
     if [[ $status = 0 && $checks_complete = true ]]; then passed=true; fi
-    printf '{"scope":"nido-linux-amd64-release-api-contract","nido_input_scope":"%s","version":"%s","passed":%s,"checks_complete":%s,"disabled_online_calls":%s,"positive_api_queries":%s,"api_metadata":"private-loopback-TLS-fixture","core":"test-only-API-CONNECT-fixture","public_api_network_tested":false,"real_mihomo_tested":false,"source_nido_binary_used":%s,"cleanup_verified":%s,"evidence_exported":%s}\n' \
-      "$input_scope" "$version" "$passed" "$checks_complete" "$disabled_cases" "$positive_queries" "$([[ $input_scope = pre-release-local ]] && printf true || printf false)" "$([[ $cleanup_status = 0 ]] && printf true || printf false)" "$evidence_exported" > "$output/result.json" || return 1
+    printf '{"scope":"nido-linux-amd64-release-network-contract","nido_input_scope":"%s","version":"%s","passed":%s,"checks_complete":%s,"rejected_without_requests_or_writes":%s,"positive_api_queries":%s,"verified_local_fake_core_installs":%s,"rejected_online_asset_candidates":%s,"failed_installs_preserved":%s,"native_update_failures_preserved":%s,"exclusive_github_file_routes_tested":%s,"automatic_fallback_tested":false,"cross_mode_fallback_rejected":%s,"codex_independent":%s,"gds_unregistered":%s,"builtin_process_identity_verified":%s,"native_update_same_birth_verified":%s,"native_reload_verified":%s,"api_metadata":"private-loopback-TLS-fixture","core":"test-only-API-file-CONNECT-and-native-controller-fixture","public_api_network_tested":false,"real_mihomo_tested":false,"source_nido_binary_used":%s,"cleanup_verified":%s,"evidence_exported":%s}\n' \
+      "$input_scope" "$version" "$passed" "$checks_complete" "$rejected_calls" "$positive_queries" "$asset_installs" "$asset_candidates" "$failed_installs" "$native_rejections" "$routes_verified" "$fallback_verified" "$codex_independent" "$gds_unregistered" "$builtin_verified" "$native_upgrade_verified" "$native_reload_verified" "$([[ $input_scope = pre-release-local ]] && printf true || printf false)" "$([[ $cleanup_status = 0 ]] && printf true || printf false)" "$evidence_exported" > "$output/result.json" || return 1
     printf '%s\n' "$status" > "$output/inner-exit.txt"
   }
   write_result || status=1
-  # Only this run's dedicated evidence mount is exported for the host runner
-  # and artifact uploader. Product/configuration files remain private in /case.
-  # The mount root belongs to the host uid; only child directories are chmodded.
   if find "$output" -mindepth 1 -type f -exec chmod 0644 -- {} + &&
       find "$output" -mindepth 1 -type d -exec chmod 0755 -- {} +; then
     evidence_exported=true
@@ -58,8 +75,6 @@ cleanup() {
     printf 'FAIL: cannot export this run evidence permissions\n' >&2
   fi
   write_result || status=1
-  # A failed export is still a failure. Make its summary readable when possible
-  # without treating unreadable or incomplete evidence as a passing run.
   chmod 0644 -- "$output/result.json" "$output/inner-exit.txt" || status=1
   rm -rf -- "$case_root"
   exit "$status"
@@ -96,15 +111,14 @@ printf '%s\n' "$0 $*" >> "$NIDO_API_RELEASE_FORBIDDEN_LOG"
 exit 98
 CODEX
 chmod 0700 "$case_root/guard/codex"
+protected_files=(.bashrc .zshrc .profile .condarc .gitconfig .codex/auth.json .codex/config.toml .codex/.env .codex/sessions/one.jsonl .codex/state.sqlite .config/mihomo/config.yaml .config/gds/config.toml)
 mkdir -p "$CODEX_HOME/sessions" "$HOME/.config/mihomo" "$HOME/.config/gds"
-for relative in .bashrc .zshrc .profile .condarc .gitconfig .codex/auth.json .codex/config.toml .codex/.env .codex/sessions/one.jsonl .codex/state.sqlite .config/mihomo/config.yaml .config/gds/config.toml; do
-  printf 'PROTECTED-SENTINEL %s\n' "$relative" > "$HOME/$relative"
-done
+for relative in "${protected_files[@]}"; do printf 'PROTECTED-SENTINEL %s\n' "$relative" > "$HOME/$relative"; done
 printf 'HTTPS_PROXY=${USER_OWN_PROXY_EXPRESSION}\nKEEP=literal\n' > "$CODEX_HOME/.env"
 cp -R "$HOME" "$case_root/before/external"
 preserved() {
   local relative
-  for relative in .bashrc .zshrc .profile .condarc .gitconfig .codex/auth.json .codex/config.toml .codex/.env .codex/sessions/one.jsonl .codex/state.sqlite .config/mihomo/config.yaml .config/gds/config.toml; do
+  for relative in "${protected_files[@]}"; do
     cmp "$HOME/$relative" "$case_root/before/external/$relative"
     [[ $(stat -c '%a:%u:%g' "$HOME/$relative") = $(stat -c '%a:%u:%g' "$case_root/before/external/$relative") ]]
   done
@@ -115,22 +129,21 @@ preserved() {
 snapshot_home() {
   local destination=$1 path
   {
-    find "$HOME" -printf '%y:%m:%U:%G:%P:%l\n' | LC_ALL=C sort
-    while IFS= read -r -d '' path; do sha256sum "$path"; done < <(find "$HOME" -type f -print0 | LC_ALL=C sort -z)
+    find "$HOME" ! -path "$NIDO_HOME/proxy/nido-test-connect.jsonl" ! -path "$NIDO_HOME/proxy/nido-test-controller.jsonl" -printf '%y:%m:%U:%G:%P:%l\n' | LC_ALL=C sort
+    while IFS= read -r -d '' path; do sha256sum "$path"; done < <(find "$HOME" -type f ! -path "$NIDO_HOME/proxy/nido-test-connect.jsonl" ! -path "$NIDO_HOME/proxy/nido-test-controller.jsonl" -print0 | LC_ALL=C sort -z)
   } > "$destination"
 }
-"$case_root/package/nido" --root "$NIDO_HOME" init --github-proxy https://file-only.invalid --yes > "$output/init.log"
-cmp "$NIDO_HOME/bin/nido" "$case_root/package/nido"
-nido doctor --json > "$output/doctor-disabled.json"
+"$case_root/package/nido" --root "$NIDO_HOME" init --yes > "$output/init.log"
 nido codex setup --home "$CODEX_HOME" --yes > "$output/codex-setup.json"
-"$fixture" origin "$case_root/origin" "$version" > "$output/origin.log" 2>&1 &
+cp "$NIDO_HOME/config.toml" "$case_root/before/unselected.toml"
+NIDO_API_FIXTURE_LISTEN=127.0.0.1:443 "$fixture" origin "$case_root/origin" "$version" > "$output/origin.log" 2>&1 &
 origin_pid=$!
-for ((attempt=0; attempt<200; attempt++)); do
+for ((attempt=0; attempt<600; attempt++)); do
   [[ ! -s "$case_root/origin/origin.addr" ]] || break
   kill -0 "$origin_pid"
   sleep 0.05
 done
-[[ -s "$case_root/origin/origin.addr" && -s "$case_root/origin/ca.pem" ]]
+[[ $(cat "$case_root/origin/origin.addr") = 127.0.0.1:443 && -s "$case_root/origin/ca.pem" ]]
 {
   printf 'origin_pid=%s\n' "$origin_pid"
   printf 'origin_kernel_executable='
@@ -138,166 +151,288 @@ done
   printf 'shell_kernel_executable='
   readlink "/proc/$$/exe"
   stat -c 'origin_proc_owner=%u:%g' "/proc/$origin_pid"
+  cat /proc/sys/net/ipv4/ip_unprivileged_port_start
+  cat /etc/hosts
 } > "$output/kernel-process-observation.txt"
-origin=$(cat "$case_root/origin/origin.addr")
-[[ $origin =~ ^127\.0\.0\.1:[1-9][0-9]{0,4}$ ]]
 mkdir "$case_root/empty-certs"
 export SSL_CERT_FILE="$case_root/origin/ca.pem" SSL_CERT_DIR="$case_root/empty-certs"
-api_count() { wc -l < "$case_root/origin/requests.jsonl"; }
-connect_count() {
-  if [[ -e "$NIDO_HOME/proxy/nido-test-connect.jsonl" ]]; then wc -l < "$NIDO_HOME/proxy/nido-test-connect.jsonl"; else printf '0\n'; fi
-}
-version_probe_count() {
-  if [[ -e "$NIDO_API_RELEASE_CODEX_VERSION_LOG" ]]; then wc -l < "$NIDO_API_RELEASE_CODEX_VERSION_LOG"; else printf '0\n'; fi
-}
-disabled_call() {
-  local label=$1 probes_before
+request_count() { wc -l < "$case_root/origin/requests.jsonl"; }
+connect_count() { if [[ -n $connect_log && -e $connect_log ]]; then wc -l < "$connect_log"; else printf '0\n'; fi; }
+version_probe_count() { if [[ -e "$NIDO_API_RELEASE_CODEX_VERSION_LOG" ]]; then wc -l < "$NIDO_API_RELEASE_CODEX_VERSION_LOG"; else printf '0\n'; fi; }
+reject_without_requests() {
+  local label=$1 before_requests before_connect probes_before
   shift
-  probes_before=$(version_probe_count)
-  snapshot_home "$case_root/before/disabled-before"
-  if nido "$@" > "$output/$label.log" 2>&1; then
-    printf 'unconfigured API operation unexpectedly succeeded: %s\n' "$label" >&2
-    exit 1
-  fi
-  grep -Fq 'Nido API 功能未启用' "$output/$label.log"
-  snapshot_home "$case_root/before/disabled-after"
-  cmp "$case_root/before/disabled-before" "$case_root/before/disabled-after"
-  [[ $(api_count) = 0 && $(connect_count) = 0 ]]
-  [[ $(version_probe_count) = "$probes_before" ]]
+  before_requests=$(request_count); before_connect=$(connect_count); probes_before=$(version_probe_count)
+  snapshot_home "$case_root/before/rejected-before"
+  if nido "$@" > "$output/$label.log" 2>&1; then printf 'unexpected success: %s\n' "$label" >&2; exit 1; fi
+  snapshot_home "$case_root/before/rejected-after"
+  cmp "$case_root/before/rejected-before" "$case_root/before/rejected-after"
+  [[ $(request_count) = "$before_requests" && $(connect_count) = "$before_connect" && $(version_probe_count) = "$probes_before" ]]
   preserved
-  disabled_cases=$((disabled_cases+1))
+  rejected_calls=$((rejected_calls+1))
 }
-next_version="${version%.*}.$(( ${version##*.} + 1 ))"
-for state in missing empty; do
-  if [[ $state = empty ]]; then
-    printf 'schema = 1\nproduct = "nido-api-proxy"\nlistener = ""\n' > "$NIDO_HOME/download-proxy.toml"
-    chmod 0600 "$NIDO_HOME/download-proxy.toml"
-  fi
-  nido download show --json > "$output/$state-download-show.json"
-  grep -Fq '"api_state":"disabled"' "$output/$state-download-show.json"
-  for route in saved-prefix direct explicit-proxy environment-proxy; do
-    options=()
-    unset HTTPS_PROXY HTTP_PROXY ALL_PROXY https_proxy http_proxy all_proxy
-    case $route in
-      direct) options=(--github-proxy direct) ;;
-      explicit-proxy) options=(--proxy http://127.0.0.1:18790) ;;
-      environment-proxy) export HTTPS_PROXY=http://127.0.0.1:18790 HTTP_PROXY=http://127.0.0.1:18790 ALL_PROXY=http://127.0.0.1:18790 ;;
-    esac
-    disabled_call "$state-$route-nido-check" update --check "${options[@]}"
-    disabled_call "$state-$route-nido-version" update --version "$next_version" --yes "${options[@]}"
-    disabled_call "$state-$route-proxy-install" proxy install --yes "${options[@]}"
-    disabled_call "$state-$route-proxy-latest" proxy install --artifact latest --yes "${options[@]}"
-    disabled_call "$state-$route-proxy-check" proxy update --check "${options[@]}"
-    disabled_call "$state-$route-gds-install" gds install --yes "${options[@]}"
-    disabled_call "$state-$route-gds-tag" gds install gds-v0.0.1 --yes "${options[@]}"
-    disabled_call "$state-$route-gds-check" gds update --check "${options[@]}"
-    # Codex deliberately rejects GitHub file-prefix flags. Its other three
-    # route conditions still prove that only listener intent enables this API.
-    if [[ $route != direct ]]; then
-      disabled_call "$state-$route-codex-check" codex update --check "${options[@]}"
-    fi
-  done
-done
-unset HTTPS_PROXY HTTP_PROXY ALL_PROXY https_proxy http_proxy all_proxy
-[[ $(api_count) = 0 ]]
-printf 'PASS %s input: %s unbound online calls blocked without requests or writes\n' "$input_scope" "$disabled_cases"
-# Local artifact installation and static previews work while disabled. The
-# fixture is explicitly a test core; its bytes are not an upstream release.
+# Defaults are direct and usable. Invalid explicit choices reject before any
+# request or write; GitHub Accelerate does not authorize or gate API access.
+reject_without_requests removed-auto download set auto --yes
+reject_without_requests removed-gds gds status
+reject_without_requests missing-proxy-reference download set proxy --yes
+reject_without_requests unsafe-prefix download set http://gh-proxy.org --yes
+reject_without_requests unsafe-proxy download proxy file:///tmp/unsafe --yes
+nido status --json > "$output/registered-components.json"
+! grep -Fq '"name":"gds"' "$output/registered-components.json"
+gds_unregistered=true
 nido proxy install --dry-run --json > "$output/offline-preview.json"
 nido proxy install --artifact "$fixture" --sha256 "$(sha256 "$fixture")" --yes > "$output/local-install.json"
-nido update --version "$version" --yes --json > "$output/same-version-noop.json"
-[[ $(api_count) = 0 && $(connect_count) = 0 ]]
+asset_installs=$((asset_installs+1))
 render_config() {
-  printf '{"listeners":[{"name":"release-api","type":"http","listen":"127.0.0.1","port":%s}],"rules":["MATCH,DIRECT"],"nido-test-api-origin":"%s"}\n' "$1" "$origin" > "$case_root/api-config.yaml"
+  printf '{"listeners":[{"name":"release-api","type":"http","listen":"127.0.0.1","port":%s}],"rules":["MATCH,DIRECT"],"external-controller":"127.0.0.1:18792","secret":"isolated-controller-secret","nido-test-api-origin":"127.0.0.1:443"}\n' "$1" > "$case_root/api-config.yaml"
   chmod 0600 "$case_root/api-config.yaml"
 }
 render_config 18790
-nido proxy configure --file "$case_root/api-config.yaml" --yes > "$output/local-configure.json"
+cp "$case_root/api-config.yaml" "$NIDO_HOME/proxy/config.yaml"
 nido proxy validate --json > "$output/local-validate.json"
+# A directly owned fixture child provides the custom PROXY route first. The
+# mandatory Nido-managed process identity tests remain at the end; emulators
+# which report their own /proc/exe must still fail that complete contract.
+mkdir "$case_root/manual-proxy"
+cp "$case_root/api-config.yaml" "$case_root/manual-proxy/config.yaml"
+connect_log="$case_root/manual-proxy/nido-test-connect.jsonl"
+"$fixture" -d "$case_root/manual-proxy" -f "$case_root/manual-proxy/config.yaml" > "$output/manual-core.log" 2>&1 &
+manual_core_pid=$!
+manual_ready=false
+for ((attempt=0; attempt<200; attempt++)); do
+  kill -0 "$manual_core_pid"
+  if (exec 3<> /dev/tcp/127.0.0.1/18790) 2>/dev/null; then manual_ready=true; break; fi
+  sleep 0.05
+done
+[[ $manual_ready = true ]]
+positive_query() {
+  local label=$1 expected_connect=$2 expected_host=$3 before_requests before_connect
+  shift 3
+  before_requests=$(request_count); before_connect=$(connect_count)
+  cp "$NIDO_HOME/config.toml" "$case_root/before/query-config.toml"
+  cp "$NIDO_HOME/env.sh" "$case_root/before/query-env.sh"
+  nido "$@" > "$output/$label.json"
+  [[ $(request_count) = $((before_requests+1)) && $(connect_count) = $((before_connect+expected_connect)) ]]
+  tail -n1 "$case_root/origin/requests.jsonl" | grep -Fq '"host":"'"$expected_host"'"'
+  cmp "$NIDO_HOME/config.toml" "$case_root/before/query-config.toml"
+  cmp "$NIDO_HOME/env.sh" "$case_root/before/query-env.sh"
+  positive_queries=$((positive_queries+1))
+  preserved
+}
+# APIs use only Nido Proxy, independently of the file route. Poison ambient
+# variables to prove None and prefix do not inherit another route.
+export HTTPS_PROXY=http://127.0.0.1:1 HTTP_PROXY=http://127.0.0.1:1 ALL_PROXY=http://127.0.0.1:1
+for route in none https://gh-proxy.org; do
+  label=none; [[ $route = none ]] || label=prefix
+  nido download set "$route" --yes > "$output/set-$label.json"
+  before_requests=$(request_count); before_connect=$(connect_count)
+  nido update --version "$version" --yes --json > "$output/same-version-$label-noop.json"
+  [[ $(request_count) = "$before_requests" && $(connect_count) = "$before_connect" ]]
+  positive_query "$label-nido-api-direct" 0 api.github.com update --check --json
+  positive_query "$label-mihomo-api-direct" 0 api.github.com proxy update --check --json
+  grep -Fq '"latest":"'"$version"'"' "$output/$label-nido-api-direct.json"
+  grep -Fq '"latest":"v0.0.1"' "$output/$label-mihomo-api-direct.json"
+done
+unset HTTPS_PROXY HTTP_PROXY ALL_PROXY https_proxy http_proxy all_proxy
+nido download proxy http://127.0.0.1:18790 --yes > "$output/set-general-proxy.json"
+positive_query prefix-api-through-proxy 1 api.github.com update --check --json
+# Even an unusable GitHub file prefix cannot affect Codex API requests, and
+# its expression-valued runtime .env is not interpreted as Nido networking.
+nido download set https://gh-proxy.org/fail --yes > "$output/set-prefix-failure.json"
+probes_before=$(version_probe_count)
+positive_query codex-nido-proxy 1 api.github.com codex update --check --json
+[[ $(version_probe_count) = $((probes_before+1)) ]]
+grep -Fq '"latest":"0.164.0"' "$output/codex-nido-proxy.json"
+codex_independent=true
+positive_query failing-file-prefix-does-not-route-api 1 api.github.com update --check --json
+# Invalid version metadata still rejects through the selected API route and
+# cannot change configuration, authentication, sessions or installed programs.
+printf 'bad-tag\n' > "$case_root/origin/response-mode"
+for component in nido proxy codex; do
+  query=(update --check --json)
+  [[ $component = nido ]] || query=("$component" "${query[@]}")
+  snapshot_home "$case_root/before/metadata-before"
+  before_requests=$(request_count); before_connect=$(connect_count)
+  if nido "${query[@]}" > "$output/invalid-metadata-$component.log" 2>&1; then exit 1; fi
+  snapshot_home "$case_root/before/metadata-after"
+  cmp "$case_root/before/metadata-before" "$case_root/before/metadata-after"
+  [[ $(request_count) = $((before_requests+1)) && $(connect_count) = $((before_connect+1)) ]]
+  preserved
+done
+rm "$case_root/origin/response-mode"
+# First installation uses a fixed, production SHA and never queries the API.
+# The fake payload cannot satisfy that identity: validate routing and safe
+# rejection, not an online installation of a real core. The shared working API
+# Proxy is deliberately ignored by None and prefix and used only by reference.
+for route in none prefix proxy; do
+  target="$HOME/asset-$route"
+  accelerate=$route; [[ $route != prefix ]] || accelerate=https://gh-proxy.org
+  "$case_root/package/nido" --root "$target" init --github-accelerate "$accelerate" --proxy http://127.0.0.1:18790 --yes > "$output/asset-$route-init.json"
+  mkdir -p "$target/proxy/data"
+  printf 'ONLINE-CANDIDATE-DATA-SENTINEL\n' > "$target/proxy/data/keep"
+  : > "$target/proxy/.lock"
+  chmod 0600 "$target/proxy/.lock"
+  snapshot_home "$case_root/before/asset-route-before"
+  before_requests=$(request_count); before_connect=$(connect_count)
+  if "$target/bin/nido" --root "$target" proxy install --yes > "$output/asset-$route-rejected.log" 2>&1; then
+    printf 'fake payload unexpectedly satisfied pinned official SHA: %s\n' "$route" >&2; exit 1
+  fi
+  snapshot_home "$case_root/before/asset-route-after"
+  cmp "$case_root/before/asset-route-before" "$case_root/before/asset-route-after"
+  [[ $(request_count) = $((before_requests+1)) ]]
+  expected_connect=0; [[ $route != proxy ]] || expected_connect=1
+  [[ $(connect_count) = $((before_connect+expected_connect)) ]]
+  expected_host=github.com; [[ $route != prefix ]] || expected_host=gh-proxy.org
+  tail -n1 "$case_root/origin/requests.jsonl" | grep -Fq '"host":"'"$expected_host"'"'
+  [[ ! -e "$target/proxy/mihomo" && ! -e "$target/proxy/process.json" ]]
+  grep -Fq SHA-256 "$output/asset-$route-rejected.log"
+  asset_candidates=$((asset_candidates+1)); failed_installs=$((failed_installs+1))
+  preserved
+done
+routes_verified=true
+# A failed accelerated file must not fall through to the reachable official
+# origin or acquire the otherwise working general Proxy. No API is needed.
+target="$HOME/rejected-prefix"
+"$case_root/package/nido" --root "$target" init --github-accelerate https://gh-proxy.org/fail --proxy http://127.0.0.1:18790 --yes > "$output/prefix-failure-init.json"
+mkdir -p "$target/proxy/data"
+printf 'PREFIX-DATA-SENTINEL\n' > "$target/proxy/data/keep"
+: > "$target/proxy/.lock"
+chmod 0600 "$target/proxy/.lock"
+snapshot_home "$case_root/before/prefix-failure-before"
+before_requests=$(request_count); before_connect=$(connect_count)
+if "$target/bin/nido" --root "$target" proxy install --yes > "$output/prefix-file-failure.log" 2>&1; then exit 1; fi
+snapshot_home "$case_root/before/prefix-failure-after"
+cmp "$case_root/before/prefix-failure-before" "$case_root/before/prefix-failure-after"
+[[ $(request_count) = $((before_requests+1)) && $(connect_count) = "$before_connect" ]]
+tail -n1 "$case_root/origin/requests.jsonl" | grep -Fq '"host":"gh-proxy.org"'
+[[ ! -e "$target/proxy/mihomo" ]]
+failed_installs=$((failed_installs+1))
+preserved
+# Unknown old API sidecars are preserved and ignored by explicit typed modes.
+printf 'UNKNOWN-OWNER-SENTINEL\n' > "$NIDO_HOME/download-proxy.toml"
+chmod 0600 "$NIDO_HOME/download-proxy.toml"
+cp "$NIDO_HOME/download-proxy.toml" "$case_root/before/legacy-sidecar"
+nido download set none --yes > "$output/select-over-legacy-sidecar.json"
+nido download proxy none --yes > "$output/clear-general-proxy.json"
+positive_query direct-ignores-legacy-sidecar 0 api.github.com update --check --json
+cmp "$NIDO_HOME/download-proxy.toml" "$case_root/before/legacy-sidecar"
+# Keep TLS verification active, with no fallback or protected-data changes.
+before_requests=$(request_count); before_connect=$(connect_count)
+if SSL_CERT_FILE="$case_root/no-such-ca.pem" nido update --check > "$output/bad-ca.log" 2>&1; then exit 1; fi
+[[ $(request_count) = "$before_requests" && $(connect_count) = "$before_connect" ]]
+# A dead custom PROXY must not try the now-reachable DIRECT route either.
+kill "$manual_core_pid"
+wait "$manual_core_pid" || [[ $? = 143 ]]
+manual_core_pid=''
+nido download proxy http://127.0.0.1:18790 --yes > "$output/custom-before-failure.json"
+reject_without_requests stopped-custom update --check
+fallback_verified=true
+# Nido downloads a core only during first install. The retired staged update
+# route must not return: exercise metadata/hash/size boundaries as failed fresh
+# installs instead, retaining unknown configuration/data already in that root.
+nido download set https://gh-proxy.org --yes > "$output/failed-install-route.json"
+for response in deny bad-size bad-asset; do
+  printf '%s\n' "$response" > "$case_root/origin/response-mode"
+  target="$HOME/rejected-install-$response"
+  "$case_root/package/nido" --root "$target" init --github-accelerate https://gh-proxy.org --yes > "$output/rejected-$response-init.json"
+  mkdir -p "$target/proxy/data"
+  printf 'UNKNOWN-DATA-SENTINEL\n' > "$target/proxy/data/keep"
+  : > "$target/proxy/.lock"
+  chmod 0600 "$target/proxy/.lock"
+  snapshot_home "$case_root/before/install-before"
+  before_requests=$(request_count)
+  if "$target/bin/nido" --root "$target" proxy install --yes --json > "$output/failed-install-$response.log" 2>&1; then printf 'bad install unexpectedly succeeded: %s\n' "$response" >&2; exit 1; fi
+  snapshot_home "$case_root/before/install-after"
+  cmp "$case_root/before/install-before" "$case_root/before/install-after"
+  [[ $(request_count) = $((before_requests+1)) ]]
+  [[ ! -e "$target/proxy/mihomo" ]]
+  failed_installs=$((failed_installs+1))
+  preserved
+done
+rm "$case_root/origin/response-mode"
+# Turning off only Proxy does not alter the file route or an unowned sidecar.
+nido download proxy none --yes > "$output/clear-proxy.json"
+nido download set none --yes > "$output/clear-accelerate.json"
+nido download show --json > "$output/final-network.json"
+grep -Fq '"github_accelerate":"none"' "$output/final-network.json"
+positive_query none-is-direct 0 api.github.com update --check --json
+cmp "$NIDO_HOME/download-proxy.toml" "$case_root/before/legacy-sidecar"
+preserved
+# The complete contract requires kernel ownership of Nido-managed processes.
+# No skip or interpreter/identity fallback is allowed on emulated containers.
+cp "$connect_log" "$output/custom-proxy-connects.jsonl"
+connect_log="$NIDO_HOME/proxy/nido-test-connect.jsonl"
 nido proxy start --yes > "$output/proxy-start.json"
 core_active=true
 nido proxy status --json > "$output/proxy-running.json"
 grep -Fq '"state":"running"' "$output/proxy-running.json"
-printf 'listener:release-api\ny\n' | nido proxy bind download > "$output/bind.log" 2>&1
-[[ $(stat -c %a "$NIDO_HOME/download-proxy.toml") = 600 ]]
-nido download show --json > "$output/configured-download-show.json"
-grep -Fq '"api_state":"configured"' "$output/configured-download-show.json"
-grep -Fq '"api_listener":"release-api"' "$output/configured-download-show.json"
-grep -Fq 'http://127.0.0.1:18790' "$output/configured-download-show.json"
-cp "$NIDO_HOME/config.toml" "$case_root/before/config.toml"
-cp "$NIDO_HOME/env.sh" "$case_root/before/env.sh"
-cp "$NIDO_HOME/download-proxy.toml" "$case_root/before/binding.toml"
-positive_query() {
-  local label=$1 before_api before_connect
-  shift
-  before_api=$(api_count)
-  before_connect=$(connect_count)
-  nido "$@" > "$output/$label.json"
-  [[ $(api_count) = $((before_api+1)) && $(connect_count) = $((before_connect+1)) ]]
-  positive_queries=$((positive_queries+1))
+nido download proxy http://127.0.0.1:18790 --yes > "$output/set-PROXY-builtin.json"
+positive_query PROXY-builtin-nido 1 api.github.com update --check --json
+positive_query PROXY-builtin-mihomo 1 api.github.com proxy update --check --json
+# Native core updates use only the captured private controller and core's own
+# updater. Poison Nido's saved download route: no API/asset/CONNECT request may
+# result from either the failed acknowledgements or successful same-PID exec.
+nido download set https://gh-proxy.org/fail --yes --json > "$output/native-independent-mode.json"
+controller_posts() { awk '/"method":"POST"/ { count++ } END { print count+0 }' "$NIDO_HOME/proxy/nido-test-controller.jsonl"; }
+for response in reject malformed ack-noop drop-response; do
+  printf '%s\n' "$response" > "$NIDO_HOME/proxy/nido-test-native-mode"
+  snapshot_home "$case_root/before/native-before"
+  before_requests=$(request_count); before_connect=$(connect_count); before_posts=$(controller_posts)
+  if nido proxy update --yes --json > "$output/native-failed-$response.log" 2>&1; then printf 'native failure unexpectedly succeeded: %s\n' "$response" >&2; exit 1; fi
+  snapshot_home "$case_root/before/native-after"
+  cmp "$case_root/before/native-before" "$case_root/before/native-after"
+  [[ $(request_count) = "$before_requests" && $(connect_count) = "$before_connect" && $(controller_posts) = $((before_posts+1)) ]]
+  native_rejections=$((native_rejections+1))
   preserved
-}
-positive_query nido-positive update --check --json
-grep -Fq '"latest":"'"$version"'"' "$output/nido-positive.json"
-grep -Fq '"available":false' "$output/nido-positive.json"
-positive_query proxy-positive proxy update --check --json
-grep -Fq '"latest":"v0.0.1"' "$output/proxy-positive.json"
-probes_before=$(version_probe_count)
-positive_query codex-positive codex update --check --json
-[[ $(version_probe_count) = $((probes_before+1)) ]]
-grep -Fq '"latest":"0.164.0"' "$output/codex-positive.json"
-cmp "$NIDO_HOME/config.toml" "$case_root/before/config.toml"
-cmp "$NIDO_HOME/env.sh" "$case_root/before/env.sh"
-cmp "$NIDO_HOME/download-proxy.toml" "$case_root/before/binding.toml"
-before_api=$(api_count)
-before_connect=$(connect_count)
-if SSL_CERT_FILE="$case_root/no-such-ca.pem" nido update --check --json > "$output/bad-ca.log" 2>&1; then
-  printf 'untrusted TLS origin unexpectedly succeeded\n' >&2; exit 1
-fi
-[[ $(api_count) = "$before_api" && $(connect_count) = $((before_connect+1)) ]]
-printf 'UNKNOWN-OWNER-SENTINEL\n' > "$NIDO_HOME/download-proxy.toml"
-snapshot_home "$case_root/before/bad-binding-before"
-before_connect=$(connect_count)
-if nido update --check --proxy http://127.0.0.1:18790 > "$output/bad-binding.log" 2>&1; then
-  printf 'unknown binding was bypassed by explicit proxy\n' >&2; exit 1
-fi
-snapshot_home "$case_root/before/bad-binding-after"
-cmp "$case_root/before/bad-binding-before" "$case_root/before/bad-binding-after"
-[[ $(api_count) = "$before_api" && $(connect_count) = "$before_connect" ]]
-cp "$case_root/before/binding.toml" "$NIDO_HOME/download-proxy.toml"
-chmod 0600 "$NIDO_HOME/download-proxy.toml"
+done
+rm "$NIDO_HOME/proxy/nido-test-native-mode"
+pid_before=$(sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$NIDO_HOME/proxy/process.json" | head -n1)
+[[ $pid_before =~ ^[1-9][0-9]*$ ]]
+birth_before=$(awk '{print $22}' "/proc/$pid_before/stat")
+for round in 1 2; do
+  cp "$NIDO_HOME/proxy/mihomo" "$case_root/before/native-old-program"
+  before_requests=$(request_count); before_connect=$(connect_count); before_posts=$(controller_posts)
+  nido proxy update --yes --json > "$output/native-success-$round.json"
+  [[ $(request_count) = "$before_requests" && $(connect_count) = "$before_connect" && $(controller_posts) = $((before_posts+1)) ]]
+  [[ $(sha256 "$NIDO_HOME/proxy/mihomo") != $(sha256 "$case_root/before/native-old-program") ]]
+  cmp "$NIDO_HOME/proxy/meta-backup/mihomo" "$case_root/before/native-old-program"
+  [[ ! -e "$NIDO_HOME/proxy/meta-update" ]]
+  grep -Fq "$(sha256 "$NIDO_HOME/proxy/mihomo")" "$NIDO_HOME/proxy/process.json"
+  [[ $(sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$NIDO_HOME/proxy/process.json" | head -n1) = "$pid_before" ]]
+  [[ $(awk '{print $22}' "/proc/$pid_before/stat") = "$birth_before" ]]
+  preserved
+done
+native_upgrade_verified=true
+# Explicit read-only core state and native provider refresh remain local.
+before_requests=$(request_count)
+nido proxy groups --json > "$output/native-groups.json"
+grep -Fq fixture-group "$output/native-groups.json"
+nido proxy provider-update all --yes --json > "$output/native-providers.json"
+[[ $(request_count) = "$before_requests" ]]
+# Advanced users may edit config.yaml themselves; native reload applies this
+# exact path, reexecutes the fixture in the same birth and observes new ports.
+render_config 18791
+cp "$case_root/api-config.yaml" "$NIDO_HOME/proxy/config.yaml"
+nido proxy reload --yes --json > "$output/native-reload.json"
+[[ $(awk '{print $22}' "/proc/$pid_before/stat") = "$birth_before" ]]
+native_reload_verified=true
+nido download proxy http://127.0.0.1:18791 --yes --json > "$output/native-reload-mode.json"
+positive_query builtin-native-reloaded 1 api.github.com update --check --json
 nido proxy stop --yes > "$output/proxy-stop.json"
 core_active=false
-if nido update --check > "$output/stopped-binding.log" 2>&1; then
-  printf 'stopped listener unexpectedly served API metadata\n' >&2; exit 1
-fi
-[[ $(api_count) = "$before_api" && $(connect_count) = "$before_connect" ]]
-# Persisted listener identity follows an explicitly applied port change.
-render_config 18791
-nido proxy configure --file "$case_root/api-config.yaml" --yes > "$output/reconfigure.json"
+reject_without_requests stopped-builtin update --check
+render_config 18793
+cp "$case_root/api-config.yaml" "$NIDO_HOME/proxy/config.yaml"
 nido proxy start --yes > "$output/restart.json"
 core_active=true
-nido download show --json > "$output/reconfigured-download-show.json"
-grep -Fq 'http://127.0.0.1:18791' "$output/reconfigured-download-show.json"
-cmp "$NIDO_HOME/download-proxy.toml" "$case_root/before/binding.toml"
-positive_query nido-reconfigured-positive update --check --json
-nido proxy bind download --proxy off --yes > "$output/off.log"
-nido download show --json > "$output/off-download-show.json"
-grep -Fq '"api_state":"disabled"' "$output/off-download-show.json"
-before_api=$(api_count)
-before_connect=$(connect_count)
-if nido update --check --proxy http://127.0.0.1:18791 > "$output/off-disabled.log" 2>&1; then
-  printf 'one-off proxy re-enabled the disabled API feature\n' >&2; exit 1
-fi
-grep -Fq 'Nido API 功能未启用' "$output/off-disabled.log"
-[[ $(api_count) = "$before_api" && $(connect_count) = "$before_connect" ]]
-nido proxy status --json > "$output/off-core-running.json"
-grep -Fq '"state":"running"' "$output/off-core-running.json"
+nido download proxy http://127.0.0.1:18793 --yes > "$output/reconfigured-proxy-url.json"
+positive_query builtin-reconfigured 1 api.github.com update --check --json
+nido proxy stop --yes > "$output/final-proxy-stop.json"
+core_active=false
+builtin_verified=true
 preserved
-cmp "$NIDO_HOME/config.toml" "$case_root/before/config.toml"
-cmp "$NIDO_HOME/env.sh" "$case_root/before/env.sh"
-cp "$case_root/origin/requests.jsonl" "$output/api-requests.jsonl"
+cp "$case_root/origin/requests.jsonl" "$output/network-requests.jsonl"
 cp "$NIDO_HOME/proxy/nido-test-connect.jsonl" "$output/proxy-connects.jsonl"
-cp "$NIDO_HOME/download-proxy.toml" "$output/final-disabled-binding.toml"
 checks_complete=true
-printf 'PASS %s API contract: %s positive named-listener queries; bad CA/binding, stopped listener, port change and off verified; metadata is a loopback fixture\n' "$input_scope" "$positive_queries"
+printf 'PASS %s: %s safe rejections; %s API queries; %s verified local fake-core installs; %s failed online candidates and %s native failures preserve data; native same-birth update/reload, exclusive file routes, independent API Proxy, Codex runtime isolation and GDS removal verified\n' "$input_scope" "$rejected_calls" "$positive_queries" "$asset_installs" "$failed_installs" "$native_rejections"

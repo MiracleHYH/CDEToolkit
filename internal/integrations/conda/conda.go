@@ -4,6 +4,7 @@
 package conda
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"net"
@@ -35,6 +36,9 @@ type Service struct {
 	Root, UserHome string
 	Env            []string
 	Runner         Runner
+	// Ctx bounds read-only upstream discovery to the current interaction.
+	// A nil context retains the standalone command's existing timeout.
+	Ctx context.Context
 }
 
 func (s Service) environment() []string {
