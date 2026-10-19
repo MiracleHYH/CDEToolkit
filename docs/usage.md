@@ -8,43 +8,73 @@ GDS 保持可选。Nido v0.5.0 起支持独立 Linux amd64 组件的官方下载
 
 本文的 **Nido 内部 GitHub API listener 绑定及未绑定时禁用 API**已随 v0.8.2 发布，仅面向 Linux amd64，v0.8.1 尚不具备；其他已发行功能沿用各自版本说明。源码审计、原生 CI、发布工作流、独立验签、正式包 API 隔离，以及公网直链和 gh-proxy.org 加速安装自更新验收均已通过；首次加速配额失败和复验记录见 [v0.8.2 记录](nido-v0.8.2-release.md)。
 
+**本轮源码新增的交互安装、组件配置菜单和 `nido shell setup` 尚未发布。** 下文将这些入口单独标出；公开 v0.8.2 安装 URL 仍返回原参数式安装器。显式参数与既有数据保护不因新增交互而取消，完整约定见[交互设计](interactive-design.md)。
+
 ## 初始化与 Shell 环境
 
-自 v0.7.0 起，安装器支持 GitHub 下载策略，CLI 支持 `nido download` 与 `nido update`。以下命令安装最新版并在当前 Bash / Zsh 中启用 `nido`。
+自 v0.7.0 起，安装器支持 GitHub 下载策略，CLI 支持 `nido download` 与 `nido update`。以下命令安装当前公开最新版，不会直接改变当前终端的 PATH。
 
-选择一个独立软件目录，默认 `~/.nido`。首次安装选择官方直链或第三方加速链，不能指望脚本内的回退修复外层脚本下载失败。
+选择一个独立软件目录，公开 v0.8.2 默认为 `~/.nido`。首次安装选择官方脚本入口或第三方加速链，不能指望脚本内的回退修复外层脚本下载失败。
 
-官方直链：
-
-```sh
-curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy direct && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
-```
-
-第三方加速链：
+官方脚本入口，内部下载默认使用 `auto`：
 
 ```sh
-curl --http1.1 -fsSL https://gh-proxy.org/https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy https://gh-proxy.org && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
+curl -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh
 ```
 
-安装后检查版本：
+若只接受官方来源，使用 `sh -s -- --github-proxy direct`。默认 `auto` 在官方文件请求失败后可能使用内置第三方前缀。
+
+第三方加速链，显式将相同前缀用于内部包下载：
+
+```sh
+curl -fsSL https://gh-proxy.org/https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy https://gh-proxy.org
+```
+
+管道脚本无法得知外层 curl 的 URL；使用私人文件前缀时也应传入同一 `--github-proxy`。请只使用自己信任的入口，加速脚本具有直接执行第三方内容的信任边界。
+
+安装后，执行安装输出中指向**实际软件根**的 `. '.../env.sh'` 命令，再检查版本：
 
 ```sh
 nido version
 ```
 
-需要自定义目录时，先执行 `export NIDO_HOME=/absolute/path/to/nido`，再运行上面的安装命令。固定版本可在 `&&` 之前的脚本参数中补充 `--version X.Y.Z`；脚本也可从对应 `releases/download/vX.Y.Z/install.sh` 获取。源码构建方式见 [README](../README.md#开发)。
+公开 v0.8.2 需要自定义目录时，先执行 `export NIDO_HOME=/absolute/path/to/nido`，再运行上面的安装命令。固定版本可使用 `sh -s -- --version X.Y.Z`；脚本也可从对应 `releases/download/vX.Y.Z/install.sh` 获取。源码构建方式见 [README](../README.md#开发)。
 
-安装器也接受 `--root /absolute/path/to/nido`，优先于 `NIDO_HOME`；使用该参数时，命令末尾也要加载指定目录的 `env.sh`。首次初始化只接受不存在或空目录，不把普通数据目录或旧 toolkit 目录变成 Nido。重复初始化保留配置，并刷新自己的程序和环境文件；用户修改过的 `env.sh` 不被静默覆盖。
+安装器也接受 `--root /absolute/path/to/nido`，优先于 `NIDO_HOME`；之后必须加载该实际目录中的 `env.sh`。首次初始化只接受不存在或空目录，不把普通数据目录或旧 toolkit 目录变成 Nido。重复初始化保留配置，并刷新自己的程序和环境文件；用户修改过的 `env.sh` 不被静默覆盖。
 
-初始化不安装组件、不自动关联 Codex、不启动服务、不编辑 Shell 文件。需要新 Bash / Zsh 自动生效时，自行将下面一行加入对应的 `~/.bashrc` 或 `~/.zshrc`：
+源码新增终端安装引导：选择软件目录、文件下载方式、是否注册 Bash / Zsh，最后确认。注册默认不启用；`--root`、`--github-proxy` 等显式值仍可直接提供。`--yes` 或无交互终端时使用参数模式，`--dry-run` 不进入引导。下载安装期间不从脚本标准输入读取回答，避免把管道中的脚本字节当作选项。
+
+初始化不安装组件、不自动关联 Codex、不启动服务。CLI 无法直接改变父 Shell；当前终端仍需加载实际根中的 `env.sh`。
+
+公开 v0.8.2 不自动编辑 Shell 文件。源码新增的可选注册入口为：
 
 ```sh
-. "$HOME/.nido/env.sh"
+nido shell setup
+nido shell setup bash
+nido shell setup zsh
 ```
 
-自定义目录请替换路径。配置 Codex 后重新加载同一文件，才能更新当前终端的环境；CLI 无法直接修改父 Shell。
+该入口在明确同意后向相应用户 Shell 配置添加 Nido 受管加载块，保存实际软件根；不执行或加载原配置、不启动新 Shell，已有配置和用户其他内容保留。它用于后续读取该启动文件的新 Shell；Bash 登录配置若未加载 `.bashrc`，仍需自行接入。不声称已刷新当前终端。非交互自动化需要明确 Shell 和确认；预览使用 `--dry-run`。无需注册时，按安装输出手动加载即可。
 
 `nido env bash` / `nido env zsh` 输出同样的环境片段。未配置外部集成时，只激活 Nido 自身路径；关联 Codex 后增加 `CODEX_HOME` 和已识别的 Codex 命令目录，不生成 Codex 包装入口。自 v0.8.0 起还按所选 Conda / pip 镜像输出变量；缓存和环境目录直接保存到上游配置，不通过环境片段激活。重复加载不会不断增加 PATH。
+
+## 配置交互与自动化
+
+本节入口为源码开发新增，公开 v0.8.2 尚不支持新增的 `configure` 菜单。组件裸命令仍查看状态；只有明确进入配置动作才提问：
+
+```sh
+nido codex configure
+nido conda configure
+nido proxy configure
+nido gds configure
+nido download configure
+```
+
+终端中缺少参数时给出候选或询问输入，已有配置默认保持；镜像、目录、代理、UUID 和导入配置各自选择，不因进入菜单就写入。新增向导摘要只列目标与操作，Proxy quick start 不展开订阅、节点凭据或完整 YAML，首次镜像快照也不在普通状态中展开。输入仍可能正常显示，显式代理命令也可能显示地址，请避免共享含凭据的终端与日志。保存前仍执行相应归属、冲突与停止状态检查；取消或输入结束不继续提交。
+
+显式参数用于自动化，`--yes` 只接受已确定的操作，不代替选择；`--json` 不弹出菜单。无交互终端时，缺少必要值应明确报错；安装器自身的无终端参数模式可使用其文档默认值。`--dry-run` 不提问，也不保存配置、下载包或启动服务；无法确定的选择应保持未检查状态。Conda 的显式参数预览仍可能查询本地上游配置，不代表为上游提供了防写沙箱。
+
+安装、配置、注册 Shell 和代理绑定不隐式启动或重启组件；`start`、`stop`、`restart` 仍是单独、明确的命令。菜单不放宽 API 禁用规则：首次 Proxy/GDS 在线安装依赖未就绪时，可交互提供可信本地 artifact 和摘要，不会绕过绑定门控。
 
 ## GitHub 下载与 Nido 自身更新
 
@@ -104,6 +134,8 @@ Nido 自身更新只替换自己的程序，保留管理配置、生成环境、
 Nido 不移动、复制或重新组织外部 Codex 数据。软件目录自身可以放在持久化存储上，但当前版本不提供目录搬运或自动适配历史挂载路径的功能。
 
 ## 关联已有 Codex
+
+源码新增 `nido codex configure` 菜单，用于关联目录、配置代理或选择安装入口；已有选择默认保留。`nido codex install` 尚无关联且未提供 `--home` 时，可在终端输入外部 HOME；`nido codex proxy` 缺少地址时可选择可用 listener、自定义或保持。非交互调用继续明确提供参数。以下发现与数据保护规则不变。
 
 ```sh
 nido codex setup
@@ -187,6 +219,8 @@ nido codex update --proxy http://127.0.0.1:7890
 进程代理变量的小写形式优先于大写形式，显式空值也会覆盖 `.env`，并同步到安装子进程的两种大小写变量。本次 `--proxy` 只覆盖代理端点，保留 `NO_PROXY`。对于变量展开、转义或冲突的 `.env` 代理表达式，Nido 明确报错，不尝试执行或完整解释 dotenv。
 
 ## Conda / pip
+
+源码新增 `nido conda configure`，分别选择镜像、缓存和环境目录；进入菜单不自动执行全部配置。也可直接执行缺值的 `nido conda mirror`、`nido conda cache` 或 `nido conda envs`，在终端补齐选择。已有选择默认保留，目录默认不变，不因接受镜像预设而顺带移动或重设环境。公开 v0.8.2 仍使用下面的显式参数形式。
 
 本节命令自 v0.8.0 提供；v0.8.1 已发布，包含隐式用户配置的镜像合并修复与按项查询优化。[本次发行记录](conda-v0.8.1-release.md)以 Linux amd64 为唯一执行验收目标，分别列出正式包、旧上游矩阵及各公网端点的实际状态。Nido 把 Conda 与 pip 作为外部工具配置，不要求先安装内置 Proxy，也不安装 Conda 或执行 `conda init`。
 
@@ -325,9 +359,9 @@ nido proxy start
 nido proxy status
 ```
 
-上面的默认 `proxy install` 需要先查询 GitHub API。如果首次联网依赖尚未安装的 Proxy，使用 [自举方案](nido-proxy-bootstrap.md)中的绝对路径本地 `--artifact`、可信 SHA-256 和 `--yes` 安装核心，避免这项依赖；随后再显式配置和启动。`--artifact latest` 仍是在线来源，不能用于这个步骤。
+公开 v0.8.2 的默认 `proxy install` 需要先查询 GitHub API。如果首次联网依赖尚未安装的 Proxy，使用 [自举方案](nido-proxy-bootstrap.md)中的绝对路径本地 `--artifact`、可信 SHA-256 和 `--yes` 安装核心，避免这项依赖；随后再显式配置和启动。源码新增未绑定时的终端引导，可输入可信本地程序包和摘要，无需先手写 `--artifact`；不在无 API 绑定时偷偷转为在线安装。`--artifact latest` 仍是在线来源，不能用于这个步骤。
 
-交互 `install` 无额外预确认，安装成功且没有配置时直接进入 quick start；已有配置不被重建。`install --yes` 只安装核心，之后可运行 `nido proxy configure` 补齐首次配置。`configure` 无 `--file` 且配置已存在时只显示路径和验证方式，不覆盖文件。引导输入正常显示，完整 YAML 预览写入 stderr；JSON 结果单独写 stdout。
+交互 `install` 安装成功且没有配置时可进入 quick start，已有配置不被重建；`install --yes` 只安装核心，之后可运行 `nido proxy configure` 补齐首次配置。源码的已有配置菜单默认保持，可明确导入新的完整私有 YAML，不自动合并或替换；公开 v0.8.2 无 `--file` 时仍只显示已有配置路径。源码的确认摘要不展开敏感字段；v0.8.2 quick start 的输入正常显示，完整 YAML 预览写入 stderr。JSON 结果单独写 stdout。
 
 引导依次询问：
 
@@ -449,6 +483,8 @@ Proxy 卸载要求停止，仅移除程序，保留配置、日志、进程历�
 当前没有 Nido 自身卸载、递归清理数据或 Codex 卸载命令。准备移除软件目录时，先按需解除外部关联、停止内置组件，并自行保留所需配置数据；不要把程序更新理解为数据备份。
 
 ## 可选 GDS
+
+源码新增首次 `nido gds configure` 终端引导：选择输入完整 UUID 或导入配置，已有配置默认保留；不自动探测后选用某张 GPU。未绑定 API 时，`nido gds install` 可引导选择可信本地 artifact 和摘要。公开 v0.8.2 仍要求显式 `--gpu` / `--file`，首次无 API 安装使用 `--artifact`。安装和配置始终不启动工作进程。
 
 以下命令自 Nido v0.5.0 提供。独立 GDS 首版为 gds-v0.1.0，官方资产支持 Linux amd64 v1、glibc 2.31 及以上；使用端需兼容的 NVIDIA 驱动，无需 Go、nvcc 或 CUDA Toolkit。自行构建可运行 `make build-gds`；正式构建基线与验签见 [GDS 发行说明](gds-release.md)。
 

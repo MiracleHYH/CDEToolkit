@@ -46,6 +46,9 @@ func (m *Manager) setDownload(policy string) error {
 }
 
 func (c *CLI) download(m *Manager, o cliOptions, args []string) int {
+	if len(args) == 1 && (args[0] == "configure" || args[0] == "set") {
+		return c.downloadConfigure(m, o)
+	}
 	if len(args) == 0 || len(args) == 1 && args[0] == "show" {
 		policy, err := m.githubPolicy("")
 		if err != nil {

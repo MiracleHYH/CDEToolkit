@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -77,7 +78,19 @@ func TestCLISetupDiscoveryPriorityAndCustomFallback(t *testing.T) {
 				called = true
 				return nil, fmt.Errorf("setup must not execute a component or installer")
 			}
-			code, out, stderr := isolatedCLI(t, m, args, input, runner)
+			var code int
+			var out, stderr string
+			if tc.interactive {
+				var stdout, errors bytes.Buffer
+				c := CLI{Interactive: true, In: strings.NewReader(input), Out: &stdout, Err: &errors, Runner: runner}
+				code = c.Run([]string{"--root", m.Root, "codex", "setup"})
+				out, stderr = stdout.String(), errors.String()
+				if strings.Count(stderr, "自定义目录") != 1 || strings.Contains(stderr, "CODEX_HOME（目录保持原位）") {
+					t.Fatal("custom directory prompted more than once", stderr)
+				}
+			} else {
+				code, out, stderr = isolatedCLI(t, m, args, input, runner)
+			}
 			if (code != 0) != tc.fail || called {
 				t.Fatalf("code=%d called=%v stdout=%q stderr=%q", code, called, out, stderr)
 			}
@@ -92,7 +105,7 @@ func TestCLISetupDiscoveryPriorityAndCustomFallback(t *testing.T) {
 				}
 			} else {
 				var result struct{ Home string }
-				if json.Unmarshal([]byte(out), &result) != nil || result.Home != paths[tc.want] || reloaded.Config.Codex.Home != paths[tc.want] {
+				if !tc.interactive && (json.Unmarshal([]byte(out), &result) != nil || result.Home != paths[tc.want]) || reloaded.Config.Codex.Home != paths[tc.want] {
 					t.Fatalf("wrong home: stdout=%q stderr=%q config=%+v", out, stderr, reloaded.Config.Codex)
 				}
 				if !tc.interactive && stderr != "" {

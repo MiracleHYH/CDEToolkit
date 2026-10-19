@@ -122,13 +122,13 @@ func TestProxyRealMihomoQuickStart(t *testing.T) {
 	downloadPort, releaseDownload := realProxyPort(t)
 	ispPort, releaseISP := realProxyPort(t)
 	nodeURL := fmt.Sprintf("ss://aes-128-gcm:p%%2Dass%%3Aword%%40+%%2F%%252D@127.0.0.1:%d#ISP%%2Dnode", ssPort)
-	input := fmt.Sprintf("%s/provider.yaml\n^Daily-\n%d\ny\n^Download-\n%d\ny\n%s\n%d\n%s/isp\ny\n^Relay-\n", provider.URL, proxyPort, downloadPort, nodeURL, ispPort, health.URL)
+	input := fmt.Sprintf("%s/provider.yaml\n^Daily-\n%d\ny\n^Download-\n%d\ny\n%s\n%d\n%s/isp\ny\n^Relay-\ny\n", provider.URL, proxyPort, downloadPort, nodeURL, ispPort, health.URL)
 	coreData, err := readFile(artifact, 256<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(coreData)
-	quickStartMustInput(t, cli, input, "proxy", "install", "--artifact", artifact, "--sha256", hex.EncodeToString(sum[:]), "--json")
+	quickStartMustInput(t, cli, input, "proxy", "install", "--artifact", artifact, "--sha256", hex.EncodeToString(sum[:]))
 	configPath := filepath.Join(cli.root, "proxy", "config.yaml")
 	generated, err := os.ReadFile(configPath)
 	if err != nil {
@@ -269,10 +269,18 @@ func quickStartMustInput(t *testing.T, cli *realProxyCLI, input string, args ...
 	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, cli.executable, append([]string{"--root", cli.root}, args...)...)
-	cmd.Env, cmd.Dir, cmd.Stdin = cli.env, filepath.Dir(cli.root), strings.NewReader(input)
+	cmd.Env, cmd.Dir = cli.env, filepath.Dir(cli.root)
 	var out, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &stderr
-	if err := cmd.Run(); err != nil {
+	var err error
+	if input == "" {
+		err = cmd.Run()
+	} else {
+		var terminal []byte
+		terminal, err = quickStartPTY(t, cmd, input)
+		_, _ = stderr.Write(terminal)
+	}
+	if err != nil {
 		log, _ := os.ReadFile(filepath.Join(cli.root, "proxy", "output.log"))
 		t.Fatalf("真实交互 CLI %v: %v\nstdout: %s\nstderr: %s\n核心日志: %s", args, err, out.Bytes(), stderr.Bytes(), log)
 	}

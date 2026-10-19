@@ -191,7 +191,7 @@ func TestProxyCLIReadOnlyAndOptionValidation(t *testing.T) {
 	}
 }
 
-func TestProxyCLIValidationFailureAndVisibleInput(t *testing.T) {
+func TestProxyCLIValidationFailureAndPrivateSummary(t *testing.T) {
 	m, home := fixture(t)
 	if err := m.Init(); err != nil {
 		t.Fatal(err)
@@ -202,9 +202,12 @@ func TestProxyCLIValidationFailureAndVisibleInput(t *testing.T) {
 		t.Fatal(stderr)
 	}
 	secret := "https://subscription.invalid/provider?token=never-print"
-	code, out, stderr := proxyCLI(t, m, r, secret+"\n.*\n\nn\nn\n", "proxy", "configure", "--json")
-	if code != 0 || !json.Valid([]byte(out)) || !strings.Contains(stderr, "never-print") {
+	code, out, stderr := quickStartCLI(t, m, r, secret+"\n.*\n\nn\nn\ny\n", "proxy", "configure")
+	if code != 0 || !strings.Contains(out, "操作完成") || strings.Contains(stderr+out, "never-print") || !strings.Contains(stderr, "Proxy 配置摘要") {
 		t.Fatalf("configure %d %s %s", code, out, stderr)
+	}
+	if data, err := os.ReadFile(filepath.Join(m.Root, "proxy", "config.yaml")); err != nil || !bytes.Contains(data, []byte(secret)) {
+		t.Fatal("private summary changed the actual subscription", err)
 	}
 	t.Setenv("CLASH_CONFIG_STRING", "do-not-validate-this")
 	t.Setenv("SAFE_PATHS", home)

@@ -12,6 +12,14 @@ func (c *CLI) conda(m *Manager, o cliOptions, args []string) int {
 	if len(args) == 0 {
 		args = []string{"status"}
 	}
+	completed, unchanged, err := c.completeCondaArguments(m, o, args)
+	if err != nil {
+		return c.fail(err)
+	}
+	if unchanged {
+		return c.output(o, map[string]string{"operation": "conda " + args[0], "detail": "已保留现有设置；未查询上游或修改配置。"})
+	}
+	args = completed
 	action, rest := args[0], args[1:]
 	switch action {
 	case "status", "show":
@@ -153,7 +161,6 @@ func (c *CLI) conda(m *Manager, o cliOptions, args []string) int {
 	if m.configBytes == nil {
 		return c.fail(fmt.Errorf("尚未初始化，请先运行 nido init"))
 	}
-	var err error
 	next, err = m.prepareCondaSource(next, scope)
 	if err != nil {
 		return c.fail(err)

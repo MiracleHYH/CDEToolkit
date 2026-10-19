@@ -21,17 +21,21 @@ const help = `Nido: Lightweight Development Environment Manager
 
 nido [--root DIR] COMMAND
   init                         初始化单目录工具，不安装或启动组件
+  shell setup [bash|zsh]       确认后注册真实软件路径到 Shell 启动文件
   update [--check]             更新 Nido 自身，仅替换受管程序
-  download show / set VALUE    查看或设置 GitHub 下载加速策略
+  download show / configure    查看或交互选择 GitHub 文件下载方式
+  download set VALUE           自动化设置 GitHub 文件下载策略
   status / doctor              只读检查外部集成与内置组件
   env [bash|zsh]               输出 PATH 和已关联工具的环境
   codex setup [--home DIR]      发现并关联已有外部目录，不移动数据
+  codex configure              交互选择目录关联、安装或代理配置
   codex status                 只读查看关联、命令及代理状态
-  codex install --home DIR      在外部目录调用官方安装器
+  codex install [--home DIR]    选择外部目录，调用官方安装器
   codex update [--check]        委托官方更新；--check 只查版本
-  codex proxy URL|builtin|off   配置 .env 中属于 Nido 的代理块
+  codex proxy [URL|builtin|off] 选择或指定 .env 中的 Nido 代理
   codex detach                 解除关联，保留全部 Codex 程序和数据
   conda status / show / mirrors 查看 conda/pip 配置、激活状态及镜像预设
+  conda configure              交互选择镜像、缓存或环境目录
   conda setup [conda|pip|all]   首次记录本机镜像为持久 default
   conda mirror conda|pip VALUE default / official / tuna / off
   conda cache conda|pip DIR|off 原生配置中直接设置包缓存路径
@@ -54,6 +58,7 @@ nido [--root DIR] COMMAND
                                显式安装本地 Linux amd64 GDS
   gds update --check           只读查询当前与官方最新 GDS 版本
   gds configure --gpu UUID / --file FILE
+                               终端中可直接 configure 选择 UUID 或文件
   gds validate / config-path / probe
   gds start / stop / restart   单卡空闲显存保留，stop 确认 worker 退出
   gds status / logs [--tail N] / remove
@@ -79,11 +84,13 @@ Codex 使用官方命令直接运行；Nido 不包装其运行、不移动目录
 `
 
 type CLI struct {
-	In        io.Reader
-	Out, Err  io.Writer
-	reader    *bufio.Reader
-	promptOut io.Writer
-	tty       *os.File
+	In       io.Reader
+	Out, Err io.Writer
+	// Interactive is an isolation-test seam; production detects a real terminal.
+	Interactive bool
+	reader      *bufio.Reader
+	promptOut   io.Writer
+	tty         *os.File
 	// Runner is injected only by Go isolation tests, never a CLI flag.
 	Runner      codex.Runner
 	ProxyRunner proxy.Runner
@@ -189,8 +196,8 @@ func (c *CLI) ask(label, fallback string) (string, error) {
 	}
 	fmt.Fprintf(c.promptOut, "%s [%s]: ", label, fallback)
 	v, e := c.reader.ReadString('\n')
-	if e != nil && len(v) == 0 {
-		return "", fmt.Errorf("交互未完成")
+	if e != nil {
+		return "", fmt.Errorf("交互未完成，操作已取消")
 	}
 	v = strings.TrimSpace(v)
 	if v == "" {
@@ -305,6 +312,8 @@ func (c CLI) Run(args []string) int {
 		return c.update(m, o, words)
 	case "download":
 		return c.download(m, o, words)
+	case "shell":
+		return c.shell(m, o, words)
 	case "path":
 		if len(words) != 0 {
 			return c.fail(fmt.Errorf("path 不接受参数"))
@@ -449,6 +458,7 @@ func (c *CLI) codex(m *Manager, o cliOptions, args []string) int {
 		return c.output(o, m.Codex.Status(m.Config.Codex))
 	case "setup":
 		home := o.home
+		homePrompted := false
 		registeredDefault := home == "" && m.Config.Codex.Home != ""
 		if registeredDefault {
 			home = m.Config.Codex.Home
@@ -464,8 +474,12 @@ func (c *CLI) codex(m *Manager, o cliOptions, args []string) int {
 				if o.yes {
 					return c.fail(fmt.Errorf("未发现可用 Codex 目录，请用 --home 指定已有目录；新装请使用 codex install"))
 				}
+				if !c.interactive(o) {
+					return c.fail(fmt.Errorf("未发现可用 Codex 目录，请用 --home 指定已有目录；新装请使用 codex install --home DIR"))
+				}
 				var e error
-				home, e = c.ask("未发现已有 CODEX_HOME，请输入自定义目录；没有则输入 install，跳过输入 skip", "skip")
+				home, e = c.setting("未发现已有 CODEX_HOME，请输入自定义目录；没有则输入 install，跳过输入 skip", "skip")
+				homePrompted = true
 				if e != nil {
 					return c.fail(e)
 				}
@@ -473,7 +487,7 @@ func (c *CLI) codex(m *Manager, o cliOptions, args []string) int {
 					return 0
 				}
 				if home == "install" {
-					home, e = c.ask("新 Codex HOME", filepath.Join(m.UserHome, ".codex"))
+					home, e = c.setting("新 Codex HOME", filepath.Join(m.UserHome, ".codex"))
 					if e != nil {
 						return c.fail(e)
 					}
@@ -481,6 +495,16 @@ func (c *CLI) codex(m *Manager, o cliOptions, args []string) int {
 					return c.codex(m, o, []string{"install"})
 				}
 			}
+		}
+		if c.interactive(o) && o.home == "" && !homePrompted {
+			selected, err := c.setting("CODEX_HOME（目录保持原位）", home)
+			if err != nil {
+				return c.fail(err)
+			}
+			if registeredDefault && selected == home {
+				return c.output(o, map[string]string{"detail": "保持 Codex 关联不变"})
+			}
+			home = selected
 		}
 		home = expand(home, m.UserHome)
 		next, e := m.Codex.Associate(home)
@@ -511,6 +535,13 @@ func (c *CLI) codex(m *Manager, o cliOptions, args []string) int {
 		return c.output(o, map[string]string{"home": next.Home, "detail": "已关联；目录未移动。重新加载 env.sh 后直接使用 codex。"})
 	case "install", "update":
 		cfg := m.Config.Codex
+		if action == "install" && cfg.Home == "" && o.home == "" && c.interactive(o) {
+			var err error
+			o.home, err = c.setting("Codex 数据目录（独立于 Nido）", filepath.Join(m.UserHome, ".codex"))
+			if err != nil {
+				return c.fail(err)
+			}
+		}
 		if action == "install" && o.home != "" {
 			h := expand(o.home, m.UserHome)
 			if p, e := physical(h); e == nil {
@@ -592,6 +623,10 @@ func (c *CLI) codex(m *Manager, o cliOptions, args []string) int {
 		}
 		return c.output(o, map[string]string{"current": current, "latest": latest, "detail": "官方操作已完成；重新加载 Nido 环境后直接使用 codex。"})
 	case "proxy":
+		if len(rest) == 0 && c.interactive(o) {
+			o.tool = "codex"
+			return c.proxyBind(m, o, nil)
+		}
 		if len(rest) != 1 {
 			return c.fail(fmt.Errorf("使用 codex proxy URL|builtin|off"))
 		}
@@ -664,6 +699,8 @@ func (c *CLI) codex(m *Manager, o cliOptions, args []string) int {
 			return c.fail(e)
 		}
 		return c.output(o, map[string]string{"detail": "已解除关联；Codex 程序和数据保留。当前终端仍可能保留旧 CODEX_HOME，请按需 unset CODEX_HOME。"})
+	case "configure":
+		return c.codexConfigure(m, o)
 	default:
 		return c.fail(fmt.Errorf("未知 Codex 操作: %s", action))
 	}
@@ -678,7 +715,7 @@ func (c *CLI) output(o cliOptions, value any) int {
 	}
 	if values, ok := value.(map[string]string); ok {
 		// Stable order makes terminal output and scripts predictable.
-		for _, k := range []string{"component", "operation", "root", "home", "environment", "installer", "version", "current", "latest", "saved", "effective", "github_proxy", "detail"} {
+		for _, k := range []string{"component", "operation", "root", "home", "shell", "profile", "environment", "activate", "installer", "version", "current", "latest", "saved", "effective", "github_proxy", "detail"} {
 			if v := values[k]; v != "" {
 				fmt.Fprintf(c.Out, "%s: %s\n", k, v)
 			}

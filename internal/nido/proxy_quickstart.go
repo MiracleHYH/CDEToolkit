@@ -9,7 +9,7 @@ import (
 )
 
 func (c *CLI) proxyQuickStart() ([]byte, error) {
-	fmt.Fprintln(c.Err, "Proxy quick start：输入正常显示，生成配置后保持停止。")
+	fmt.Fprintln(c.Err, "Proxy quick start：输入正常显示，请避免共享终端；确认摘要不展开订阅和节点凭据，保存后保持停止。")
 	provider, err := c.ask("Provider URL", "")
 	if err != nil {
 		return nil, err
@@ -71,8 +71,22 @@ func (c *CLI) proxyQuickStart() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintln(c.Err, "即将保存的 Mihomo 配置：")
-	fmt.Fprintln(c.Err, string(data))
+	fmt.Fprintln(c.Err, "Proxy 配置摘要：")
+	fmt.Fprintf(c.Err, "  日常入口：endpoint-proxy，127.0.0.1:%d → 订阅节点\n", o.ProxyPort)
+	if o.Download != nil {
+		fmt.Fprintf(c.Err, "  下载入口：endpoint-download，127.0.0.1:%d → 独立订阅节点组\n", o.Download.Port)
+	}
+	if o.ISP != nil {
+		route := "服务器 → ISP 节点 → 目标"
+		if o.ISP.RelayFilter != "" {
+			route = "服务器 → 订阅前置节点 → ISP 节点 → 目标"
+		}
+		fmt.Fprintf(c.Err, "  ISP 入口：endpoint-isp，127.0.0.1:%d；%s\n", o.ISP.Port, route)
+	}
+	fmt.Fprintln(c.Err, "  订阅由核心直连获取；配置和凭据仅保存到私有主配置，不自动启动。")
+	if err := c.confirm(cliOptions{}, "保存 Proxy 配置（保持停止）"); err != nil {
+		return nil, err
+	}
 	return data, nil
 }
 

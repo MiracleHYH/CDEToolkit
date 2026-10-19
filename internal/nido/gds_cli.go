@@ -73,13 +73,6 @@ func (c *CLI) gds(m *Manager, o cliOptions, args []string) int {
 	if o.githubProxy != "" && (action != "install" && action != "update" || o.artifact != "") {
 		return fail(fmt.Errorf("--github-proxy 仅用于在线安装、更新或版本查询"))
 	}
-	if (action == "install" || action == "update") && o.artifact == "" {
-		policy, err := m.githubPolicy(o.githubProxy)
-		if err != nil {
-			return fail(err)
-		}
-		m.GDS.GitHubProxy = policy
-	}
 	if o.proxy != "" {
 		if action != "install" && action != "update" {
 			return fail(fmt.Errorf("--proxy 仅用于程序下载和版本查询"))
@@ -91,6 +84,38 @@ func (c *CLI) gds(m *Manager, o cliOptions, args []string) int {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		transport.Proxy = http.ProxyURL(u)
 		m.GDS.HTTP = &http.Client{Transport: transport}
+	}
+	if (action == "install" || action == "update") && !o.check && o.artifact == "" && len(args) == 0 && c.interactive(o) {
+		var keep bool
+		var err error
+		o, keep, err = c.artifactSource("GDS", o)
+		if err != nil {
+			return fail(err)
+		}
+		if keep {
+			return c.output(o, map[string]string{"detail": "保持 GDS 程序不变"})
+		}
+	}
+	if o.githubProxy != "" && (action != "install" && action != "update" || o.artifact != "") {
+		return fail(fmt.Errorf("--github-proxy 仅用于在线安装、更新或版本查询"))
+	}
+	if (action == "install" || action == "update") && o.artifact == "" {
+		policy, err := m.githubPolicy(o.githubProxy)
+		if err != nil {
+			return fail(err)
+		}
+		m.GDS.GitHubProxy = policy
+	}
+	if action == "configure" && o.gpu == "" && o.file == "" && c.interactive(o) {
+		var keep bool
+		var err error
+		o, keep, err = c.gdsConfiguration(m, o)
+		if err != nil {
+			return fail(err)
+		}
+		if keep {
+			return c.output(o, map[string]string{"detail": "保持 GDS 配置不变"})
+		}
 	}
 	switch action {
 	case "status":

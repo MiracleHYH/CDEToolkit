@@ -208,6 +208,29 @@ func digest(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(
 // replaceFile prepares an atomic write, then checks the captured destination
 // immediately before replacement. It does not attempt to undo user edits.
 func replaceFile(path string, b []byte, mode os.FileMode, check func() error) error {
+	return replaceFileOwned(path, b, mode, check, nil)
+}
+
+func sameFileOwner(a, b os.FileInfo) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	x, xok := a.Sys().(*syscall.Stat_t)
+	y, yok := b.Sys().(*syscall.Stat_t)
+	return xok && yok && x.Uid == y.Uid && x.Gid == y.Gid
+}
+
+// replaceFileOwned additionally preserves an existing current-user file's
+// owner and group. Other managed-file writers retain replaceFile's behavior.
+func replaceFileOwned(path string, b []byte, mode os.FileMode, check func() error, owner os.FileInfo) error {
+	var original *syscall.Stat_t
+	if owner != nil {
+		var ok bool
+		original, ok = owner.Sys().(*syscall.Stat_t)
+		if !ok || original.Uid != uint32(os.Geteuid()) {
+			return fmt.Errorf("拒绝替换其他用户拥有的文件")
+		}
+	}
 	if err := safeParents(filepath.Dir(path)); err != nil {
 		return err
 	}
@@ -239,6 +262,17 @@ func replaceFile(path string, b []byte, mode os.FileMode, check func() error) er
 			_ = os.Remove(f.Name())
 		}
 	}()
+	if owner != nil && !sameFileOwner(owner, created) {
+		if err = f.Chown(-1, int(original.Gid)); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("无法保留原文件归属，未替换: %w", err)
+		}
+		current, statErr := f.Stat()
+		if statErr != nil || !sameFileOwner(owner, current) {
+			_ = f.Close()
+			return fmt.Errorf("无法保留原文件归属，未替换")
+		}
+	}
 	if err = f.Chmod(mode); err == nil {
 		_, err = f.Write(b)
 	}
@@ -261,6 +295,9 @@ func replaceFile(path string, b []byte, mode os.FileMode, check func() error) er
 		current, candidateErr := os.Lstat(f.Name())
 		if parentErr != nil || candidateErr != nil || !os.SameFile(parent, currentParent) || parent.Mode() != currentParent.Mode() || !os.SameFile(created, current) || current.Mode().Perm() != mode.Perm() {
 			return fmt.Errorf("写入目录或临时文件在操作期间发生变化")
+		}
+		if owner != nil && (!sameFileOwner(parent, currentParent) || !sameFileOwner(owner, current)) {
+			return fmt.Errorf("写入目录或临时文件归属在操作期间发生变化")
 		}
 		if err = unchangedFile(f.Name(), b, int64(len(b))); err == nil {
 			err = os.Rename(f.Name(), path)

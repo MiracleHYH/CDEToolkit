@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/MiracleHYH/CDEToolkit/internal/components/proxy"
@@ -54,13 +55,6 @@ func (c *CLI) proxy(m *Manager, o cliOptions, args []string) int {
 	if o.check && (o.artifact != "" || o.checksum != "") {
 		return fail(fmt.Errorf("版本查询不接受程序包选项"))
 	}
-	if (action == "install" || action == "update") && (o.artifact == "" || o.artifact == "latest") {
-		policy, err := m.githubPolicy(o.githubProxy)
-		if err != nil {
-			return fail(err)
-		}
-		m.Proxy.GitHubProxy = policy
-	}
 	if o.proxy != "" {
 		if action != "install" && action != "update" {
 			return fail(fmt.Errorf("--proxy 仅用于程序下载和版本查询"))
@@ -72,6 +66,29 @@ func (c *CLI) proxy(m *Manager, o cliOptions, args []string) int {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		transport.Proxy = http.ProxyURL(u)
 		m.Proxy.HTTP = &http.Client{Transport: transport}
+	}
+	sourceChosen := false
+	if (action == "install" || action == "update") && !o.check && o.artifact == "" && c.interactive(o) {
+		var keep bool
+		var err error
+		o, keep, err = c.artifactSource("Proxy", o)
+		if err != nil {
+			return fail(err)
+		}
+		if keep {
+			return c.output(o, map[string]string{"detail": "保持 Proxy 程序不变"})
+		}
+		sourceChosen = true
+		if o.githubProxy != "" && o.artifact != "" {
+			return fail(fmt.Errorf("--github-proxy 仅用于在线安装、更新或版本查询"))
+		}
+	}
+	if (action == "install" || action == "update") && (o.artifact == "" || o.artifact == "latest") {
+		policy, err := m.githubPolicy(o.githubProxy)
+		if err != nil {
+			return fail(err)
+		}
+		m.Proxy.GitHubProxy = policy
 	}
 	name := ""
 	if len(args) == 1 {
@@ -161,10 +178,27 @@ func (c *CLI) proxy(m *Manager, o cliOptions, args []string) int {
 			return fail(err)
 		}
 		if _, err := os.Lstat(path); err == nil {
-			if _, err = m.Proxy.ReadConfig(); err != nil {
-				return fail(err)
+			if c.interactive(o) {
+				choice, err := c.choose("已有 Proxy 配置："+path, []string{"保持现有配置", "导入完整私有 YAML（整体替换，要求停止）"}, 0)
+				if err != nil {
+					return fail(err)
+				}
+				if choice == 0 {
+					return c.output(o, map[string]string{"detail": "保持 Proxy 配置不变"})
+				}
+				o.file, err = c.setting("私有 YAML 文件的绝对路径", "")
+				if err != nil {
+					return fail(err)
+				}
+				if !filepath.IsAbs(o.file) {
+					return fail(fmt.Errorf("配置文件必须是绝对路径"))
+				}
+			} else {
+				if _, err = m.Proxy.ReadConfig(); err != nil {
+					return fail(err)
+				}
+				return c.output(o, map[string]string{"detail": "已有配置：" + path + "；编辑后运行 proxy validate，再显式 restart。"})
 			}
-			return c.output(o, map[string]string{"detail": "已有配置：" + path + "；编辑后运行 proxy validate，再显式 restart。"})
 		} else if !os.IsNotExist(err) {
 			return fail(err)
 		}
@@ -200,19 +234,24 @@ func (c *CLI) proxy(m *Manager, o cliOptions, args []string) int {
 		return c.output(o, info)
 	}
 	if action == "configure" && o.file == "" {
-		if o.yes {
-			return fail(fmt.Errorf("首次非交互配置需要 --file 私有 YAML 文件"))
+		if !c.interactive(o) {
+			return fail(fmt.Errorf("首次配置需要交互终端；非交互模式请提供 --file 私有 YAML 文件"))
 		}
 	}
 	if m.configBytes == nil {
 		return fail(fmt.Errorf("尚未初始化，请先运行 nido init"))
+	}
+	if sourceChosen {
+		if err := m.Proxy.Preflight(action, o.artifact, o.checksum); err != nil {
+			return fail(err)
+		}
 	}
 	if action == "configure" && o.file != "" {
 		if err := m.Proxy.Preflight(action, o.file, ""); err != nil {
 			return fail(err)
 		}
 	}
-	if action != "validate" && action != "install" && !(action == "configure" && o.file == "") {
+	if action != "validate" && (action != "install" || sourceChosen) && !(action == "configure" && o.file == "") {
 		if err := c.confirm(o, action+" 内置 Proxy"); err != nil {
 			return fail(err)
 		}
@@ -252,7 +291,7 @@ func (c *CLI) proxy(m *Manager, o cliOptions, args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	if action == "install" && !o.yes {
+	if action == "install" && c.interactive(o) {
 		path, err := m.Proxy.ConfigPath()
 		if err != nil {
 			return fail(err)

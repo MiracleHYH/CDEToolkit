@@ -14,36 +14,38 @@ v0.8.2 仅支持 Linux amd64，Nido 本身是一个 Go 可执行文件。其他�
 
 ## 快速开始
 
-**v0.7.0 起支持 GitHub 加速下载和 Nido 自身更新。** 以下命令安装最新版，并在当前 Bash / Zsh 中启用 `nido`。
+**版本说明：以下 URL 安装当前公开的 v0.8.2。交互安装、组件配置菜单和 `nido shell setup` 是本轮源码开发新增，尚未发布，公开安装脚本暂不具备这些新交互。** 新体验及自动化约定见[交互设计](docs/interactive-design.md)。
 
-需要 Linux amd64、curl、tar 和 SHA-256 工具（通常为 `sha256sum`），无需 Go。首次安装请选择一种下载方式，安装最新 Go 版到 `~/.nido`。
+需要 Linux amd64、curl、tar 和 SHA-256 工具（通常为 `sha256sum`），无需 Go。安装器只安装 Nido；组件各自配置，不自动启动服务。
 
-**能直接访问 GitHub：** 脚本和安装包都从 GitHub 下载。
-
-```sh
-curl --http1.1 -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy direct && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
-```
-
-**GitHub 访问困难：** 脚本和安装包都通过第三方加速前缀下载。
+**官方脚本入口：**
 
 ```sh
-curl --http1.1 -fsSL https://gh-proxy.org/https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy https://gh-proxy.org && . "${NIDO_HOME:-$HOME/.nido}/env.sh"
+curl -fsSL https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh
 ```
 
-第二种方式会执行第三方转发的脚本，仅在信任该服务时使用。安装器核对包的 SHA-256，当前客户端不会验证 Sigstore 签名；第三方也能同时替换脚本、包和摘要，因此加速下载不能提供与官方直链相同的真实性保证。
+默认文件下载策略为 `auto`，官方请求失败后可能使用内置第三方加速入口。只接受官方来源时，在 `sh` 后改用 `-s -- --github-proxy direct`。
 
-安装后检查：
+**GitHub 访问困难，使用自己信任的加速入口：**
+
+```sh
+curl -fsSL https://gh-proxy.org/https://github.com/MiracleHYH/CDEToolkit/releases/latest/download/install.sh | sh -s -- --github-proxy https://gh-proxy.org
+```
+
+加速方式显式传入同一前缀，因为管道内的脚本无法知道外层 curl 的下载地址；私人前缀同理。该方式会执行第三方转发的脚本，仅在信任该服务时使用。安装器核对包的 SHA-256，当前客户端不会验证 Sigstore 签名；第三方也能同时替换脚本、包和摘要，因此摘要不能独立证明来源。
+
+安装成功后，执行输出中对应实际软件目录的 `. '.../env.sh'` 命令，再检查：
 
 ```sh
 nido version
 nido status
 ```
 
-安装器只安装 Nido，不安装组件、不关联已有 Codex，也不启动服务。再次运行同一命令会更新 Nido，保留已有管理配置。可提前执行 `export NIDO_HOME=/absolute/path/to/nido` 选择其他独立软件目录；外部 Codex HOME 必须在其之外。
+公开 v0.8.2 默认安装到 `~/.nido`，也可提前执行 `export NIDO_HOME=/absolute/path/to/nido`。本轮源码新增终端引导：选择软件目录、下载方式，可选注册 Bash / Zsh（默认不注册），确认后安装；`--yes` 或无交互终端时保留参数模式。再次安装保留已有管理配置，外部 Codex HOME 必须在软件目录之外。
 
-上面命令末尾的 `. .../env.sh` 把 `nido` 加入当前终端的 PATH；安装脚本自身无法修改父 Shell。Nido 不自动编辑 Shell 配置。需要新终端自动加载时，将 `. "$HOME/.nido/env.sh"` 加入 `~/.bashrc` 或 `~/.zshrc`；自定义目录请替换路径。
+加载 `env.sh` 才能更新当前终端的 PATH，安装子进程无法修改父 Shell。公开 v0.8.2 需要自行按实际路径配置新终端；源码新增的 `nido shell setup` 可在明确同意后注册受管加载块，供读取该启动文件的新 Shell 生效，不改写其他 Shell 内容，也不加载或执行原配置文件。
 
-之后可直接检查和更新 Nido 本身：
+首次 Proxy 安装与 API 启用按下文完成后，检查和更新 Nido 本身：
 
 ```sh
 nido update --check
@@ -57,6 +59,8 @@ nido download set auto
 GitHub 下载策略支持 `direct`、`auto` 或自定义 HTTPS 前缀。`auto` 先短时尝试官方地址，失败后依次尝试少量内置第三方前缀；仅用于支持的公开 GitHub 下载，不是全局 HTTP 代理，不改写 Codex 官方脚本地址。首次显式选择会保存，重复安装未指定时保留既有配置；一次更新可用 `--github-proxy` 覆盖。详细参数与信任边界见[使用指南](docs/usage.md#github-下载与-nido-自身更新)。
 
 ## 关联或安装 Codex
+
+源码新增 `nido codex configure` 配置菜单；已有目录关联、代理或安装入口可在终端补齐缺少的信息，默认保留已有选择。公开 v0.8.2 使用下列显式命令。
 
 已有 Codex 时，发现并关联现有目录：
 
@@ -91,6 +95,8 @@ nido codex update
 
 ## 配置 Conda / pip
 
+源码新增 `nido conda configure` 菜单；`mirror`、`cache`、`envs` 缺少选择时也可在终端补齐。镜像、缓存、环境目录各自操作，已有配置默认保留，不会进入菜单就切源或改路径。以下显式命令仍供公开 v0.8.2 和自动化使用。
+
 本组件自 v0.8.0 提供。v0.8.1 已修复隐式用户 `.condarc` 切源时混入旧 defaults 的问题，并按实际管理项查询配置；[本次 Linux amd64 发行与验收状态](docs/conda-v0.8.1-release.md)单独记录，公网路径仍有网络限制。本次只以 Linux amd64 为执行验收目标，不在 macOS 安装。首次启用先保存本机原有镜像为持久的 `default`，之后可在原配置、官方和清华之间切换。缓存与环境位置直接写入上游原生配置。
 
 ```sh
@@ -123,7 +129,9 @@ nido proxy status
 nido proxy endpoints --json
 ```
 
-交互 `install` 安装后首次直接进入 quick start：填写 provider URL、日常 filter/端口，再选择独立下载和 ISP；ISP 接受一行节点链接，可配置测试地址及 provider 前置节点 filter。输入正常显示，完整 YAML 预览后验证保存；各代理组使用 `url-test`。`install --yes` 只安装，不猜测配置；随后可用 `proxy configure` 补齐首次引导，已有配置时只显示路径。也可用 `nido proxy configure --file /absolute/config.yaml` 导入私有原生 YAML。安装和配置不启动；主配置固定为 **`$NIDO_HOME/proxy/config.yaml`**。
+公开 v0.8.2 的默认在线 `install` 要求先启用 API；首次自举请按[本地包方案](docs/nido-proxy-bootstrap.md)操作。源码新增未绑定时的本地 artifact 交互引导，询问可信文件和摘要，无需记住整串参数；GDS 安装同理，API 门控保持不变。
+
+交互安装后可配置 provider、日常 filter/端口和可选下载/ISP 入口；`install --yes` 只安装核心。源码的 `proxy configure` 在已有配置时默认保留，可明确选择导入完整私有 YAML；确认摘要不展开订阅或节点凭据。公开 v0.8.2 已有配置时仅显示路径，其 quick start 会显示完整 YAML。显式导入仍使用 `nido proxy configure --file /absolute/config.yaml`。安装和配置不启动；主配置固定为 **`$NIDO_HOME/proxy/config.yaml`**。
 
 默认只生成回环 listeners，不启用传统通用端口，规则仅 `MATCH,DIRECT`，各 listener 明确指定出站。用户可以修改全部 listener 名称和原生配置；快捷绑定从 listeners 读取候选，Codex/Git 也允许自定义代理地址。按类别或单工具分别选择：
 
@@ -170,6 +178,7 @@ nido proxy start
 | --- | --- |
 | 本地状态 / 环境检查 | `nido status` / `nido doctor` |
 | 输出 Shell 环境 | `nido env bash` / `nido env zsh` |
+| 可选注册新终端（源码新增，未发布） | `nido shell setup` |
 | 检查 / 更新 Nido 本身 | `nido update --check` / `nido update` |
 | 查看 / 保存 GitHub 下载策略 | `nido download show` / `nido download set auto` |
 | 仅为本次 Codex 安装更新指定代理 | `nido codex update --proxy http://127.0.0.1:7890` |
@@ -186,6 +195,8 @@ nido proxy start
 内置组件卸载保留配置、日志和数据；安装、更新不会自动启动组件。Nido 不提供目录迁移、挂载路径恢复、版本仓库、通用回滚或外部 Codex 卸载功能。
 
 Nido v0.5.0 起支持独立 GDS 官方下载；首版 GDS 为 `gds-v0.1.0`，面向 Linux amd64、glibc 2.31 及以上的完整 NVIDIA GPU。安装不配置或启动，需另行显式选择 GPU UUID。组件在连续空闲后保留显存，发现外部任务或观察失效时释放，默认不运行计算 kernel。可靠启动自己的任务前先执行 `nido gds stop` 并确认成功。真实 GPU 行为尚未验收；详见 [组件设计](docs/gds-design.md)、[审查记录](docs/gds-audit.md) 和 [独立发行说明](docs/gds-release.md)。
+
+源码新增 `nido gds configure` 首次配置引导，可输入完整 GPU UUID 或导入配置，已有配置默认保留；不自动探测并选用 GPU，也不自动启动。
 
 ## 开发
 
