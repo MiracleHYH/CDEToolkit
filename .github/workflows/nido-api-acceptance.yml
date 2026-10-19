@@ -184,6 +184,7 @@ jobs:
           NIDO_PUBLIC_INSTALL_IMAGE="$NIDO_API_IMAGE" \
           bash "$GITHUB_WORKSPACE/acceptance-source/tests/nido-public-install-isolation.sh"
       - name: Verify the previous public release for an actual upgrade
+        id: previous_release
         if: inputs.public_network
         env:
           GH_TOKEN: ${{ github.token }}
@@ -226,6 +227,7 @@ jobs:
               --certificate-github-workflow-name release > "$evidence/cosign-previous-$name.log" 2>&1
           done
       - name: Accept the previous public binary updating to this signed release
+        id: public_upgrade
         if: inputs.public_network
         env:
           GH_TOKEN: ${{ github.token }}

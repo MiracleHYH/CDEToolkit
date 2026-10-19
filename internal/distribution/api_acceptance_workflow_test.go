@@ -39,14 +39,21 @@ func TestNativeAPIAcceptanceWorkflowsKeepPublicAndLocalScopes(t *testing.T) {
 	if len(public.On) != 1 || public.On["workflow_dispatch"] == nil || len(public.Permissions) != 1 || public.Permissions["contents"] != "read" || public.Jobs["acceptance"].RunsOn != "ubuntu-24.04" {
 		t.Fatal("public API acceptance must be independent, manual, read-only and native Linux")
 	}
+	dispatch, _ := public.On["workflow_dispatch"].(map[string]any)
+	inputs, _ := dispatch["inputs"].(map[string]any)
+	network, _ := inputs["public_network"].(map[string]any)
+	if network["type"] != "boolean" || network["default"] != false {
+		t.Fatal("real public network acceptance must default to disabled")
+	}
 	allowed := map[string]bool{
 		"actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd":          true,
 		"actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e":          true,
 		"sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6": true,
 		"actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02":   true,
 	}
-	var metadata, signatures string
-	request, checkout, signedScope, uploaded, tokenSteps := false, false, false, false, 0
+	var metadata, signatures, previous, upgrade, installer string
+	request, checkout, harnessCheckout, signedScope, uploaded := false, false, false, false, false
+	tokenSteps := map[string]bool{}
 	for _, item := range public.Jobs["acceptance"].Steps {
 		if item.Uses != "" && !allowed[item.Uses] {
 			t.Fatal("unreviewed or unpinned acceptance action", item.Uses)
@@ -58,17 +65,43 @@ func TestNativeAPIAcceptanceWorkflowsKeepPublicAndLocalScopes(t *testing.T) {
 			request = item.Env["REQUEST_VERSION"] == "${{ inputs.version }}" && strings.Contains(item.Run, "$REQUEST_VERSION =~ ^(0|[1-9][0-9]*)")
 		}
 		if strings.HasPrefix(item.Uses, "actions/checkout@") {
-			checkout = item.With["ref"] == "${{ steps.request.outputs.tag }}" && fmt.Sprint(item.With["persist-credentials"]) == "false"
+			if fmt.Sprint(item.With["persist-credentials"]) != "false" {
+				t.Fatal("acceptance checkouts must not retain repository credentials")
+			}
+			switch item.With["path"] {
+			case "tagged-source":
+				checkout = item.With["ref"] == "${{ steps.request.outputs.tag }}"
+			case "acceptance-source":
+				harnessCheckout = item.With["ref"] == "${{ github.sha }}" && item.If == "inputs.public_network"
+			default:
+				t.Fatal("unexpected acceptance checkout", item.With)
+			}
 		}
 		if item.Env["GH_TOKEN"] != "" {
-			tokenSteps++
-			if item.ID != "release" || item.Env["GH_TOKEN"] != "${{ github.token }}" {
+			if (item.ID != "release" && item.ID != "previous_release" && item.ID != "public_upgrade") || item.Env["GH_TOKEN"] != "${{ github.token }}" || tokenSteps[item.ID] {
 				t.Fatal("repository token must remain in host-side metadata/download step")
 			}
-			metadata = item.Run
+			tokenSteps[item.ID] = true
+			switch item.ID {
+			case "release":
+				metadata = item.Run
+			case "previous_release":
+				previous = item.Run
+			case "public_upgrade":
+				upgrade = item.Run
+			}
+			if item.ID != "release" && item.If != "inputs.public_network" {
+				t.Fatal("public HTTPS checks must be explicitly opted in")
+			}
 		}
-		if strings.Contains(item.Run, "cosign verify-blob") {
+		if item.Name == "Verify signatures, release source, package identity and fixture build" {
 			signatures = item.Run
+		}
+		if strings.Contains(item.Run, "nido-public-install-isolation.sh") {
+			if item.If != "inputs.public_network" || item.Env["GH_TOKEN"] != "" {
+				t.Fatal("public installer must be opt-in and receive no repository token")
+			}
+			installer = item.Run
 		}
 		if strings.Contains(item.Run, "bash tests/nido-api-release-isolation.sh") {
 			signedScope = item.Env["NIDO_API_RELEASE_INPUT_SCOPE"] == "verified-public" && !strings.Contains(item.Run, "pre-release-local")
@@ -77,8 +110,26 @@ func TestNativeAPIAcceptanceWorkflowsKeepPublicAndLocalScopes(t *testing.T) {
 			uploaded = item.If == "always()"
 		}
 	}
-	if !request || !checkout || !signedScope || !uploaded || tokenSteps != 1 {
+	if !request || !checkout || !harnessCheckout || !signedScope || !uploaded || len(tokenSteps) != 3 {
 		t.Fatal("missing version/tag gate, public-only scope, token boundary or failure evidence")
+	}
+	for _, required := range []string{"$PREVIOUS_VERSION =~ ^(0|[1-9][0-9]*)", ".draft == false", ".prerelease == false", ".digest", "sha256sum", "--certificate-identity", "--certificate-oidc-issuer", "--certificate-github-workflow-sha", "--certificate-github-workflow-ref", "--certificate-github-workflow-repository"} {
+		if !strings.Contains(previous, required) {
+			t.Fatal("missing previous public release metadata/signature gate", required)
+		}
+	}
+	for _, required := range []string{"NIDO_PUBLIC_INSTALL_INPUT=\"$evidence/assets\"", "NIDO_PUBLIC_INSTALL_COMMIT=\"$RELEASE_COMMIT\"", "./tests/fixtures/nido-public-install", "$GITHUB_WORKSPACE/acceptance-source/tests/nido-public-install-isolation.sh"} {
+		if !strings.Contains(installer, required) {
+			t.Fatal("missing signed public installer input or tagged PTY fixture", required)
+		}
+	}
+	for _, required := range []string{"NIDO_ACCEPT_INPUT=\"$evidence/assets\"", "NIDO_ACCEPT_OLD_INPUT=\"$evidence/public-network/previous-assets\"", "NIDO_ACCEPT_OLD_VERSION=\"$PREVIOUS_VERSION\"", "NIDO_ACCEPT_MODE=docker", "NIDO_ACCEPT_METADATA_AUTH=gh", "$GITHUB_WORKSPACE/acceptance-source/tests/nido-public-release-isolation.sh"} {
+		if !strings.Contains(upgrade, required) {
+			t.Fatal("missing verified previous-version upgrade isolation boundary", required)
+		}
+	}
+	if strings.Contains(upgrade, "-e GH_TOKEN") || strings.Contains(upgrade, "--env GH_TOKEN") {
+		t.Fatal("host metadata token must never be forwarded into an acceptance container")
 	}
 	for _, required := range []string{".draft == false", ".prerelease == false", ".assets | length == 6", "^sha256:[0-9a-f]{64}$", "git/ref/tags/", "[[ $kind = commit && $object = \"$commit\" ]]", "sha256sum", fmt.Sprintf("elif .name == \"install.sh\" then .size <= %d", maxInstaller)} {
 		if !strings.Contains(metadata, required) {
