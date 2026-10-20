@@ -1,6 +1,6 @@
 # Proxy 组件实现说明
 
-Proxy 是 Nido 内置的本地显式代理组件。实现位于 `internal/components/proxy`：Nido 管理初次安装、原生配置、精确进程和本地端点，运行期操作通过 Mihomo 原生 controller 完成；Mihomo 管理节点协议、规则、provider、连接与缓存。组件自 v0.4.0 提供，quick start 与节点链接解析自 v0.6.0 提供；历史类别/单工具绑定也始于 v0.6.0，本轮已从 Proxy 页面及 CLI 移除，工具侧代理选择由相应工具与根菜单负责。本文描述 2026-10-19 体验后精简的当前源码契约，尚未发布；历史真实核心结果不能替代本轮验证。各阶段结果见[审查记录](proxy-audit.md)。
+Proxy 是 Nido 内置的本地显式代理组件。实现位于 `internal/components/proxy`：Nido 管理初次安装、原生配置、精确进程和本地端点，运行期操作通过 Mihomo 原生 controller 完成；Mihomo 管理节点协议、规则、provider、连接与缓存。组件自 v0.4.0 提供，quick start 与节点链接解析自 v0.6.0 提供；历史类别/单工具绑定也始于 v0.6.0，已从 Proxy 页面及 CLI 移除，工具侧代理选择由相应工具与根菜单负责。本文描述 v0.10.2 的 Quick Start 配置契约；历史真实核心结果不能替代本轮验证。各阶段结果见[审查记录](proxy-audit.md)。
 
 ## 职责与目录
 
@@ -46,27 +46,26 @@ Quick Start 在收集输入前捕获配置 revision，运行中允许先收集�
 
 主配置与备份分别原子替换，两个文件不构成跨掉电事务。备份写入失败时不替换主配置；备份成功后，若主配置替换失败或机器掉电，可能留下旧主配置和已更新的备份。Nido 明确报告保存失败，后续不自动回滚，也不将这种状态描述为整次操作原子成功。用户自行编辑固定配置不经过这套自动备份流程。
 
-`QuickStartOptions` 传递 provider URL、日常 filter/端口、可选下载 filter/端口、可选 ISP 链接/端口/测试 URL/前置 filter，以及可选 `ControllerConfig`。生成器无文件、网络和进程操作，用 YAML encoder 构造数据，不拼接用户输入。新 CLI 总是提供 controller：默认地址为 `127.0.0.1:9090`，secret 在 CLI 侧用 `crypto/rand` 生成 32 字节并编码，重复 Quick Start 复用安全的既有 controller 地址与 secret。纯生成器的 nil controller 只为旧调用兼容，不表示新 CLI 默认关闭管理功能。业务端口有效且互不重复，controller 不能占用同一代理监听地址和端口；冲突明确失败。filter 必须显式非空，`.*` 表示全部；保留 Mihomo 正则语法，最终由核心验证，不用 Go regexp 错拒绝 lookahead。首次配置仍只允许原子新建，收集输入后被其他写入者创建的文件会保留并导致报错。
+`QuickStartOptions` 传递 provider URL、日常 filter/端口、可选下载 filter/端口、可选 ISP 链接/端口/前置 filter/前置测试 URL，以及可选 `ControllerConfig`。生成器无文件、网络和进程操作，用 YAML encoder 构造数据，不拼接用户输入。新 CLI 总是提供 controller：默认地址为 `127.0.0.1:9090`，secret 在 CLI 侧用 `crypto/rand` 生成 32 字节并编码，重复 Quick Start 复用安全的既有 controller 地址与 secret。纯生成器的 nil controller 只为旧调用兼容，不表示新 CLI 默认关闭管理功能。业务端口有效且互不重复，controller 不能占用同一代理监听地址和端口；冲突明确失败。filter 必须显式非空，`.*` 表示全部；保留 Mihomo 正则语法，最终由核心验证，不用 Go regexp 错拒绝 lookahead。首次配置仍只允许原子新建，收集输入后被其他写入者创建的文件会保留并导致报错。
 
-共享 HTTP provider 名为 `subscription`，缓存为 `providers/subscription.yaml`，显式 `proxy: DIRECT` 取回订阅。新模板的 provider `interval: 0` 取消定时拉取，由用户显式更新；仍启用 300 秒常规 URL 健康检查，组的 URLTest 行为保持独立。`interval: 0` 不表示禁止启动联网：有效缓存可直接使用，缓存缺失或解析失败时，核心初始化仍可能下载。高级 YAML 的既有 interval 不自动改写，也不通过删除缓存模拟更新。[原生 Fetcher](https://github.com/MetaCubeX/mihomo/blob/v1.19.32/component/resource/fetcher.go#L53-L106)、[定时条件](https://github.com/MetaCubeX/mihomo/blob/v1.19.32/component/resource/fetcher.go#L200-L215)。原生 provider 内容仍需用户自行提供，不增加订阅转换器或第三方服务。默认测试 URL 为 `https://www.gstatic.com/generate_204`，四类组按需生成：
+共享 HTTP provider 名为 `subscription`，缓存为 `providers/subscription.yaml`，显式 `proxy: DIRECT` 取回订阅。新模板的 provider `interval: 0` 取消定时拉取，由用户显式更新；仍启用 300 秒常规 URL 健康检查，组的 URLTest 行为保持独立。`interval: 0` 不表示禁止启动联网：有效缓存可直接使用，缓存缺失或解析失败时，核心初始化仍可能下载。高级 YAML 的既有 interval 不自动改写，也不通过删除缓存模拟更新。[原生 Fetcher](https://github.com/MetaCubeX/mihomo/blob/v1.19.32/component/resource/fetcher.go#L53-L106)、[定时条件](https://github.com/MetaCubeX/mihomo/blob/v1.19.32/component/resource/fetcher.go#L200-L215)。原生 provider 内容仍需用户自行提供，不增加订阅转换器或第三方服务。默认测试 URL 为 `https://www.gstatic.com/generate_204`，三类组按需生成：
 
 | 组 | 候选与筛选 | 测试 |
 | --- | --- | --- |
-| `proxy` | provider 的日常 filter | 常规 URL，300 秒 `url-test` |
-| `download` | 可选，provider 的独立下载 filter | 常规 URL，300 秒 `url-test` |
-| `isp-relay` | 可选，provider 的独立前置 filter | 常规 URL，300 秒 `url-test` |
-| `isp` | 可选，仅引用解析出的 `isp-node` | 用户选择 URL，默认常规 URL，300 秒 `url-test` |
+| `Proxy` | provider 的日常 filter | 常规 URL，300 秒 `url-test` |
+| `Download` | 可选，provider 的独立下载 filter | 常规 URL，300 秒 `url-test` |
+| `ISP-Relay` | 可选，provider 的独立前置 filter | 用户选择前置测试 URL，默认常规 URL，300 秒 `url-test` |
 
-各 provider 组只引用共享 provider，filter 不放到 provider 上，避免相互裁剪候选；空组使用 `REJECT`。ISP 需要前置时设置 `isp-node.dialer-proxy: isp-relay`，链路为服务器 → 前置节点 → ISP → 目标；不生成已废弃的 relay 类型组。`isp` 自身的测试穿过 ISP 完整出站，不能由前置组测试代替。UDP/QUIC ISP 节点要求前置具备相应承载能力，HTTP 或仅 TCP 前置不因此自动获得 UDP 支持，配置检查也不证明真实链路可达。
+各 provider 组只引用共享 provider，filter 不放到 provider 上，避免相互裁剪候选；空组使用 `REJECT`。ISP 保留分享链接中的节点名称，无名称时使用 `isp-node`；节点与内置目标或推荐组重名时明确拒绝。`endpoint-isp` 直接引用该节点，不再为单个 ISP 节点增加 `url-test` 组。需要前置时，将 ISP 节点的 `dialer-proxy` 设置为 `ISP-Relay`，链路为服务器 → 前置节点 → ISP → 目标；不生成已废弃的 relay 类型组。交互仅在启用前置时询问“ISP 前置测试地址”，对应 `QuickStartISP.TestURL`；该检测由前置候选节点访问目标，用于选择前置节点，不代表完整 ISP 链路健康检查。UDP/QUIC ISP 节点要求前置具备相应承载能力，HTTP 或仅 TCP 前置不因此自动获得 UDP 支持，配置检查也不证明真实链路可达。
 
-生成器默认仅提供 mixed listeners `endpoint-proxy`（7890）、可选 `endpoint-download`（7891）、可选 `endpoint-isp`（7892），均显式监听 `127.0.0.1` 并指定各自出站组；端口来自输入，可改变。默认不生成传统 `port` / `mixed-port` / `socks-port`。新模板另外生成回环 controller 和非空 secret，用于原生运行期管理；controller 不属于业务代理 listener，也不加入工具端点候选。所有 listener 名称都可以修改或删除；之后安装、更新和启停不重新生成用户 YAML，也没有第二份端口/节点配置副本。
+生成器默认仅提供 mixed listeners `endpoint-proxy`（7890）、可选 `endpoint-download`（7891）、可选 `endpoint-isp`（7892），均显式监听 `127.0.0.1`。日常、下载入口分别引用 `Proxy`、`Download` 组，ISP 入口直接引用解析出的 ISP 节点；端口来自输入，可改变。默认不生成传统 `port` / `mixed-port` / `socks-port`。新模板另外生成回环 controller 和非空 secret，用于原生运行期管理；controller 不属于业务代理 listener，也不加入工具端点候选。所有 listener 名称都可以修改或删除；之后安装、更新和启停不重新生成用户 YAML，也没有第二份端口/节点配置副本。
 
-规则仅为核心内部 HTTPS 更新增加两个精确目标，存在 `download` 组时使用它，否则使用 `proxy`；最后仍是 `MATCH,DIRECT`。普通 listener 流量继续使用 listener 指定的出站组，不靠这两条规则分流：
+规则仅为核心内部 HTTPS 更新增加两个精确目标，存在 `Download` 组时使用它，否则使用 `Proxy`；最后仍是 `MATCH,DIRECT`。普通 listener 流量继续使用 listener 指定的组或节点，不靠这两条规则分流。保留这两条规则是因为原生内核更新按 Mihomo 自身规则出站，仅有 `MATCH,DIRECT` 时不会经过上述代理组：
 
 ```yaml
 rules:
-  - AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,github.com)),download
-  - AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,release-assets.githubusercontent.com)),download
+  - AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,github.com)),Download
+  - AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,release-assets.githubusercontent.com)),Download
   - MATCH,DIRECT
 ```
 

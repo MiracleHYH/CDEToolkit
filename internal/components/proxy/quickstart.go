@@ -14,7 +14,7 @@ import (
 )
 
 // DefaultTestURL is the ordinary connectivity target used by generated groups
-// and provider health checks. ISP can use a separately supplied test URL.
+// and provider health checks. The ISP relay can use a separate test URL.
 const DefaultTestURL = "https://www.gstatic.com/generate_204"
 
 const DefaultControllerAddress = "127.0.0.1:9090"
@@ -25,8 +25,9 @@ type QuickStartRoute struct {
 }
 
 type QuickStartISP struct {
-	NodeURL     string
-	Port        int
+	NodeURL string
+	Port    int
+	// TestURL measures optional relay candidates, not the complete ISP route.
 	TestURL     string
 	RelayFilter string
 }
@@ -61,16 +62,16 @@ func QuickStart(o QuickStartOptions) ([]byte, error) {
 	if err := checkRoute("日常代理", o.ProxyFilter, o.ProxyPort); err != nil {
 		return nil, err
 	}
-	groups := []map[string]any{quickStartProviderGroup("proxy", o.ProxyFilter)}
-	listeners := []map[string]any{quickStartListener("endpoint-proxy", "proxy", o.ProxyPort)}
-	updateGroup := "proxy"
+	groups := []map[string]any{quickStartProviderGroup("Proxy", o.ProxyFilter)}
+	listeners := []map[string]any{quickStartListener("endpoint-proxy", "Proxy", o.ProxyPort)}
+	updateGroup := "Proxy"
 	if o.Download != nil {
 		if err := checkRoute("下载代理", o.Download.Filter, o.Download.Port); err != nil {
 			return nil, err
 		}
-		groups = append(groups, quickStartProviderGroup("download", o.Download.Filter))
-		listeners = append(listeners, quickStartListener("endpoint-download", "download", o.Download.Port))
-		updateGroup = "download"
+		groups = append(groups, quickStartProviderGroup("Download", o.Download.Filter))
+		listeners = append(listeners, quickStartListener("endpoint-download", "Download", o.Download.Port))
+		updateGroup = "Download"
 	}
 	config := map[string]any{
 		"allow-lan": false,
@@ -100,40 +101,44 @@ func QuickStart(o QuickStartOptions) ([]byte, error) {
 		},
 	}
 	if o.ISP != nil {
-		// The ISP group always contains a concrete node, so use the ordinary
-		// expression only to share port validation with the provider routes.
+		// The ISP listener targets its node directly; only the optional relay
+		// needs a provider group and a health-check target.
 		if err := checkRoute("ISP 代理", ".*", o.ISP.Port); err != nil {
 			return nil, err
-		}
-		testURL := o.ISP.TestURL
-		if testURL == "" {
-			testURL = DefaultTestURL
-		}
-		if err := quickStartHTTPURL(testURL); err != nil {
-			return nil, fmt.Errorf("ISP 测试地址必须是有效的 HTTP 或 HTTPS URL")
 		}
 		node, err := ParseNodeURL(o.ISP.NodeURL)
 		if err != nil {
 			return nil, fmt.Errorf("ISP 节点链接无效: %w", err)
 		}
-		node["name"] = "isp-node"
+		name, _ := node["name"].(string)
+		if strings.TrimSpace(name) == "" {
+			name = "isp-node"
+			node["name"] = name
+		}
+		// These names select native actions or generated groups rather than
+		// the supplied node. Never silently change the listener's destination.
+		switch name {
+		case "Proxy", "Download", "ISP-Relay", "DIRECT", "REJECT", "REJECT-DROP", "PASS", "PASS-RULE", "GLOBAL", "COMPATIBLE":
+			return nil, fmt.Errorf("ISP 节点名称与内置目标或 Quick Start 组冲突，请修改链接名称")
+		}
 		if o.ISP.RelayFilter != "" {
 			if !utf8.ValidString(o.ISP.RelayFilter) || strings.TrimSpace(o.ISP.RelayFilter) == "" || strings.ContainsFunc(o.ISP.RelayFilter, unicode.IsControl) {
 				return nil, fmt.Errorf("ISP 前置 filter 必须是非空的单行表达式；匹配全部节点请填写 .*")
 			}
-			groups = append(groups, quickStartProviderGroup("isp-relay", o.ISP.RelayFilter))
-			node["dialer-proxy"] = "isp-relay"
+			testURL := o.ISP.TestURL
+			if testURL == "" {
+				testURL = DefaultTestURL
+			}
+			if err := quickStartHTTPURL(testURL); err != nil {
+				return nil, fmt.Errorf("ISP 前置测试地址必须是有效的 HTTP 或 HTTPS URL")
+			}
+			relay := quickStartProviderGroup("ISP-Relay", o.ISP.RelayFilter)
+			relay["url"] = testURL
+			groups = append(groups, relay)
+			node["dialer-proxy"] = "ISP-Relay"
 		}
 		config["proxies"] = []map[string]any{node}
-		groups = append(groups, map[string]any{
-			"name":           "isp",
-			"type":           "url-test",
-			"proxies":        []string{"isp-node"},
-			"url":            testURL,
-			"interval":       300,
-			"empty-fallback": "REJECT",
-		})
-		listeners = append(listeners, quickStartListener("endpoint-isp", "isp", o.ISP.Port))
+		listeners = append(listeners, quickStartListener("endpoint-isp", name, o.ISP.Port))
 	}
 	config["proxy-groups"] = groups
 	config["listeners"] = listeners

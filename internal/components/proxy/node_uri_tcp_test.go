@@ -34,7 +34,7 @@ func TestQuickStartSS2022ExplicitTCPPreservesKeys(t *testing.T) {
 		t.Fatal("expected one ISP node")
 	}
 	node := document.Proxies[0]
-	if node["name"] != "isp-node" || node["type"] != "ss" || node["cipher"] != "2022-blake3-aes-256-gcm" || node["password"] != password || node["udp"] != true || node["dialer-proxy"] != "isp-relay" {
+	if node["name"] != "synthetic-isp" || node["type"] != "ss" || node["cipher"] != "2022-blake3-aes-256-gcm" || node["password"] != password || node["udp"] != true || node["dialer-proxy"] != "ISP-Relay" {
 		t.Fatal("SS2022 TCP marker changed native credentials or routing")
 	}
 	if _, exists := node["network"]; exists {

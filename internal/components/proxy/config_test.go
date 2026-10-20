@@ -352,7 +352,7 @@ func TestTemplateRoutesThroughSubscriptionAndRejectsEmptyGroup(t *testing.T) {
 	if config.Providers["subscription"].Proxy != "DIRECT" {
 		t.Fatal("subscription download must bootstrap independently of its own nodes")
 	}
-	if len(config.Groups) != 1 || config.Groups[0].Name != "proxy" || config.Groups[0].Type != "url-test" || len(config.Groups[0].Use) != 1 || config.Groups[0].Use[0] != "subscription" {
+	if len(config.Groups) != 1 || config.Groups[0].Name != "Proxy" || config.Groups[0].Type != "url-test" || len(config.Groups[0].Use) != 1 || config.Groups[0].Use[0] != "subscription" {
 		t.Fatal("template must test nodes from its subscription provider")
 	}
 	// Mihomo prepends explicit proxies before provider nodes, and defaults an
@@ -362,8 +362,8 @@ func TestTemplateRoutesThroughSubscriptionAndRejectsEmptyGroup(t *testing.T) {
 		t.Fatal("template must neither prefer direct nor fall back to it")
 	}
 	wantRules := []string{
-		"AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,github.com)),proxy",
-		"AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,release-assets.githubusercontent.com)),proxy",
+		"AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,github.com)),Proxy",
+		"AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,release-assets.githubusercontent.com)),Proxy",
 		"MATCH,DIRECT",
 	}
 	if !reflect.DeepEqual(config.Rules, wantRules) {

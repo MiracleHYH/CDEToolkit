@@ -178,11 +178,7 @@ func (c *CLI) proxyQuickStart(controller proxy.ControllerConfig) ([]byte, error)
 		if err != nil {
 			return nil, err
 		}
-		testURL, err := c.ask("ISP 测试地址", proxy.DefaultTestURL)
-		if err != nil {
-			return nil, err
-		}
-		o.ISP = &proxy.QuickStartISP{NodeURL: node, Port: port, TestURL: testURL}
+		o.ISP = &proxy.QuickStartISP{NodeURL: node, Port: port}
 		relay, err := c.proxyYes("ISP 是否需要前置代理")
 		if err != nil {
 			return nil, err
@@ -191,6 +187,10 @@ func (c *CLI) proxyQuickStart(controller proxy.ControllerConfig) ([]byte, error)
 			o.ISP.RelayFilter, err = c.ask("ISP 前置 filter", "")
 			if err != nil || strings.TrimSpace(o.ISP.RelayFilter) == "" {
 				return nil, fmt.Errorf("ISP 前置 filter 不能为空")
+			}
+			o.ISP.TestURL, err = c.ask("ISP 前置测试地址", proxy.DefaultTestURL)
+			if err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -213,13 +213,14 @@ func (c *CLI) proxyQuickStart(controller proxy.ControllerConfig) ([]byte, error)
 		route := "服务器 → ISP 节点 → 目标"
 		if o.ISP.RelayFilter != "" {
 			route = "服务器 → 订阅前置节点 → ISP 节点 → 目标"
+			fmt.Fprintln(c.Err, "  ISP-Relay 使用前置测试地址选择订阅节点；该测量不代表完整 ISP 链路。")
 		}
 		fmt.Fprintf(c.Err, "  ISP 入口：endpoint-isp，127.0.0.1:%d；%s\n", o.ISP.Port, route)
 	}
 	fmt.Fprintln(c.Err, "  HTTP provider 不做周期拉取（interval=0），首次缺少有效缓存仍可能下载；健康检查保留。不自动启动。")
-	updateGroup := "proxy"
+	updateGroup := "Proxy"
 	if o.Download != nil {
-		updateGroup = "download"
+		updateGroup = "Download"
 	}
 	fmt.Fprintf(c.Err, "  内核 GitHub HTTPS 内部请求按规则使用 %s 组；其他内部目标保留 DIRECT，需已有可用节点。\n", updateGroup)
 	if err := c.confirm(cliOptions{}, "保存 Proxy 配置（保持停止）"); err != nil {

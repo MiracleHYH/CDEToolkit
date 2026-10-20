@@ -233,9 +233,9 @@ quickstart_plan() {
     '是否启用 ISP' '\033[B\r' \
     'ISP 节点链接' '\0001\0013ss://aes-128-gcm:p%2Dass@192.0.2.1:8388#ISP%2Dnode\r' \
     'ISP 端口' '\0001\001317892\r' \
-    'ISP 测试地址' '\0001\0013https://isp-check.invalid/check\r' \
     'ISP 是否需要前置代理' '\033[B\r' \
     'ISP 前置 filter' '\0001\0013Relay\r' \
+    'ISP 前置测试地址' '\0001\0013https://isp-check.invalid/check\r' \
     '回环管理地址' '\r' \
     '保存 Proxy 配置（保持停止）' "$final_keys"
 }
@@ -260,7 +260,11 @@ fi
 grep -Fq p-ass "$root/proxy/config.yaml"
 grep -Fq 'MATCH,DIRECT' "$root/proxy/config.yaml"
 grep -Fq 'type: url-test' "$root/proxy/config.yaml"
-grep -Fq 'dialer-proxy: isp-relay' "$root/proxy/config.yaml"
+if [[ "$quickstart_mode" == current ]]; then
+  grep -Fq 'dialer-proxy: ISP-Relay' "$root/proxy/config.yaml"
+else
+  grep -Fq 'dialer-proxy: isp-relay' "$root/proxy/config.yaml"
+fi
 nido proxy status --json > "$scratch/status.json"
 grep -Fq '"listeners":false' "$scratch/status.json"
 [[ ! -e "$root/proxy/process.json" ]]

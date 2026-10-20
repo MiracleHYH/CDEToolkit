@@ -7,7 +7,7 @@ on:
         description: Exact public Nido stable version, without v
         required: true
         type: string
-        default: '0.10.1'
+        default: '0.10.2'
       public_network:
         description: Also test the public README installers and a real previous-version upgrade
         required: true
@@ -17,7 +17,7 @@ on:
         description: Previous signed stable version for the optional public upgrade
         required: true
         type: string
-        default: '0.10.0'
+        default: '0.10.1'
 
 permissions:
   contents: read

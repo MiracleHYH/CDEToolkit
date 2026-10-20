@@ -69,15 +69,15 @@ func TestProxyRealMihomoQuickStart(t *testing.T) {
 	}
 	cli.must("init", "--yes", "--json")
 
-	var origins, healthRequests, ispHealth, providerDownloads, deadChecks atomic.Int64
+	var origins, healthRequests, relaySelectionChecks, providerDownloads, deadChecks atomic.Int64
 	origin := httptest.NewServer(realOrigin(&origins))
 	t.Cleanup(origin.Close)
 	tlsOrigin := httptest.NewTLSServer(realOrigin(&origins))
 	t.Cleanup(tlsOrigin.Close)
 	health := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		healthRequests.Add(1)
-		if r.URL.Path == "/isp" {
-			ispHealth.Add(1)
+		if r.URL.Path == "/relay-selection" {
+			relaySelectionChecks.Add(1)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -129,12 +129,12 @@ func TestProxyRealMihomoQuickStart(t *testing.T) {
 	generated, err := proxy.QuickStart(proxy.QuickStartOptions{
 		ProviderURL: provider.URL + "/provider.yaml", ProxyFilter: "^Daily-", ProxyPort: proxyPort,
 		Download: &proxy.QuickStartRoute{Filter: "^Download-", Port: downloadPort},
-		ISP:      &proxy.QuickStartISP{NodeURL: nodeURL, Port: ispPort, TestURL: health.URL + "/isp", RelayFilter: "^Relay-"},
+		ISP:      &proxy.QuickStartISP{NodeURL: nodeURL, Port: ispPort, TestURL: health.URL + "/relay-selection", RelayFilter: "^Relay-"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	quickStartAssertTopology(t, generated, ssPassword)
+	quickStartAssertTopology(t, generated, ssPassword, health.URL+"/relay-selection")
 	if _, err := os.Stat(filepath.Join(cli.root, "proxy", "process.json")); !os.IsNotExist(err) {
 		t.Fatal("quick start 自行启动了核心或创建了运行记录")
 	}
@@ -160,16 +160,15 @@ func TestProxyRealMihomoQuickStart(t *testing.T) {
 	for _, endpoint := range []proxy.Endpoint{dailyEndpoint, downloadEndpoint, ispEndpoint} {
 		quickStartAwaitEndpoint(t, endpoint, health.URL+"/ready")
 	}
-	quickStartAwait(t, "ISP 自定义地址的自动健康检查", func() bool { return ispHealth.Load() > 0 })
-	if relayTraffic.Load() == 0 {
-		t.Fatal("ISP 健康检查未经过 HTTP 前置到 SS 服务端")
-	}
+	// ISP-Relay measures provider candidates directly. It does not measure
+	// the ISP node or the complete chain, which is checked with traffic below.
+	quickStartAwait(t, "ISP 前置组选路的自动健康检查", func() bool { return relaySelectionChecks.Load() > 0 && relayHealth.Load() > 0 })
 	// Each provider route uses a distinct constrained proxy. Health targets
 	// have separate ports/counters, so they cannot fake a business tunnel.
 	realProxyTraffic(t, dailyEndpoint.URL(), dailyEndpoint.URL(), origin, tlsOrigin, &origins, &dailyTraffic)
 	realProxyTraffic(t, downloadEndpoint.URL(), downloadEndpoint.URL(), origin, tlsOrigin, &origins, &downloadTraffic)
 	realProxyTraffic(t, ispEndpoint.URL(), ispEndpoint.URL(), origin, tlsOrigin, &origins, &relayTraffic)
-	t.Logf("真实 url-test 选择: dead 检查=%d，daily/download/relay 健康=%d/%d/%d，ISP 自定义测速=%d，目标=%d，daily/download/ISP 前置连接=%d/%d/%d", deadChecks.Load(), dailyHealth.Load(), downloadHealth.Load(), relayHealth.Load(), ispHealth.Load(), origins.Load(), dailyTraffic.Load(), downloadTraffic.Load(), relayTraffic.Load())
+	t.Logf("真实 url-test 选择: dead 检查=%d，Proxy/Download/ISP-Relay 健康=%d/%d/%d，ISP 前置自定义测速=%d；完整 ISP 转发另由业务请求验证：目标=%d，daily/download/ISP 前置连接=%d/%d/%d", deadChecks.Load(), dailyHealth.Load(), downloadHealth.Load(), relayHealth.Load(), relaySelectionChecks.Load(), origins.Load(), dailyTraffic.Load(), downloadTraffic.Load(), relayTraffic.Load())
 
 	// Configuration and forwarding must not change any external tool state.
 	realAssertRetainedBytes(t, cli.sentinels)
@@ -214,7 +213,7 @@ func TestProxyRealMihomoQuickStart(t *testing.T) {
 	t.Logf("真实 quick start 完成: provider=%d，health=%d，业务目标=%d；配置生成与注入、HTTP/SOCKS/HTTPS、重命名 listener、停机和卸载保留均通过；未验证交互 CLI 或外部工具绑定", providerDownloads.Load(), healthRequests.Load(), origins.Load())
 }
 
-func quickStartAssertTopology(t *testing.T, data []byte, password string) {
+func quickStartAssertTopology(t *testing.T, data []byte, password, relayTestURL string) {
 	t.Helper()
 	var config map[string]any
 	if err := yaml.Unmarshal(data, &config); err != nil {
@@ -226,28 +225,50 @@ func quickStartAssertTopology(t *testing.T, data []byte, password string) {
 		}
 	}
 	if rules := config["rules"].([]any); len(rules) != 3 ||
-		rules[0] != "AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,github.com)),download" ||
-		rules[1] != "AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,release-assets.githubusercontent.com)),download" ||
+		rules[0] != "AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,github.com)),Download" ||
+		rules[1] != "AND,((IN-TYPE,INNER),(DST-PORT,443),(DOMAIN,release-assets.githubusercontent.com)),Download" ||
 		rules[2] != "MATCH,DIRECT" {
 		t.Fatal("默认规则发生变化")
 	}
 	node := config["proxies"].([]any)[0].(map[string]any)
-	if node["password"] != password || node["dialer-proxy"] != "isp-relay" || node["type"] != "ss" {
+	if node["name"] != "ISP-node" || node["password"] != password || node["dialer-proxy"] != "ISP-Relay" || node["type"] != "ss" {
 		t.Fatalf("SS 解析或 ISP 链方向错误: %+v", node)
 	}
 	groups := config["proxy-groups"].([]any)
-	if len(groups) != 4 || len(config["listeners"].([]any)) != 3 {
+	if len(groups) != 3 || len(config["listeners"].([]any)) != 3 {
 		t.Fatal("quick start 缺少组或入口")
 	}
-	wantFilters := map[string]string{"proxy": "^Daily-", "download": "^Download-", "isp-relay": "^Relay-"}
+	wantFilters := map[string]string{"Proxy": "^Daily-", "Download": "^Download-", "ISP-Relay": "^Relay-"}
 	for _, value := range groups {
 		group := value.(map[string]any)
 		if group["type"] != "url-test" || group["interval"] != 300 || group["empty-fallback"] != "REJECT" {
 			t.Fatalf("未保留活跃 url-test: %+v", group)
 		}
-		if filter, exists := wantFilters[group["name"].(string)]; exists && (group["filter"] != filter || group["url"] != proxy.DefaultTestURL) {
+		name := group["name"].(string)
+		filter, exists := wantFilters[name]
+		wantURL := proxy.DefaultTestURL
+		if name == "ISP-Relay" {
+			wantURL = relayTestURL
+		}
+		if !exists || group["filter"] != filter || group["url"] != wantURL {
 			t.Fatalf("独立 filter 或默认测速地址错误: %+v", group)
 		}
+		delete(wantFilters, name)
+	}
+	if len(wantFilters) != 0 {
+		t.Fatalf("quick start 缺少预期前置组: %+v", wantFilters)
+	}
+	wantListeners := map[string]string{"endpoint-proxy": "Proxy", "endpoint-download": "Download", "endpoint-isp": "ISP-node"}
+	for _, value := range config["listeners"].([]any) {
+		listener := value.(map[string]any)
+		name := listener["name"].(string)
+		if want, exists := wantListeners[name]; !exists || listener["proxy"] != want {
+			t.Fatalf("listener 未直接关联预期组或 ISP 节点: %+v", listener)
+		}
+		delete(wantListeners, name)
+	}
+	if len(wantListeners) != 0 {
+		t.Fatalf("quick start 缺少预期 listener: %+v", wantListeners)
 	}
 }
 
@@ -257,14 +278,14 @@ func TestRealQuickStartFixtureUsesCurrentGeneratedRulesAndLoopbackHealth(t *test
 		Download: &proxy.QuickStartRoute{Filter: "^Download-", Port: 19102},
 		ISP: &proxy.QuickStartISP{
 			NodeURL: "ss://aes-128-gcm:p%2Dass%3Aword%40+%2F%252D@127.0.0.1:19104#ISP%2Dnode",
-			Port:    19103, TestURL: "http://127.0.0.1:19105/isp", RelayFilter: "^Relay-",
+			Port:    19103, TestURL: "http://127.0.0.1:19105/relay-selection", RelayFilter: "^Relay-",
 		},
 	}
 	generated, err := proxy.QuickStart(options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	quickStartAssertTopology(t, generated, "p-ass:word@+/%2D")
+	quickStartAssertTopology(t, generated, "p-ass:word@+/%2D", options.ISP.TestURL)
 	localized := realQuickStartHealthConfig(t, generated, "http://127.0.0.1:19105/health")
 	parsed, err := proxy.ParseConfig(localized, t.TempDir())
 	if err != nil || len(parsed.Endpoints) != 3 {
@@ -281,7 +302,7 @@ func TestRealQuickStartFixtureUsesCurrentGeneratedRulesAndLoopbackHealth(t *test
 	for _, value := range document["proxy-groups"].([]any) {
 		group := value.(map[string]any)
 		want := "http://127.0.0.1:19105/health"
-		if group["name"] == "isp" {
+		if group["name"] == "ISP-Relay" {
 			want = options.ISP.TestURL
 		}
 		if group["url"] != want || group["type"] != "url-test" {
@@ -300,8 +321,9 @@ func realQuickStartHealthConfig(t *testing.T, data []byte, target string) []byte
 	provider := realYAMLField(realYAMLField(root, "proxy-providers"), "subscription")
 	realYAMLField(realYAMLField(provider, "health-check"), "url").Value = target
 	for _, group := range realYAMLField(root, "proxy-groups").Content {
-		// ISP already has its separately supplied loopback test target.
-		if realYAMLField(group, "name").Value != "isp" {
+		// ISP-Relay already has its separately supplied loopback test target;
+		// this measures relay candidates, not the complete ISP chain.
+		if realYAMLField(group, "name").Value != "ISP-Relay" {
 			realYAMLField(group, "url").Value = target
 		} else {
 			// Its first check may precede provider initialization. After

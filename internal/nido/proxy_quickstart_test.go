@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MiracleHYH/CDEToolkit/internal/components/proxy"
 	"github.com/MiracleHYH/CDEToolkit/internal/terminalui"
 
 	"go.yaml.in/yaml/v3"
@@ -19,6 +20,30 @@ func quickStartCLI(t *testing.T, m *Manager, r *cliProxyRunner, in string, args 
 	c := CLI{UI: terminalui.NewScriptDriver(reader, &stderr), In: reader, Out: &out, Err: &stderr, ProxyRunner: r}
 	code := c.Run(append([]string{"--root", m.Root}, args...))
 	return code, out.String(), stderr.String()
+}
+
+func TestProxyQuickStartDirectISPDoesNotAskForUnusedHealthTarget(t *testing.T) {
+	input := "https://provider.invalid/sub\n.*\n17890\n1\n2\nss://aes-128-gcm:synthetic@192.0.2.1:8388#Direct-ISP\n17892\n1\n\n2\n"
+	var out, stderr bytes.Buffer
+	reader := strings.NewReader(input)
+	c := CLI{UI: terminalui.NewScriptDriver(reader, &stderr), In: reader, Out: &out, Err: &stderr}
+	data, err := c.proxyQuickStart(proxy.ControllerConfig{Address: proxy.DefaultControllerAddress, Secret: "synthetic-controller-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"ISP 测试地址", "ISP 前置测试地址", "ISP 前置 filter"} {
+		if strings.Contains(stderr.String(), label) {
+			t.Fatalf("direct ISP asked for unused relay option %q", label)
+		}
+	}
+	var config map[string]any
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	listeners := config["listeners"].([]any)
+	if len(config["proxy-groups"].([]any)) != 1 || listeners[1].(map[string]any)["proxy"] != "Direct-ISP" {
+		t.Fatal("direct ISP must reference the node without a synthetic health-check group")
+	}
 }
 
 // Capture the concurrent write at the Provider prompt, after the installation
@@ -43,7 +68,7 @@ func TestProxyQuickStartInstallAndPrivateSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := &cliProxyRunner{}
-	input := "2\n2\nhttps://provider.invalid/sub?token=plain-preview\nHK\n17890\n2\nDownload\n17891\n2\nss://aes-128-gcm:p%2Dass@192.0.2.1:8388#ISP%2Dnode\n17892\nhttps://isp-check.invalid/check\n2\nRelay\n\n2\n"
+	input := "2\n2\nhttps://provider.invalid/sub?token=plain-preview\nHK\n17890\n2\nDownload\n17891\n2\nss://aes-128-gcm:p%2Dass@192.0.2.1:8388#ISP%2Dnode\n17892\n2\nRelay\nhttps://isp-check.invalid/check\n\n2\n"
 	code, out, stderr := quickStartCLI(t, m, r, input, "proxy", "install", "--artifact", proxyCLIArtifact(t))
 	if code != 0 || !strings.Contains(stderr, "Proxy 配置摘要") || !strings.Contains(out, "操作完成") {
 		t.Fatalf("install quick start: %d %s %s", code, out, stderr)
@@ -79,7 +104,7 @@ func TestProxyQuickStartInstallAndPrivateSummary(t *testing.T) {
 	if node := config["proxies"].([]any)[0].(map[string]any); node["password"] != "p-ass" {
 		t.Fatal("summary redaction changed the saved node credential")
 	}
-	for _, name := range []string{"proxy", "download", "isp-relay", "isp"} {
+	for _, name := range []string{"Proxy", "Download", "ISP-Relay"} {
 		found := false
 		for _, value := range config["proxy-groups"].([]any) {
 			group := value.(map[string]any)
